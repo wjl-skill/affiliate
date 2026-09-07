@@ -1,0 +1,92 @@
+# ===================================================================
+# Affiliate Platform PostgreSQL + MyBatis-Plus 本地开发环境配置 (Profile: pg)
+# 针对本地 PostgreSQL: 127.0.0.1:5432 / postgres (用户: postgres / 密码: 199010)
+# ===================================================================
+
+spring:
+  config:
+    activate:
+      on-profile: pg
+  autoconfigure:
+    # 启用真实 DataSource 自动装配，排除本地可选的 Kafka 消息组件
+    exclude:
+      - org.springframework.boot.autoconfigure.kafka.KafkaAutoConfiguration
+
+  threads:
+    virtual:
+      enabled: true
+
+  datasource:
+    driver-class-name: org.postgresql.Driver
+    # PostgreSQL 官方 JDBC 驱动连接串，优化批量插入与 Schema 定位
+    url: ${DB_URL:jdbc:postgresql://127.0.0.1:5432/postgres?currentSchema=public&reWriteBatchedInserts=true&stringtype=unspecified}
+    username: ${DB_USERNAME:postgres}
+    password: ${DB_PASSWORD:199010}
+    hikari:
+      # HikariCP 高性能连接池参数调优
+      pool-name: AffiliateHikariCP-PG
+      maximum-pool-size: ${DB_MAX_POOL_SIZE:50}
+      minimum-idle: ${DB_MIN_IDLE:10}
+      connection-timeout: 3000
+      idle-timeout: 600000
+      max-lifetime: 1800000
+      leak-detection-threshold: 5000
+      connection-test-query: SELECT 1
+
+  data:
+    redis:
+      # 本地 Redis L2 缓存与分布式频控/预占
+      host: ${REDIS_HOST:127.0.0.1}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:123456}
+      database: ${REDIS_DB:0}
+      timeout: ${REDIS_TIMEOUT:3000ms}
+      client-type: lettuce
+      lettuce:
+        pool:
+          max-active: ${REDIS_POOL_MAX_ACTIVE:50}
+          max-idle: ${REDIS_POOL_MAX_IDLE:10}
+          min-idle: ${REDIS_POOL_MIN_IDLE:2}
+          max-wait: ${REDIS_POOL_MAX_WAIT:3000ms}
+
+  flyway:
+    # 是否在启动时自动执行 SQL 迁移（按需开启）
+    enabled: ${FLYWAY_ENABLED:false}
+
+# ===================================================================
+# MyBatis-Plus 工业级持久层增强配置
+# ===================================================================
+mybatis-plus:
+  # XML 映射文件加载路径
+  mapper-locations: classpath*:/mapper/**/*.xml
+  # 实体类包扫描路径
+  type-aliases-package: com.affiliate.platform.entity
+  global-config:
+    banner: false
+    db-config:
+      # 主键生成策略：默认雪花算法 ASSIGN_ID
+      id-type: assign_id
+      # 开启下划线字段与驼峰属性自动映射转换
+      table-underline: true
+      # 逻辑删除字段全局配置（如遇逻辑删除字段自动过滤）
+      logic-delete-field: deleted
+      logic-delete-value: 1
+      logic-not-delete-value: 0
+  configuration:
+    # 驼峰命名转换（例如: floor_price -> floorPrice）
+    map-underscore-to-camel-case: true
+    # 一级/二级缓存开闭控制
+    cache-enabled: false
+    # 控制台打印执行的真实 SQL 与预编译绑定参数（便于本地调试追踪）
+    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+    # 参数为 NULL 时的 JDBC 映射类型
+    jdbc-type-for-null: 'null'
+
+app:
+  infrastructure:
+    # 开启 PostgreSQL 关系型数据库持久化
+    database-enabled: true
+    # 开启 Redis 缓存
+    redis-enabled: true
+    # 本地关闭 Kafka 消息组件
+    kafka-enabled: false

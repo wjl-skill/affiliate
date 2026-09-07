@@ -1,0 +1,91 @@
+# ===================================================================
+# Affiliate Platform 生产环境配置 (Profile: prod)
+# ===================================================================
+
+spring:
+  config:
+    activate:
+      # 仅在指定 -Dspring.profiles.active=prod 时激活
+      on-profile: prod
+  autoconfigure:
+    # 生产模式取消排除，全面启用外部 DataSource、Flyway、Redis 和 Kafka
+    exclude: []
+
+  threads:
+    virtual:
+      enabled: true
+
+  datasource:
+    # PostgreSQL 关系数据库连接配置
+    driver-class-name: org.postgresql.Driver
+    url: ${DB_URL:jdbc:postgresql://127.0.0.1:5432/postgres?currentSchema=public&reWriteBatchedInserts=true&stringtype=unspecified}
+    username: ${DB_USERNAME:postgres}
+    password: ${DB_PASSWORD:199010}
+    hikari:
+      # HikariCP 高性能连接池调优
+      maximum-pool-size: ${DB_MAX_POOL_SIZE:50}
+      minimum-idle: ${DB_MIN_IDLE:10}
+      connection-timeout: 3000
+      idle-timeout: 600000
+      max-lifetime: 1800000
+      leak-detection-threshold: 5000
+      connection-test-query: SELECT 1
+
+  flyway:
+    # 生产启动时自动执行 SQL 增量版本迁移 (V1, V2...)
+    enabled: ${FLYWAY_ENABLED:false}
+
+  data:
+    redis:
+      # 生产 Redis 分布式缓存与 Lua 原子预占连接
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+      database: ${REDIS_DB:0}
+      timeout: ${REDIS_TIMEOUT:3000ms}
+      client-type: lettuce
+      lettuce:
+        pool:
+          max-active: ${REDIS_POOL_MAX_ACTIVE:100}
+          max-idle: ${REDIS_POOL_MAX_IDLE:20}
+          min-idle: ${REDIS_POOL_MIN_IDLE:5}
+          max-wait: ${REDIS_POOL_MAX_WAIT:3000ms}
+  kafka:
+    # Kafka 集群服务端地址
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    producer:
+      # 保证消息严格不丢失的生产端配置
+      acks: all
+      retries: 3
+
+# ===================================================================
+# MyBatis-Plus 生产环境配置
+# ===================================================================
+mybatis-plus:
+  mapper-locations: classpath*:/mapper/**/*.xml
+  type-aliases-package: com.affiliate.platform.entity
+  global-config:
+    banner: false
+    db-config:
+      id-type: assign_id
+      table-underline: true
+  configuration:
+    map-underscore-to-camel-case: true
+    cache-enabled: false
+    log-impl: org.apache.ibatis.logging.slf4j.Slf4jImpl
+    jdbc-type-for-null: 'null'
+
+app:
+  security:
+    # 生产模式强制开启 JWT 鉴权与租户上下文防篡改校验
+    enabled: true
+  infrastructure:
+    # 启用真实 PostgreSQL 持久化仓储
+    database-enabled: true
+    # 启用 Redis 分布式滑动窗口频控与 Lua 预算预占
+    redis-enabled: true
+    # 启用 Kafka 与 Transactional Outbox Relay 调度器
+    kafka-enabled: true
+  google:
+    # 启用 Google 连接器
+    enabled: true
