@@ -8,9 +8,24 @@
 
 ## 文档入口
 
-- [领域词汇 CONTEXT.md](F:/Affiliate/CONTEXT.md)：统一 DMP、CDP、DSP、SSP、ADX 等业务语言。
-- [详细架构设计](F:/Affiliate/docs/ARCHITECTURE.md)：模块边界、依赖方向、RTB 热路径、租户隔离、数据模型、事件和生产部署约束。
-- [数据库迁移](F:/Affiliate/platform-infrastructure/src/main/resources/db/migration/V1__platform_schema.sql)：PostgreSQL/Flyway 初始表结构。
+### 核心文档
+- [领域词汇 CONTEXT.md](CONTEXT.md)：统一 DMP、CDP、DSP、SSP、ADX 等业务语言。
+- [详细架构设计 ARCHITECTURE.md](docs/ARCHITECTURE.md)：模块边界、依赖方向、RTB 热路径、租户隔离、数据模型、事件和生产部署约束。
+- [系统设计优化 SYSTEM_DESIGN_OPTIMIZATION.md](docs/SYSTEM_DESIGN_OPTIMIZATION.md)：性能优化与扩展策略。
+
+### 网盟营销 (Affiliate Network) 专项文档
+- **[商业需求文档 AFFILIATE_BUSINESS_REQUIREMENTS.md](docs/AFFILIATE_BUSINESS_REQUIREMENTS.md)**
+  完整的业务功能规格说明，涵盖渠道管理、Offer 配置、点击追踪、转化归因、SmartLink/TDS 智能分流、反欺诈、Sub-ID 多维分析、账期结算和支付处理等核心业务流程。对标 CJ Affiliate、ShareASale、Rakuten Advertising、Impact、Awin 等商业级网盟平台。
+
+- **[技术设计文档 AFFILIATE_TECHNICAL_DESIGN.md](docs/AFFILIATE_TECHNICAL_DESIGN.md)**
+  详细的技术架构与实现方案，包括高并发点击追踪（P95<50ms）、S2S 转化回传、Redis 预算 Cap 原子控制、Kafka 异步事件流、商业级反欺诈引擎（CTIT、IP/UA 特征、黑名单）、SmartLink EPC 优化路由、Publisher Postback 分发、分布式账期结算作业等核心技术实现。
+
+- **[API 集成指南 AFFILIATE_API_INTEGRATION_GUIDE.md](docs/AFFILIATE_API_INTEGRATION_GUIDE.md)**
+  面向广告主与渠道客的完整 API 对接手册，包含点击追踪、S2S Postback 转化上报、Offer 管理、渠道管理、多维报表查询、Webhook/Postback 配置等接口规范，以及 PHP、Python、Node.js、Ruby 等主流语言的代码示例。
+
+### 数据库设计
+- [数据库迁移](platform-infrastructure/src/main/resources/db/migration/V1__platform_schema.sql)：PostgreSQL/Flyway 初始表结构。
+- [网盟营销 SQL 脚本](docs/sql/13_platform_affiliate.sql)：完整的网盟营销业务表结构，包含渠道客、Offer、阶梯出价、SmartLink、点击会话、转化流水、结算发票和 Sub-ID 统计表。
 
 ## 架构总览
 
