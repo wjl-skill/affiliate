@@ -3,19 +3,22 @@ package com.affiliate.platform.affiliate.service;
 import com.affiliate.platform.affiliate.domain.AffiliatePartner;
 import com.affiliate.platform.affiliate.domain.Offer;
 import com.affiliate.platform.affiliate.domain.OfferTierPayout;
-import com.affiliate.platform.cache.TwoTierCache;
-import com.affiliate.platform.cache.TwoTierCacheManager;
+import com.affiliate.platform.affiliate.repository.OfferGoalRepository;
+import com.affiliate.platform.affiliate.repository.OfferRepository;
+import com.affiliate.platform.affiliate.repository.OfferTierPayoutRepository;
+import com.affiliate.platform.cache.CacheKeyGenerator;
+import com.affiliate.platform.cache.MultiLevelCacheManager;
 import com.affiliate.platform.entity.OfferEntity;
 import com.affiliate.platform.entity.OfferGoalEntity;
 import com.affiliate.platform.entity.OfferTierPayoutEntity;
-import com.affiliate.platform.mapper.OfferGoalMapper;
-import com.affiliate.platform.mapper.OfferMapper;
-import com.affiliate.platform.mapper.OfferTierPayoutMapper;
-import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
-import org.springframework.beans.factory.annotation.Autowired;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
@@ -31,74 +34,58 @@ import java.util.concurrent.atomic.AtomicInteger;
 @Service
 public class OfferService {
 
-    private final OfferMapper offerMapper;
-    private final OfferTierPayoutMapper tierPayoutMapper;
-    private final OfferGoalMapper offerGoalMapper;
-    private final TwoTierCache<String, Offer> offerCache;
+    private final OfferRepository offerRepository;
+    private final OfferTierPayoutRepository tierPayoutRepository;
+    private final OfferGoalRepository offerGoalRepository;
+    private final MultiLevelCacheManager cacheManager;
+    private final CacheKeyGenerator keyGenerator;
+    private final ObjectMapper objectMapper;
 
-    private final ConcurrentMap<String, Offer> fallbackOffers = new ConcurrentHashMap<>();
-    private final ConcurrentMap<String, List<OfferTierPayout>> fallbackTierPayouts = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, AtomicInteger> dailyConversionCounts = new ConcurrentHashMap<>();
-    private final ConcurrentMap<String, List<com.affiliate.platform.affiliate.domain.OfferGoal>> offerGoals = new ConcurrentHashMap<>();
 
-    public OfferService() {
-        this(null, null, null, null);
-    }
-
-    public OfferService(OfferMapper offerMapper, OfferTierPayoutMapper tierPayoutMapper) {
-        this(offerMapper, tierPayoutMapper, null, null);
-    }
-
-    @Autowired
     public OfferService(
-            @Autowired(required = false) OfferMapper offerMapper,
-            @Autowired(required = false) OfferTierPayoutMapper tierPayoutMapper,
-            @Autowired(required = false) OfferGoalMapper offerGoalMapper,
-            @Autowired(required = false) TwoTierCacheManager cacheManager
+            OfferRepository offerRepository,
+            OfferTierPayoutRepository tierPayoutRepository,
+            OfferGoalRepository offerGoalRepository,
+            MultiLevelCacheManager cacheManager,
+            CacheKeyGenerator keyGenerator,
+            ObjectMapper objectMapper
     ) {
-        this.offerMapper = offerMapper;
-        this.tierPayoutMapper = tierPayoutMapper;
-        this.offerGoalMapper = offerGoalMapper;
-        this.offerCache = cacheManager != null ? cacheManager.getOrCreate("offer", Offer.class) : null;
+        this.offerRepository = offerRepository;
+        this.tierPayoutRepository = tierPayoutRepository;
+        this.offerGoalRepository = offerGoalRepository;
+        this.cacheManager = cacheManager;
+        this.keyGenerator = keyGenerator;
+        this.objectMapper = objectMapper;
     }
 
     /**
      * 保存或更新推广计划至 PostgreSQL
      */
+    @Transactional
     public Offer save(Offer offer) {
-        if (offerMapper != null) {
-            OfferEntity entity = new OfferEntity(
-                    offer.id(),
-                    offer.tenantId(),
-                    offer.advertiserId(),
-                    offer.title(),
-                    offer.landingPageUrl(),
-                    offer.payoutType().name(),
-                    offer.defaultPayout(),
-                    offer.defaultRevenue(),
-                    offer.status().name(),
-                    offer.dailyConversionCap(),
-                    offer.dailyRevenueCap(),
-                    offer.fallbackOfferId(),
-                    offer.expiresAt(),
-                    offer.createdAt() != null ? offer.createdAt() : Instant.now()
-            );
+        OfferEntity entity = new OfferEntity(
+                offer.id(),
+                offer.tenantId(),
+                offer.advertiserId(),
+                offer.title(),
+                offer.landingPageUrl(),
+                offer.payoutType().name(),
+                offer.defaultPayout(),
+                offer.defaultRevenue(),
+                offer.status().name(),
+                offer.dailyConversionCap(),
+                offer.dailyRevenueCap(),
+                offer.fallbackOfferId(),
+                offer.expiresAt(),
+                offer.createdAt() != null ? offer.createdAt() : Instant.now()
+        );
 
-            if (offerMapper.selectById(offer.id()) != null) {
-                offerMapper.updateById(entity);
-            } else {
-                offerMapper.insert(entity);
-            }
-            if (offerCache != null) {
-                offerCache.put(offer.id(), offer);
-            }
-            return offer;
-        }
+        offerRepository.save(entity);
 
-        fallbackOffers.put(offer.id(), offer);
-        if (offerCache != null) {
-            offerCache.put(offer.id(), offer);
-        }
+        String cacheKey = keyGenerator.offerById(offer.id());
+        cacheManager.put(cacheKey, offer, Duration.ofMinutes(30));
+
         return offer;
     }
 

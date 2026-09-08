@@ -1,0 +1,37 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(find doc:*)",
+      "WebSearch",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(wc -l docs/AFFILIATE_*.md)",
+      "Bash(ls:*)",
+      "Bash(find F:Affiliateplatform-affiliatesrcmain -name *.yml -o -name *.yaml -o -name *.properties)",
+      "Bash(xargs grep:*)",
+      "Bash(find F:Affiliate -name *.java -type f -exec grep -l \"@Bean.*ObjectMapper\\\\|public.*ObjectMapper\" {})",
+      "Bash(2)",
+      "Bash(mvn clean:*)",
+      "Bash(\"F:\\\\Affiliate\\\\platform-affiliate\\\\src\\\\main\\\\java\\\\com\\\\affiliate\\\\platform\\\\affiliate\\\\service\\\\ReferralCommissionService_temp.java\")",
+      "Bash(\"F:\\\\Affiliate\\\\platform-affiliate\\\\src\\\\main\\\\java\\\\com\\\\affiliate\\\\platform\\\\affiliate\\\\service\\\\ComplianceTrackingService.java\")",
+      "Bash(\"F:\\\\Affiliate\\\\platform-affiliate\\\\src\\\\main\\\\java\\\\com\\\\affiliate\\\\platform\\\\affiliate\\\\service\\\\AffiliateCreativeService.java\")",
+      "Bash(\"F:\\\\Affiliate\\\\platform-affiliate\\\\src\\\\main\\\\java\\\\com\\\\affiliate\\\\platform\\\\affiliate\\\\service\\\\OfferApprovalWorkflowService.java\")",
+      "Bash(\"F:\\\\Affiliate\\\\platform-affiliate\\\\src\\\\main\\\\java\\\\com\\\\affiliate\\\\platform\\\\affiliate\\\\service\\\\AffiliateNotificationService.java\")",
+      "Bash(\"F:\\\\Affiliate\\\\platform-affiliate\\\\src\\\\main\\\\java\\\\com\\\\affiliate\\\\platform\\\\affiliate\\\\service\\\\PerformanceReportService.java\")",
+      "Bash(\"F:\\\\Affiliate\\\\platform-affiliate\\\\src\\\\main\\\\java\\\\com\\\\affiliate\\\\platform\\\\affiliate\\\\service\\\\ConversionAttributionService.java\")",
+      "Bash(cd:*)",
+      "Bash(grep -E \"Service.*\\\\.java$\")",
+      "Bash(grep -l \"ConcurrentHashMap\" *.java)",
+      "Bash(sed 's/ApiKeyManagementServiceV2/ApiKeyManagementService/g' \"F:\\\\Affiliate\\\\platform-affiliate\\\\src\\\\main\\\\java\\\\com\\\\affiliate\\\\platform\\\\affiliate\\\\service\\\\ApiKeyManagementServiceV2.java\")",
+      "Bash(\"F:\\\\Affiliate\\\\platform-affiliate\\\\src\\\\main\\\\java\\\\com\\\\affiliate\\\\platform\\\\affiliate\\\\service\\\\ApiKeyManagementService.java\")",
+      "Bash(sed 's/ProductFeedServiceV2/ProductFeedService/g' \"F:\\\\Affiliate\\\\platform-affiliate\\\\src\\\\main\\\\java\\\\com\\\\affiliate\\\\platform\\\\affiliate\\\\service\\\\ProductFeedServiceV2.java\")",
+      "Bash(\"F:\\\\Affiliate\\\\platform-affiliate\\\\src\\\\main\\\\java\\\\com\\\\affiliate\\\\platform\\\\affiliate\\\\service\\\\ProductFeedService.java\")",
+      "Bash(for file:*)",
+      "Bash(do echo:*)",
+      "Read(//f/Affiliate/platform-affiliate/src/main/java/com/affiliate/platform/affiliate/**)",
+      "Bash(done)",
+      "Bash(xargs -n1 basename)",
+      "Bash(sed 's/.java$//')"
+    ]
+  }
+}
