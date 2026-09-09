@@ -1,93 +1,62 @@
 package com.affiliate.platform.affiliate.repository;
 
 import com.affiliate.platform.affiliate.domain.NotificationEntity;
-import org.springframework.data.jpa.repository.JpaRepository;
-import org.springframework.data.jpa.repository.Modifying;
-import org.springframework.data.jpa.repository.Query;
-import org.springframework.data.repository.query.Param;
-import org.springframework.stereotype.Repository;
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
+import com.baomidou.mybatisplus.core.mapper.BaseMapper;
+import org.apache.ibatis.annotations.Mapper;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 
-/**
- * 通知数据访问层
- */
-@Repository
-public interface NotificationRepository extends JpaRepository<NotificationEntity, String> {
-
-    /**
-     * 查找用户的未读通知
-     */
-    List<NotificationEntity> findByRecipientIdAndIsReadOrderByCreatedAtDesc(
-            String recipientId,
-            Boolean isRead
-    );
-
-    /**
-     * 查找用户的所有通知（分页）
-     */
-    List<NotificationEntity> findByRecipientIdOrderByCreatedAtDesc(String recipientId);
-
-    /**
-     * 查找用户指定类型的通知
-     */
-    List<NotificationEntity> findByRecipientIdAndTypeOrderByCreatedAtDesc(
-            String recipientId,
-            String type
-    );
-
-    /**
-     * 查找用户指定时间范围的通知
-     */
-    @Query("SELECT n FROM NotificationEntity n WHERE n.recipientId = :recipientId " +
-           "AND n.createdAt >= :from AND n.createdAt <= :to " +
-           "ORDER BY n.createdAt DESC")
-    List<NotificationEntity> findByRecipientIdAndDateRange(
-            @Param("recipientId") String recipientId,
-            @Param("from") Instant from,
-            @Param("to") Instant to
-    );
-
-    /**
-     * 查找用户指定类型和时间范围的通知
-     */
-    @Query("SELECT n FROM NotificationEntity n WHERE n.recipientId = :recipientId " +
-           "AND n.type = :type " +
-           "AND n.createdAt >= :from AND n.createdAt <= :to " +
-           "ORDER BY n.createdAt DESC")
-    List<NotificationEntity> findByRecipientIdAndTypeAndDateRange(
-            @Param("recipientId") String recipientId,
-            @Param("type") String type,
-            @Param("from") Instant from,
-            @Param("to") Instant to
-    );
-
-    /**
-     * 统计用户的未读通知数量
-     */
-    long countByRecipientIdAndIsRead(String recipientId, Boolean isRead);
-
-    /**
-     * 批量标记已读
-     */
-    @Modifying
-    @Query("UPDATE NotificationEntity n SET n.isRead = true, n.readAt = :readAt " +
-           "WHERE n.recipientId = :recipientId AND n.isRead = false")
-    int markAllAsRead(@Param("recipientId") String recipientId, @Param("readAt") Instant readAt);
-
-    /**
-     * 删除旧通知（数据清理）
-     */
-    @Modifying
-    @Query("DELETE FROM NotificationEntity n WHERE n.createdAt < :before")
-    int deleteOldNotifications(@Param("before") Instant before);
-
-    /**
-     * 查找高优先级未读通知
-     */
-    @Query("SELECT n FROM NotificationEntity n WHERE n.recipientId = :recipientId " +
-           "AND n.isRead = false AND n.priority IN ('HIGH', 'URGENT') " +
-           "ORDER BY n.createdAt DESC")
-    List<NotificationEntity> findUrgentUnreadNotifications(@Param("recipientId") String recipientId);
+/** MyBatis-Plus notification store. */
+@Mapper
+public interface NotificationRepository extends BaseMapper<NotificationEntity> {
+    default NotificationEntity save(NotificationEntity entity) {
+        if (entity == null) return null;
+        if (entity.getId() == null || selectById(entity.getId()) == null) insert(entity);
+        else updateById(entity);
+        return entity;
+    }
+    default Optional<NotificationEntity> findById(String id) { return Optional.ofNullable(selectById(id)); }
+    default List<NotificationEntity> findByRecipientIdAndIsReadOrderByCreatedAtDesc(String recipientId, Boolean isRead) {
+        return selectList(new LambdaQueryWrapper<NotificationEntity>().eq(NotificationEntity::getRecipientId, recipientId)
+                .eq(NotificationEntity::getIsRead, isRead).orderByDesc(NotificationEntity::getCreatedAt));
+    }
+    default List<NotificationEntity> findByRecipientIdOrderByCreatedAtDesc(String recipientId) {
+        return selectList(new LambdaQueryWrapper<NotificationEntity>().eq(NotificationEntity::getRecipientId, recipientId)
+                .orderByDesc(NotificationEntity::getCreatedAt));
+    }
+    default List<NotificationEntity> findByRecipientIdAndTypeOrderByCreatedAtDesc(String recipientId, String type) {
+        return selectList(new LambdaQueryWrapper<NotificationEntity>().eq(NotificationEntity::getRecipientId, recipientId)
+                .eq(NotificationEntity::getType, type).orderByDesc(NotificationEntity::getCreatedAt));
+    }
+    default List<NotificationEntity> findByRecipientIdAndDateRange(String recipientId, Instant from, Instant to) {
+        return selectList(new LambdaQueryWrapper<NotificationEntity>().eq(NotificationEntity::getRecipientId, recipientId)
+                .ge(NotificationEntity::getCreatedAt, from).le(NotificationEntity::getCreatedAt, to)
+                .orderByDesc(NotificationEntity::getCreatedAt));
+    }
+    default List<NotificationEntity> findByRecipientIdAndTypeAndDateRange(String recipientId, String type, Instant from, Instant to) {
+        return selectList(new LambdaQueryWrapper<NotificationEntity>().eq(NotificationEntity::getRecipientId, recipientId)
+                .eq(NotificationEntity::getType, type).ge(NotificationEntity::getCreatedAt, from)
+                .le(NotificationEntity::getCreatedAt, to).orderByDesc(NotificationEntity::getCreatedAt));
+    }
+    default long countByRecipientIdAndIsRead(String recipientId, Boolean isRead) {
+        return selectCount(new LambdaQueryWrapper<NotificationEntity>().eq(NotificationEntity::getRecipientId, recipientId)
+                .eq(NotificationEntity::getIsRead, isRead));
+    }
+    default int markAllAsRead(String recipientId, Instant readAt) {
+        return update(null, new LambdaUpdateWrapper<NotificationEntity>().eq(NotificationEntity::getRecipientId, recipientId)
+                .eq(NotificationEntity::getIsRead, false).set(NotificationEntity::getIsRead, true)
+                .set(NotificationEntity::getReadAt, readAt));
+    }
+    default int deleteOldNotifications(Instant before) {
+        return delete(new LambdaQueryWrapper<NotificationEntity>().lt(NotificationEntity::getCreatedAt, before));
+    }
+    default List<NotificationEntity> findUrgentUnreadNotifications(String recipientId) {
+        return selectList(new LambdaQueryWrapper<NotificationEntity>().eq(NotificationEntity::getRecipientId, recipientId)
+                .eq(NotificationEntity::getIsRead, false).in(NotificationEntity::getPriority, "HIGH", "URGENT")
+                .orderByDesc(NotificationEntity::getCreatedAt));
+    }
 }

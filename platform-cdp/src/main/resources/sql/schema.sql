@@ -51,3 +51,13 @@ comment on column cdp_identity_graph.profile_id is '指向的统一客户档案 
 comment on column cdp_identity_graph.linked_at is '打通绑定时间';
 
 create index if not exists ix_cdp_graph_profile on cdp_identity_graph(profile_id);
+
+create table if not exists cdp_customer_event (
+    event_id varchar(64) primary key,
+    tenant_id varchar(64) not null default 'public',
+    primary_id varchar(128) not null,
+    event_type varchar(32) not null,
+    event_at timestamptz not null,
+    payload jsonb not null default '{}'::jsonb
+);
+create index if not exists ix_cdp_customer_event_lookup on cdp_customer_event(tenant_id, primary_id, event_at desc);

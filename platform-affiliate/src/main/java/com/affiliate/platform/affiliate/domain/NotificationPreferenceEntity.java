@@ -11,9 +11,11 @@ import java.time.Instant;
         @Index(name = "idx_pref_affiliate", columnList = "affiliate_id"),
         @Index(name = "idx_pref_unique", columnList = "affiliate_id,notification_type", unique = true)
 })
+@com.baomidou.mybatisplus.annotation.TableName("affiliate_notification_preference")
 public class NotificationPreferenceEntity {
 
     @Id
+    @com.baomidou.mybatisplus.annotation.TableId(type = com.baomidou.mybatisplus.annotation.IdType.INPUT)
     @Column(name = "id", length = 64)
     private String id;
 

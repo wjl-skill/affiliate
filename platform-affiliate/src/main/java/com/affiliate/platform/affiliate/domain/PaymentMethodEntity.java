@@ -12,9 +12,11 @@ import java.time.Instant;
         @Index(name = "idx_payment_method_status", columnList = "status"),
         @Index(name = "idx_payment_method_primary", columnList = "affiliate_id,is_primary")
 })
+@com.baomidou.mybatisplus.annotation.TableName("affiliate_payment_method")
 public class PaymentMethodEntity {
 
     @Id
+    @com.baomidou.mybatisplus.annotation.TableId(type = com.baomidou.mybatisplus.annotation.IdType.INPUT)
     @Column(name = "id", length = 64)
     private String id;
 

@@ -1,43 +1,37 @@
 package com.affiliate.platform.affiliate.repository;
 
 import com.affiliate.platform.affiliate.domain.KycVerificationEntity;
-import org.springframework.data.jpa.repository.JpaRepository;
-import org.springframework.data.jpa.repository.Query;
-import org.springframework.stereotype.Repository;
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.mapper.BaseMapper;
+import org.apache.ibatis.annotations.Mapper;
 
 import java.util.List;
 import java.util.Optional;
 
-/**
- * KYC身份验证数据访问层
- */
-@Repository
-public interface KycVerificationRepository extends JpaRepository<KycVerificationEntity, String> {
-
-    /**
-     * 根据渠道ID查找KYC验证记录
-     */
-    Optional<KycVerificationEntity> findByAffiliateId(String affiliateId);
-
-    /**
-     * 查找指定状态的KYC记录
-     */
-    List<KycVerificationEntity> findByStatusOrderByInitiatedAtAsc(String status);
-
-    /**
-     * 检查渠道是否已通过KYC验证
-     */
-    @Query("SELECT CASE WHEN COUNT(k) > 0 THEN true ELSE false END " +
-           "FROM KycVerificationEntity k WHERE k.affiliateId = :affiliateId AND k.status = 'VERIFIED'")
-    boolean isVerified(String affiliateId);
-
-    /**
-     * 统计指定状态的KYC记录数量
-     */
-    long countByStatus(String status);
-
-    /**
-     * 检查是否存在KYC记录
-     */
-    boolean existsByAffiliateId(String affiliateId);
+/** MyBatis-Plus KYC verification store. */
+@Mapper
+public interface KycVerificationRepository extends BaseMapper<KycVerificationEntity> {
+    default KycVerificationEntity save(KycVerificationEntity entity) {
+        if (entity == null) return null;
+        if (entity.getId() == null || selectById(entity.getId()) == null) insert(entity);
+        else updateById(entity);
+        return entity;
+    }
+    default Optional<KycVerificationEntity> findById(String id) { return Optional.ofNullable(selectById(id)); }
+    default Optional<KycVerificationEntity> findByAffiliateId(String affiliateId) {
+        return Optional.ofNullable(selectOne(new LambdaQueryWrapper<KycVerificationEntity>().eq(KycVerificationEntity::getAffiliateId, affiliateId)
+                .orderByDesc(KycVerificationEntity::getInitiatedAt).last("LIMIT 1")));
+    }
+    default List<KycVerificationEntity> findByStatusOrderByInitiatedAtAsc(String status) {
+        return selectList(new LambdaQueryWrapper<KycVerificationEntity>().eq(KycVerificationEntity::getStatus, status)
+                .orderByAsc(KycVerificationEntity::getInitiatedAt));
+    }
+    default boolean isVerified(String affiliateId) {
+        return selectCount(new LambdaQueryWrapper<KycVerificationEntity>().eq(KycVerificationEntity::getAffiliateId, affiliateId)
+                .eq(KycVerificationEntity::getStatus, "VERIFIED")) > 0;
+    }
+    default long countByStatus(String status) { return selectCount(new LambdaQueryWrapper<KycVerificationEntity>().eq(KycVerificationEntity::getStatus, status)); }
+    default boolean existsByAffiliateId(String affiliateId) {
+        return selectCount(new LambdaQueryWrapper<KycVerificationEntity>().eq(KycVerificationEntity::getAffiliateId, affiliateId)) > 0;
+    }
 }

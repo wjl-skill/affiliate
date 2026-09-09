@@ -1,5 +1,12 @@
 package com.affiliate.platform.cdp;
 
+import com.affiliate.platform.entity.CdpCustomerEventEntity;
+import com.affiliate.platform.mapper.CdpCustomerEventMapper;
+import com.affiliate.platform.tenant.TenantContext;
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
@@ -7,68 +14,56 @@ import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
-/**
- * 客户全生命周期 360 度事件时间轴服务 (Customer 360 Event Timeline Service)
- * <p>
- * 追踪记录一方客户全触点行为时间序列：
- * 包含展示曝光、点击、加购、订单购买及退款，支持按时间序列快速检索与受众分析。
- */
+/** 客户 360 时间轴；生产环境事件通过 MyBatis-Plus 落盘。 */
 @Service
 public class CustomerTimelineService {
+    public enum EventType { IMPRESSION, AD_CLICK, ADD_TO_CART, PURCHASE, REFUND }
+    public record CustomerEvent(String eventId, String primaryId, EventType type, Instant timestamp, Map<String, String> payload) {}
 
-    public enum EventType {
-        /** 广告展示曝光 */
-        IMPRESSION,
-        /** 广告点击 */
-        AD_CLICK,
-        /** 加入购物车 */
-        ADD_TO_CART,
-        /** 交易订单支付 */
-        PURCHASE,
-        /** 售后退款 */
-        REFUND
+    private final CdpCustomerEventMapper eventMapper;
+    private final ObjectMapper objectMapper;
+    private final ConcurrentMap<String, List<CustomerEvent>> fallback = new ConcurrentHashMap<>();
+
+    public CustomerTimelineService() { this(null, null); }
+
+    @Autowired
+    public CustomerTimelineService(@Autowired(required = false) CdpCustomerEventMapper eventMapper,
+                                   @Autowired(required = false) ObjectMapper objectMapper) {
+        this.eventMapper = eventMapper;
+        this.objectMapper = objectMapper == null ? new ObjectMapper() : objectMapper;
     }
 
-    public record CustomerEvent(
-            String eventId,
-            String primaryId,
-            EventType type,
-            Instant timestamp,
-            Map<String, String> payload
-    ) {}
-
-    // Key 为 primaryId，Value 为该客户按时间倒序排列的事件列表
-    private final ConcurrentMap<String, List<CustomerEvent>> timelines = new ConcurrentHashMap<>();
-
-    /**
-     * 追加记录一条客户行为事件
-     */
-    public CustomerEvent recordEvent(
-            String primaryId,
-            EventType type,
-            Instant timestamp,
-            Map<String, String> payload
-    ) {
-        String eventId = "evt_" + UUID.randomUUID();
+    public CustomerEvent recordEvent(String primaryId, EventType type, Instant timestamp, Map<String, String> payload) {
+        if (primaryId == null || primaryId.isBlank() || type == null) throw new IllegalArgumentException("primaryId and type are required");
         Instant ts = timestamp == null ? Instant.now() : timestamp;
-        CustomerEvent event = new CustomerEvent(eventId, primaryId, type, ts, payload == null ? Map.of() : Map.copyOf(payload));
-
-        timelines.computeIfAbsent(primaryId, k -> Collections.synchronizedList(new ArrayList<>())).add(event);
+        CustomerEvent event = new CustomerEvent("evt_" + UUID.randomUUID(), primaryId, type, ts, payload == null ? Map.of() : Map.copyOf(payload));
+        if (eventMapper != null) {
+            try {
+                eventMapper.insert(new CdpCustomerEventEntity(event.eventId(), tenant(), primaryId, type.name(), ts, objectMapper.writeValueAsString(event.payload())));
+            } catch (Exception e) { throw new IllegalStateException("cannot persist customer timeline event", e); }
+        } else fallback.computeIfAbsent(key(primaryId), ignored -> Collections.synchronizedList(new ArrayList<>())).add(event);
         return event;
     }
 
-    /**
-     * 获取指定客户的全量时间轴事件（按时间倒序）
-     */
     public List<CustomerEvent> getTimeline(String primaryId) {
-        List<CustomerEvent> list = timelines.get(primaryId);
-        if (list == null || list.isEmpty()) {
-            return List.of();
+        if (primaryId == null || primaryId.isBlank()) return List.of();
+        if (eventMapper != null) {
+            List<CdpCustomerEventEntity> entities = eventMapper.selectList(new LambdaQueryWrapper<CdpCustomerEventEntity>()
+                    .eq(CdpCustomerEventEntity::getTenantId, tenant()).eq(CdpCustomerEventEntity::getPrimaryId, primaryId)
+                    .orderByDesc(CdpCustomerEventEntity::getEventAt));
+            return entities.stream().map(this::fromEntity).toList();
         }
-        synchronized (list) {
-            List<CustomerEvent> copy = new ArrayList<>(list);
-            copy.sort(Comparator.comparing(CustomerEvent::timestamp).reversed());
-            return copy;
-        }
+        List<CustomerEvent> list = fallback.get(key(primaryId));
+        if (list == null || list.isEmpty()) return List.of();
+        synchronized (list) { return list.stream().sorted(Comparator.comparing(CustomerEvent::timestamp).reversed()).toList(); }
     }
+
+    private CustomerEvent fromEntity(CdpCustomerEventEntity e) {
+        try {
+            Map<String, String> payload = e.getPayload() == null ? Map.of() : objectMapper.readValue(e.getPayload(), new TypeReference<>() {});
+            return new CustomerEvent(e.getEventId(), e.getPrimaryId(), EventType.valueOf(e.getEventType()), e.getEventAt(), payload);
+        } catch (Exception ex) { throw new IllegalStateException("cannot deserialize customer timeline event", ex); }
+    }
+    private static String key(String primaryId) { return tenant() + ":" + primaryId; }
+    private static String tenant() { return TenantContext.get() == null ? "public" : TenantContext.required(); }
 }

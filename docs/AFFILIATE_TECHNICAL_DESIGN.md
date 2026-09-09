@@ -46,7 +46,7 @@
 
 **Backend**:
 - Java 21 with Spring Boot 3.4
-- Spring Data JPA for ORM
+- MyBatis-Plus for production persistence and ORM-style mapping
 - Spring Security for authentication
 - Maven for dependency management
 
@@ -54,6 +54,8 @@
 - PostgreSQL 14+ (primary transactional database)
 - Redis 7+ (caching, rate limiting, session storage)
 - Kafka 3.x (event streaming)
+
+Production writes and reads use MyBatis-Plus `BaseMapper` implementations. The entity snippets below describe the domain shape; they are illustrative and do not imply Spring Data JPA repositories are enabled.
 
 **Infrastructure**:
 - Docker & Kubernetes for orchestration
@@ -78,7 +80,7 @@ The platform uses a **modular monolith** architecture with clear module boundari
 | **platform-billing** | Financial transactions | billing_entry, billing_account | BillingService, WalletService |
 | **platform-event** | Event publishing | event_outbox | EventPublisher, OutboxRelay |
 | **platform-reporting** | Analytics & reports | report_daily, report_hourly | ReportService, SubIdAnalyticsService |
-| **platform-infrastructure** | Data access adapters | N/A | Repositories, Redis/Kafka clients |
+| **platform-infrastructure** | Data access adapters | N/A | MyBatis-Plus Mappers, Redis/Kafka clients |
 
 **Dependency Rules**:
 - Modules depend on `platform-common` (shared domain models)

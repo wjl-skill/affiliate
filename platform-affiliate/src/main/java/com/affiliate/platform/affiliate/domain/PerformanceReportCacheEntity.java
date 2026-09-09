@@ -17,9 +17,11 @@ import java.time.LocalDate;
         @Index(name = "idx_report_date", columnList = "start_date,end_date"),
         @Index(name = "idx_report_created", columnList = "created_at")
 })
+@com.baomidou.mybatisplus.annotation.TableName("affiliate_performance_report_cache")
 public class PerformanceReportCacheEntity {
 
     @Id
+    @com.baomidou.mybatisplus.annotation.TableId(type = com.baomidou.mybatisplus.annotation.IdType.INPUT)
     @Column(name = "id", length = 64)
     private String id;
 

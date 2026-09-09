@@ -1,56 +1,38 @@
 package com.affiliate.platform.affiliate.repository;
 
 import com.affiliate.platform.affiliate.domain.TouchPointEntity;
-import org.springframework.data.jpa.repository.JpaRepository;
-import org.springframework.data.jpa.repository.Query;
-import org.springframework.data.repository.query.Param;
-import org.springframework.stereotype.Repository;
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.mapper.BaseMapper;
+import org.apache.ibatis.annotations.Mapper;
 
 import java.time.Instant;
-import java.util.List;
+import java.util.*;
+import java.util.stream.Collectors;
 
-/**
- * 触点数据访问层
- */
-@Repository
-public interface TouchPointRepository extends JpaRepository<TouchPointEntity, String> {
-
-    /**
-     * 查找用户在指定时间窗口内的所有触点
-     */
-    @Query("SELECT t FROM TouchPointEntity t WHERE t.userId = :userId " +
-           "AND t.timestamp >= :windowStart AND t.timestamp < :windowEnd " +
-           "ORDER BY t.timestamp ASC")
-    List<TouchPointEntity> findTouchPointsInWindow(
-            @Param("userId") String userId,
-            @Param("windowStart") Instant windowStart,
-            @Param("windowEnd") Instant windowEnd
-    );
-
-    /**
-     * 查找用户的最近 N 个触点
-     */
-    @Query("SELECT t FROM TouchPointEntity t WHERE t.userId = :userId " +
-           "ORDER BY t.timestamp DESC LIMIT :limit")
-    List<TouchPointEntity> findRecentTouchPoints(
-            @Param("userId") String userId,
-            @Param("limit") int limit
-    );
-
-    /**
-     * 按渠道统计触点数量
-     */
-    @Query("SELECT t.affiliateId, COUNT(t) FROM TouchPointEntity t " +
-           "WHERE t.userId = :userId GROUP BY t.affiliateId")
-    List<Object[]> countTouchPointsByAffiliate(@Param("userId") String userId);
-
-    /**
-     * 删除过期触点（数据清理）
-     */
-    void deleteByTimestampBefore(Instant threshold);
-
-    /**
-     * 统计渠道的触点数量
-     */
-    long countByAffiliateId(String affiliateId);
+/** MyBatis-Plus touch point store. */
+@Mapper
+public interface TouchPointRepository extends BaseMapper<TouchPointEntity> {
+    default TouchPointEntity save(TouchPointEntity entity) {
+        if (entity == null) return null;
+        if (entity.getId() == null || selectById(entity.getId()) == null) insert(entity);
+        else updateById(entity);
+        return entity;
+    }
+    default Optional<TouchPointEntity> findById(String id) { return Optional.ofNullable(selectById(id)); }
+    default List<TouchPointEntity> findTouchPointsInWindow(String userId, Instant windowStart, Instant windowEnd) {
+        return selectList(new LambdaQueryWrapper<TouchPointEntity>().eq(TouchPointEntity::getUserId, userId)
+                .ge(TouchPointEntity::getTimestamp, windowStart).lt(TouchPointEntity::getTimestamp, windowEnd)
+                .orderByAsc(TouchPointEntity::getTimestamp));
+    }
+    default List<TouchPointEntity> findRecentTouchPoints(String userId, int limit) {
+        return selectList(new LambdaQueryWrapper<TouchPointEntity>().eq(TouchPointEntity::getUserId, userId)
+                .orderByDesc(TouchPointEntity::getTimestamp).last("LIMIT " + Math.max(0, limit)));
+    }
+    default List<Object[]> countTouchPointsByAffiliate(String userId) {
+        return selectList(new LambdaQueryWrapper<TouchPointEntity>().eq(TouchPointEntity::getUserId, userId)).stream()
+                .collect(Collectors.groupingBy(TouchPointEntity::getAffiliateId, LinkedHashMap::new, Collectors.counting()))
+                .entrySet().stream().map(e -> new Object[]{e.getKey(), e.getValue()}).toList();
+    }
+    default void deleteByTimestampBefore(Instant threshold) { delete(new LambdaQueryWrapper<TouchPointEntity>().lt(TouchPointEntity::getTimestamp, threshold)); }
+    default long countByAffiliateId(String affiliateId) { return selectCount(new LambdaQueryWrapper<TouchPointEntity>().eq(TouchPointEntity::getAffiliateId, affiliateId)); }
 }

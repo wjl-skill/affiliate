@@ -12,9 +12,11 @@ import java.time.Instant;
         @Index(name = "idx_geo_country", columnList = "country_code"),
         @Index(name = "idx_geo_updated", columnList = "updated_at")
 })
+@com.baomidou.mybatisplus.annotation.TableName("affiliate_ip_geolocation_cache")
 public class IpGeolocationCacheEntity {
 
     @Id
+    @com.baomidou.mybatisplus.annotation.TableId(type = com.baomidou.mybatisplus.annotation.IdType.INPUT)
     @Column(name = "id", length = 64)
     private String id;
 

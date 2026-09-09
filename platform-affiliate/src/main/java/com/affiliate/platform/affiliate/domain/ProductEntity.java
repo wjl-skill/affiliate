@@ -13,9 +13,11 @@ import java.time.Instant;
         @Index(name = "idx_product_availability", columnList = "availability"),
         @Index(name = "idx_product_updated", columnList = "updated_at")
 })
+@com.baomidou.mybatisplus.annotation.TableName("affiliate_product")
 public class ProductEntity {
 
     @Id
+    @com.baomidou.mybatisplus.annotation.TableId(type = com.baomidou.mybatisplus.annotation.IdType.INPUT)
     @Column(name = "sku", length = 128)
     private String sku;
 

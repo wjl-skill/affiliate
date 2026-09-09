@@ -1,49 +1,40 @@
 package com.affiliate.platform.affiliate.repository;
 
 import com.affiliate.platform.affiliate.domain.AttributionResultEntity;
-import org.springframework.data.jpa.repository.JpaRepository;
-import org.springframework.data.jpa.repository.Query;
-import org.springframework.data.repository.query.Param;
-import org.springframework.stereotype.Repository;
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.mapper.BaseMapper;
+import org.apache.ibatis.annotations.Mapper;
 
 import java.time.Instant;
-import java.util.List;
-import java.util.Optional;
+import java.util.*;
+import java.util.stream.Collectors;
 
-/**
- * 归因结果数据访问层
- */
-@Repository
-public interface AttributionResultRepository extends JpaRepository<AttributionResultEntity, String> {
-
-    /**
-     * 根据转化ID查找归因结果
-     */
-    Optional<AttributionResultEntity> findByConversionId(String conversionId);
-
-    /**
-     * 查找用户的所有归因结果
-     */
-    List<AttributionResultEntity> findByUserIdOrderByConversionTimeDesc(String userId);
-
-    /**
-     * 查找指定时间范围内的归因结果
-     */
-    @Query("SELECT a FROM AttributionResultEntity a WHERE a.conversionTime >= :from AND a.conversionTime < :to " +
-           "ORDER BY a.conversionTime DESC")
-    List<AttributionResultEntity> findByTimeRange(
-            @Param("from") Instant from,
-            @Param("to") Instant to
-    );
-
-    /**
-     * 按归因模型统计
-     */
-    @Query("SELECT a.attributionModel, COUNT(a) FROM AttributionResultEntity a GROUP BY a.attributionModel")
-    List<Object[]> countByAttributionModel();
-
-    /**
-     * 检查转化ID是否已存在
-     */
-    boolean existsByConversionId(String conversionId);
+/** MyBatis-Plus attribution result store. */
+@Mapper
+public interface AttributionResultRepository extends BaseMapper<AttributionResultEntity> {
+    default AttributionResultEntity save(AttributionResultEntity entity) {
+        if (entity == null) return null;
+        if (entity.getId() == null || selectById(entity.getId()) == null) insert(entity);
+        else updateById(entity);
+        return entity;
+    }
+    default Optional<AttributionResultEntity> findById(String id) { return Optional.ofNullable(selectById(id)); }
+    default Optional<AttributionResultEntity> findByConversionId(String conversionId) {
+        return Optional.ofNullable(selectOne(new LambdaQueryWrapper<AttributionResultEntity>().eq(AttributionResultEntity::getConversionId, conversionId).last("LIMIT 1")));
+    }
+    default List<AttributionResultEntity> findByUserIdOrderByConversionTimeDesc(String userId) {
+        return selectList(new LambdaQueryWrapper<AttributionResultEntity>().eq(AttributionResultEntity::getUserId, userId)
+                .orderByDesc(AttributionResultEntity::getConversionTime));
+    }
+    default List<AttributionResultEntity> findByTimeRange(Instant from, Instant to) {
+        return selectList(new LambdaQueryWrapper<AttributionResultEntity>().ge(AttributionResultEntity::getConversionTime, from)
+                .lt(AttributionResultEntity::getConversionTime, to).orderByDesc(AttributionResultEntity::getConversionTime));
+    }
+    default List<Object[]> countByAttributionModel() {
+        return selectList(null).stream().collect(Collectors.groupingBy(AttributionResultEntity::getAttributionModel, LinkedHashMap::new, Collectors.counting()))
+                .entrySet().stream().map(e -> new Object[]{e.getKey(), e.getValue()}).toList();
+    }
+    default boolean existsByConversionId(String conversionId) {
+        return selectCount(new LambdaQueryWrapper<AttributionResultEntity>().eq(AttributionResultEntity::getConversionId, conversionId)) > 0;
+    }
 }

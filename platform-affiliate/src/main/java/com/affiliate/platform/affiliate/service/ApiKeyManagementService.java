@@ -3,7 +3,8 @@ package com.affiliate.platform.affiliate.service;
 import com.affiliate.platform.affiliate.cache.CacheKeyGenerator;
 import com.affiliate.platform.affiliate.cache.MultiLevelCacheManager;
 import com.affiliate.platform.affiliate.domain.ApiKeyEntity;
-import com.affiliate.platform.affiliate.repository.ApiKeyRepository;
+import com.affiliate.platform.affiliate.repository.AffiliateApiKeyMapper;
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -24,7 +25,7 @@ import java.util.stream.Collectors;
 @Service
 public class ApiKeyManagementService {
 
-    private final ApiKeyRepository apiKeyRepository;
+    private final AffiliateApiKeyMapper apiKeyMapper;
     private final MultiLevelCacheManager cacheManager;
     private final CacheKeyGenerator keyGenerator;
     private final ObjectMapper objectMapper;
@@ -35,12 +36,12 @@ public class ApiKeyManagementService {
     private static final Duration CACHE_TTL = Duration.ofHours(1);
 
     public ApiKeyManagementService(
-            ApiKeyRepository apiKeyRepository,
+            AffiliateApiKeyMapper apiKeyMapper,
             MultiLevelCacheManager cacheManager,
             CacheKeyGenerator keyGenerator,
             ObjectMapper objectMapper
     ) {
-        this.apiKeyRepository = apiKeyRepository;
+        this.apiKeyMapper = apiKeyMapper;
         this.cacheManager = cacheManager;
         this.keyGenerator = keyGenerator;
         this.objectMapper = objectMapper;
@@ -76,7 +77,7 @@ public class ApiKeyManagementService {
                 null
         );
 
-        apiKeyRepository.save(entity);
+        apiKeyMapper.insert(entity);
 
         // 失效相关缓存
         cacheManager.evictByPattern(keyGenerator.patternByPrefix("api_key", "affiliate", affiliateId));
@@ -106,7 +107,7 @@ public class ApiKeyManagementService {
         }
 
         // L2 和数据库查询
-        Optional<ApiKeyEntity> entityOpt = apiKeyRepository.findBySecretKey(apiKey);
+        Optional<ApiKeyEntity> entityOpt = Optional.ofNullable(apiKeyMapper.findBySecretKey(apiKey));
 
         if (entityOpt.isEmpty()) {
             ApiKeyValidationResult result = new ApiKeyValidationResult(false, null, "API key not found");
@@ -153,14 +154,14 @@ public class ApiKeyManagementService {
      */
     @Transactional
     public void revokeApiKey(String keyId, String reason) {
-        ApiKeyEntity entity = apiKeyRepository.findById(keyId)
+        ApiKeyEntity entity = Optional.ofNullable(apiKeyMapper.selectById(keyId))
                 .orElseThrow(() -> new IllegalArgumentException("API key not found"));
 
         entity.setStatus(ApiKeyStatus.REVOKED.name());
         entity.setRevokedReason(reason);
         entity.setRevokedAt(Instant.now());
 
-        apiKeyRepository.save(entity);
+        apiKeyMapper.updateById(entity);
 
         // 失效缓存
         cacheManager.evict(keyGenerator.apiKeyById(keyId));
@@ -173,7 +174,7 @@ public class ApiKeyManagementService {
      */
     @Transactional
     public ApiKeyRotationResult rotateApiKey(String keyId, int gracePeriodDays) {
-        ApiKeyEntity oldEntity = apiKeyRepository.findById(keyId)
+        ApiKeyEntity oldEntity = Optional.ofNullable(apiKeyMapper.selectById(keyId))
                 .orElseThrow(() -> new IllegalArgumentException("API key not found"));
 
         // 创建新密钥
@@ -192,7 +193,7 @@ public class ApiKeyManagementService {
         oldEntity.setExpiresAt(gracePeriodEnd);
         oldEntity.setRevokedReason("Rotated to " + newKey.id());
 
-        apiKeyRepository.save(oldEntity);
+        apiKeyMapper.updateById(oldEntity);
 
         // 失效缓存
         cacheManager.evictByPattern(keyGenerator.patternByPrefix("api_key", "affiliate", oldEntity.getAffiliateId()));
@@ -216,9 +217,10 @@ public class ApiKeyManagementService {
                 List.class,
                 CACHE_TTL,
                 () -> {
-                    List<ApiKeyEntity> entities = status == null ?
-                            apiKeyRepository.findByAffiliateIdOrderByCreatedAtDesc(affiliateId) :
-                            apiKeyRepository.findByAffiliateIdAndStatus(affiliateId, status.name());
+                    List<ApiKeyEntity> entities = apiKeyMapper.selectList(new LambdaQueryWrapper<ApiKeyEntity>()
+                            .eq(ApiKeyEntity::getAffiliateId, affiliateId)
+                            .eq(status != null, ApiKeyEntity::getStatus, status == null ? null : status.name())
+                            .orderByDesc(ApiKeyEntity::getCreatedAt));
 
                     return entities.stream()
                             .map(this::toApiKey)
@@ -233,7 +235,9 @@ public class ApiKeyManagementService {
     public List<ApiKey> getExpiringKeys(int daysBeforeExpiration) {
         Instant threshold = Instant.now().plusSeconds(daysBeforeExpiration * 86400L);
 
-        return apiKeyRepository.findExpiringKeys(threshold).stream()
+        return apiKeyMapper.selectList(new LambdaQueryWrapper<ApiKeyEntity>()
+                        .eq(ApiKeyEntity::getStatus, ApiKeyStatus.ACTIVE.name())
+                        .isNotNull(ApiKeyEntity::getExpiresAt).le(ApiKeyEntity::getExpiresAt, threshold)).stream()
                 .map(this::toApiKey)
                 .sorted(Comparator.comparing(ApiKey::expiresAt))
                 .collect(Collectors.toList());
@@ -244,7 +248,9 @@ public class ApiKeyManagementService {
      */
     @Transactional
     public int revokeExpiredKeys() {
-        List<ApiKeyEntity> expiredKeys = apiKeyRepository.findExpiredKeys(Instant.now());
+        List<ApiKeyEntity> expiredKeys = apiKeyMapper.selectList(new LambdaQueryWrapper<ApiKeyEntity>()
+                .in(ApiKeyEntity::getStatus, ApiKeyStatus.ACTIVE.name(), ApiKeyStatus.DEPRECATED.name())
+                .isNotNull(ApiKeyEntity::getExpiresAt).le(ApiKeyEntity::getExpiresAt, Instant.now()));
 
         for (ApiKeyEntity key : expiredKeys) {
             key.setStatus(ApiKeyStatus.REVOKED.name());
@@ -252,7 +258,7 @@ public class ApiKeyManagementService {
             key.setRevokedAt(Instant.now());
         }
 
-        apiKeyRepository.saveAll(expiredKeys);
+        expiredKeys.forEach(apiKeyMapper::updateById);
 
         // 失效缓存
         expiredKeys.forEach(key -> {
@@ -292,10 +298,10 @@ public class ApiKeyManagementService {
     private void updateUsageAsync(String keyId) {
         // 异步更新使用计数（不影响验证性能）
         // TODO: 使用消息队列或异步任务
-        apiKeyRepository.findById(keyId).ifPresent(entity -> {
+        Optional.ofNullable(apiKeyMapper.selectById(keyId)).ifPresent(entity -> {
             entity.setUsageCount(entity.getUsageCount() + 1);
             entity.setLastUsedAt(Instant.now());
-            apiKeyRepository.save(entity);
+            apiKeyMapper.updateById(entity);
         });
     }
 

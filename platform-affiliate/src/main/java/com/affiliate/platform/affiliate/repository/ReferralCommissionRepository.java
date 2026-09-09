@@ -1,99 +1,30 @@
 package com.affiliate.platform.affiliate.repository;
 
 import com.affiliate.platform.affiliate.domain.ReferralCommissionEntity;
-import org.springframework.data.jpa.repository.JpaRepository;
-import org.springframework.data.jpa.repository.Query;
-import org.springframework.data.repository.query.Param;
-import org.springframework.stereotype.Repository;
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.mapper.BaseMapper;
+import org.apache.ibatis.annotations.Mapper;
 
 import java.math.BigDecimal;
 import java.time.Instant;
-import java.util.List;
+import java.util.*;
+import java.util.stream.Collectors;
 
-/**
- * 推荐佣金流水数据访问层
- */
-@Repository
-public interface ReferralCommissionRepository extends JpaRepository<ReferralCommissionEntity, String> {
-
-    /**
-     * 查找推荐人的所有佣金记录
-     */
-    List<ReferralCommissionEntity> findByReferrerIdOrderByCreatedAtDesc(String referrerId);
-
-    /**
-     * 查找推荐人指定状态的佣金记录
-     */
-    List<ReferralCommissionEntity> findByReferrerIdAndStatusOrderByCreatedAtDesc(
-            String referrerId,
-            String status
-    );
-
-    /**
-     * 查找时间范围内的佣金记录
-     */
-    @Query("SELECT r FROM ReferralCommissionEntity r WHERE r.referrerId = :referrerId " +
-           "AND r.createdAt >= :from AND r.createdAt < :to " +
-           "ORDER BY r.createdAt DESC")
-    List<ReferralCommissionEntity> findByReferrerAndTimeRange(
-            @Param("referrerId") String referrerId,
-            @Param("from") Instant from,
-            @Param("to") Instant to
-    );
-
-    /**
-     * 查找时间范围内指定状态的佣金记录
-     */
-    @Query("SELECT r FROM ReferralCommissionEntity r WHERE r.referrerId = :referrerId " +
-           "AND r.status = :status AND r.createdAt >= :from AND r.createdAt < :to " +
-           "ORDER BY r.createdAt DESC")
-    List<ReferralCommissionEntity> findByReferrerStatusAndTimeRange(
-            @Param("referrerId") String referrerId,
-            @Param("status") String status,
-            @Param("from") Instant from,
-            @Param("to") Instant to
-    );
-
-    /**
-     * 根据转化ID查找佣金记录
-     */
-    List<ReferralCommissionEntity> findByConversionId(String conversionId);
-
-    /**
-     * 统计推荐人的总佣金（已批准）
-     */
-    @Query("SELECT SUM(r.commission) FROM ReferralCommissionEntity r " +
-           "WHERE r.referrerId = :referrerId AND r.status = 'APPROVED'")
-    BigDecimal sumApprovedCommissionByReferrer(@Param("referrerId") String referrerId);
-
-    /**
-     * 统计推荐人的待审核佣金
-     */
-    @Query("SELECT SUM(r.commission) FROM ReferralCommissionEntity r " +
-           "WHERE r.referrerId = :referrerId AND r.status = 'PENDING'")
-    BigDecimal sumPendingCommissionByReferrer(@Param("referrerId") String referrerId);
-
-    /**
-     * 统计推荐人的转化次数
-     */
-    long countByReferrerId(String referrerId);
-
-    /**
-     * 按状态统计佣金数量
-     */
-    @Query("SELECT r.status, COUNT(r) FROM ReferralCommissionEntity r GROUP BY r.status")
-    List<Object[]> countByStatus();
-
-    /**
-     * 查找待处理的佣金记录
-     */
-    List<ReferralCommissionEntity> findByStatusOrderByCreatedAtAsc(String status);
-
-    /**
-     * 推荐人排行榜（按总佣金）
-     */
-    @Query("SELECT r.referrerId, SUM(r.commission) as total FROM ReferralCommissionEntity r " +
-           "WHERE r.status IN ('APPROVED', 'PAID') GROUP BY r.referrerId " +
-           "ORDER BY total DESC")
-    List<Object[]> findTopReferrersByEarnings();
+/** MyBatis-Plus referral commission store. */
+@Mapper
+public interface ReferralCommissionRepository extends BaseMapper<ReferralCommissionEntity> {
+    default ReferralCommissionEntity save(ReferralCommissionEntity entity) { if (entity == null) return null; if (entity.getId() == null || selectById(entity.getId()) == null) insert(entity); else updateById(entity); return entity; }
+    default Optional<ReferralCommissionEntity> findById(String id) { return Optional.ofNullable(selectById(id)); }
+    default List<ReferralCommissionEntity> findByReferrerIdOrderByCreatedAtDesc(String id) { return selectList(new LambdaQueryWrapper<ReferralCommissionEntity>().eq(ReferralCommissionEntity::getReferrerId, id).orderByDesc(ReferralCommissionEntity::getCreatedAt)); }
+    default List<ReferralCommissionEntity> findByReferrerIdAndStatusOrderByCreatedAtDesc(String id, String status) { return selectList(new LambdaQueryWrapper<ReferralCommissionEntity>().eq(ReferralCommissionEntity::getReferrerId, id).eq(ReferralCommissionEntity::getStatus, status).orderByDesc(ReferralCommissionEntity::getCreatedAt)); }
+    default List<ReferralCommissionEntity> findByReferrerAndTimeRange(String id, Instant from, Instant to) { return selectList(new LambdaQueryWrapper<ReferralCommissionEntity>().eq(ReferralCommissionEntity::getReferrerId, id).ge(ReferralCommissionEntity::getCreatedAt, from).lt(ReferralCommissionEntity::getCreatedAt, to).orderByDesc(ReferralCommissionEntity::getCreatedAt)); }
+    default List<ReferralCommissionEntity> findByReferrerStatusAndTimeRange(String id, String status, Instant from, Instant to) { return selectList(new LambdaQueryWrapper<ReferralCommissionEntity>().eq(ReferralCommissionEntity::getReferrerId, id).eq(ReferralCommissionEntity::getStatus, status).ge(ReferralCommissionEntity::getCreatedAt, from).lt(ReferralCommissionEntity::getCreatedAt, to).orderByDesc(ReferralCommissionEntity::getCreatedAt)); }
+    default List<ReferralCommissionEntity> findByConversionId(String id) { return selectList(new LambdaQueryWrapper<ReferralCommissionEntity>().eq(ReferralCommissionEntity::getConversionId, id)); }
+    default BigDecimal sumApprovedCommissionByReferrer(String id) { return sum(selectList(new LambdaQueryWrapper<ReferralCommissionEntity>().eq(ReferralCommissionEntity::getReferrerId, id).eq(ReferralCommissionEntity::getStatus, "APPROVED"))); }
+    default BigDecimal sumPendingCommissionByReferrer(String id) { return sum(selectList(new LambdaQueryWrapper<ReferralCommissionEntity>().eq(ReferralCommissionEntity::getReferrerId, id).eq(ReferralCommissionEntity::getStatus, "PENDING"))); }
+    default long countByReferrerId(String id) { return selectCount(new LambdaQueryWrapper<ReferralCommissionEntity>().eq(ReferralCommissionEntity::getReferrerId, id)); }
+    default List<Object[]> countByStatus() { return selectList(null).stream().collect(Collectors.groupingBy(ReferralCommissionEntity::getStatus, LinkedHashMap::new, Collectors.counting())).entrySet().stream().map(e -> new Object[]{e.getKey(), e.getValue()}).toList(); }
+    default List<ReferralCommissionEntity> findByStatusOrderByCreatedAtAsc(String status) { return selectList(new LambdaQueryWrapper<ReferralCommissionEntity>().eq(ReferralCommissionEntity::getStatus, status).orderByAsc(ReferralCommissionEntity::getCreatedAt)); }
+    default List<Object[]> findTopReferrersByEarnings() { Map<String, BigDecimal> totals = selectList(new LambdaQueryWrapper<ReferralCommissionEntity>().in(ReferralCommissionEntity::getStatus, "APPROVED", "PAID")).stream().collect(Collectors.groupingBy(ReferralCommissionEntity::getReferrerId, LinkedHashMap::new, Collectors.reducing(BigDecimal.ZERO, ReferralCommissionEntity::getCommission, BigDecimal::add))); return totals.entrySet().stream().sorted(Map.Entry.<String, BigDecimal>comparingByValue().reversed()).map(e -> new Object[]{e.getKey(), e.getValue()}).toList(); }
+    private static BigDecimal sum(List<ReferralCommissionEntity> list) { return list.stream().map(ReferralCommissionEntity::getCommission).filter(Objects::nonNull).reduce(BigDecimal.ZERO, BigDecimal::add); }
 }

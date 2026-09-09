@@ -12,9 +12,11 @@ import java.time.Instant;
         @Index(name = "idx_touchpoint_affiliate", columnList = "affiliate_id"),
         @Index(name = "idx_touchpoint_click", columnList = "click_id")
 })
+@com.baomidou.mybatisplus.annotation.TableName("affiliate_touch_point")
 public class TouchPointEntity {
 
     @Id
+    @com.baomidou.mybatisplus.annotation.TableId(type = com.baomidou.mybatisplus.annotation.IdType.INPUT)
     @Column(name = "id", length = 64)
     private String id;
 

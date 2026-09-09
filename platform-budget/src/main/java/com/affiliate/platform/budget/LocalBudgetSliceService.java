@@ -77,7 +77,10 @@ public class LocalBudgetSliceService {
                         try {
                             // 批量拉取 10 USD 或至少 10 倍当前请求量的大切片
                             BigDecimal sliceFetchAmount = BigDecimal.valueOf(Math.max(DEFAULT_SLICE_MICROS, deductMicros * 10) / 1_000_000.0);
-                            mainBudgetService.reserve(tenantId, campaignId, "local_slice_agent", sliceFetchAmount);
+                            BudgetService.Reservation fetched = mainBudgetService.reserve(tenantId, campaignId, "local_slice_agent", sliceFetchAmount);
+                            // 预取的额度已经转入本实例本地切片，立即确认主流水，避免
+                            // 过期回收任务再次把已切片额度释放回主预算池。
+                            mainBudgetService.confirm(fetched);
                             // 将拉取到的切片填充至本地原子计数器
                             slice.addAndGet(toMicros(sliceFetchAmount));
                         } catch (Exception e) {
@@ -94,8 +97,11 @@ public class LocalBudgetSliceService {
      * 竞价胜出确认
      */
     public void confirm(BudgetService.Reservation reservation) {
-        localReservations.remove(reservation.id());
-        mainBudgetService.confirm(reservation);
+        if (reservation == null) return;
+        if (localReservations.remove(reservation.id()) == null) {
+            // 只有直接落到主预算服务的预占才需要向主服务确认。
+            mainBudgetService.confirm(reservation);
+        }
     }
 
     /**

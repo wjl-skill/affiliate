@@ -15,9 +15,11 @@ import java.time.Instant;
         @Index(name = "idx_payment_tx_created", columnList = "created_at"),
         @Index(name = "idx_payment_tx_external", columnList = "external_payment_id")
 })
+@com.baomidou.mybatisplus.annotation.TableName("affiliate_payment_transaction")
 public class PaymentTransactionEntity {
 
     @Id
+    @com.baomidou.mybatisplus.annotation.TableId(type = com.baomidou.mybatisplus.annotation.IdType.INPUT)
     @Column(name = "id", length = 64)
     private String id;
 

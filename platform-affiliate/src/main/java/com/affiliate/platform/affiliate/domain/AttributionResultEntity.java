@@ -13,9 +13,11 @@ import java.time.Instant;
         @Index(name = "idx_attribution_conversion", columnList = "conversion_id", unique = true),
         @Index(name = "idx_attribution_time", columnList = "conversion_time")
 })
+@com.baomidou.mybatisplus.annotation.TableName("affiliate_attribution_result")
 public class AttributionResultEntity {
 
     @Id
+    @com.baomidou.mybatisplus.annotation.TableId(type = com.baomidou.mybatisplus.annotation.IdType.INPUT)
     @Column(name = "id", length = 64)
     private String id;
 

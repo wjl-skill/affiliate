@@ -11,9 +11,11 @@ import java.time.Instant;
         @Index(name = "idx_kyc_affiliate", columnList = "affiliate_id", unique = true),
         @Index(name = "idx_kyc_status", columnList = "status")
 })
+@com.baomidou.mybatisplus.annotation.TableName("affiliate_kyc_verification")
 public class KycVerificationEntity {
 
     @Id
+    @com.baomidou.mybatisplus.annotation.TableId(type = com.baomidou.mybatisplus.annotation.IdType.INPUT)
     @Column(name = "id", length = 64)
     private String id;
 

@@ -176,8 +176,7 @@
 **后端**：
 - Java 21（虚拟线程）
 - Spring Boot 3.4
-- Spring Data JPA
-- MyBatis-Plus
+- MyBatis-Plus（生产持久化统一入口）
 - Spring Security
 
 **数据库**：
@@ -338,5 +337,5 @@ test: 补充反欺诈引擎单元测试
 ---
 
 **项目版本**：0.2.0
-**最后更新**：2026-09-08
+**最后更新**：2026-09-09
 **维护团队**：Affiliate Platform Team

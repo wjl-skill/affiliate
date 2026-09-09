@@ -14,9 +14,11 @@ import java.time.Instant;
         @Index(name = "idx_notif_created", columnList = "created_at"),
         @Index(name = "idx_notif_priority", columnList = "priority")
 })
+@com.baomidou.mybatisplus.annotation.TableName("affiliate_notification")
 public class NotificationEntity {
 
     @Id
+    @com.baomidou.mybatisplus.annotation.TableId(type = com.baomidou.mybatisplus.annotation.IdType.INPUT)
     @Column(name = "id", length = 64)
     private String id;
 

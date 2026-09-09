@@ -1,49 +1,46 @@
 package com.affiliate.platform.affiliate.repository;
 
 import com.affiliate.platform.affiliate.domain.PaymentMethodEntity;
-import org.springframework.data.jpa.repository.JpaRepository;
-import org.springframework.data.jpa.repository.Query;
-import org.springframework.data.repository.query.Param;
-import org.springframework.stereotype.Repository;
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.mapper.BaseMapper;
+import org.apache.ibatis.annotations.Mapper;
 
 import java.util.List;
 import java.util.Optional;
 
-/**
- * 支付方式数据访问层
- */
-@Repository
-public interface PaymentMethodRepository extends JpaRepository<PaymentMethodEntity, String> {
-
-    /**
-     * 查找渠道的所有支付方式
-     */
-    List<PaymentMethodEntity> findByAffiliateIdOrderByCreatedAtDesc(String affiliateId);
-
-    /**
-     * 查找渠道的主支付方式
-     */
-    Optional<PaymentMethodEntity> findByAffiliateIdAndIsPrimaryTrue(String affiliateId);
-
-    /**
-     * 查找渠道指定状态的支付方式
-     */
-    List<PaymentMethodEntity> findByAffiliateIdAndStatus(String affiliateId, String status);
-
-    /**
-     * 查找渠道已验证的支付方式
-     */
-    @Query("SELECT p FROM PaymentMethodEntity p WHERE p.affiliateId = :affiliateId " +
-           "AND p.status = 'VERIFIED' ORDER BY p.isPrimary DESC, p.lastUsedAt DESC")
-    List<PaymentMethodEntity> findVerifiedPaymentMethods(@Param("affiliateId") String affiliateId);
-
-    /**
-     * 统计渠道的支付方式数量
-     */
-    long countByAffiliateIdAndStatus(String affiliateId, String status);
-
-    /**
-     * 检查是否存在主支付方式
-     */
-    boolean existsByAffiliateIdAndIsPrimaryTrue(String affiliateId);
+/** MyBatis-Plus payment method store. */
+@Mapper
+public interface PaymentMethodRepository extends BaseMapper<PaymentMethodEntity> {
+    default PaymentMethodEntity save(PaymentMethodEntity entity) {
+        if (entity == null) return null;
+        if (entity.getId() == null || selectById(entity.getId()) == null) insert(entity);
+        else updateById(entity);
+        return entity;
+    }
+    default Optional<PaymentMethodEntity> findById(String id) { return Optional.ofNullable(selectById(id)); }
+    default List<PaymentMethodEntity> findByAffiliateIdOrderByCreatedAtDesc(String affiliateId) {
+        return selectList(new LambdaQueryWrapper<PaymentMethodEntity>().eq(PaymentMethodEntity::getAffiliateId, affiliateId)
+                .orderByDesc(PaymentMethodEntity::getCreatedAt));
+    }
+    default Optional<PaymentMethodEntity> findByAffiliateIdAndIsPrimaryTrue(String affiliateId) {
+        return Optional.ofNullable(selectOne(new LambdaQueryWrapper<PaymentMethodEntity>().eq(PaymentMethodEntity::getAffiliateId, affiliateId)
+                .eq(PaymentMethodEntity::getIsPrimary, true).last("LIMIT 1")));
+    }
+    default List<PaymentMethodEntity> findByAffiliateIdAndStatus(String affiliateId, String status) {
+        return selectList(new LambdaQueryWrapper<PaymentMethodEntity>().eq(PaymentMethodEntity::getAffiliateId, affiliateId)
+                .eq(PaymentMethodEntity::getStatus, status));
+    }
+    default List<PaymentMethodEntity> findVerifiedPaymentMethods(String affiliateId) {
+        return selectList(new LambdaQueryWrapper<PaymentMethodEntity>().eq(PaymentMethodEntity::getAffiliateId, affiliateId)
+                .eq(PaymentMethodEntity::getStatus, "VERIFIED").orderByDesc(PaymentMethodEntity::getIsPrimary)
+                .orderByDesc(PaymentMethodEntity::getLastUsedAt));
+    }
+    default long countByAffiliateIdAndStatus(String affiliateId, String status) {
+        return selectCount(new LambdaQueryWrapper<PaymentMethodEntity>().eq(PaymentMethodEntity::getAffiliateId, affiliateId)
+                .eq(PaymentMethodEntity::getStatus, status));
+    }
+    default boolean existsByAffiliateIdAndIsPrimaryTrue(String affiliateId) {
+        return selectCount(new LambdaQueryWrapper<PaymentMethodEntity>().eq(PaymentMethodEntity::getAffiliateId, affiliateId)
+                .eq(PaymentMethodEntity::getIsPrimary, true)) > 0;
+    }
 }

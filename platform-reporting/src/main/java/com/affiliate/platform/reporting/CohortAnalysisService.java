@@ -4,6 +4,7 @@ import com.affiliate.platform.entity.ReportCohortAcquisitionEntity;
 import com.affiliate.platform.entity.ReportCohortActivityEntity;
 import com.affiliate.platform.mapper.ReportCohortAcquisitionMapper;
 import com.affiliate.platform.mapper.ReportCohortActivityMapper;
+import com.affiliate.platform.tenant.TenantContext;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -96,20 +97,15 @@ public class CohortAnalysisService {
     public void recordAcquisition(String userId, LocalDate cohortDate, BigDecimal cost) {
         if (userId == null || cohortDate == null) return;
         BigDecimal effectiveCost = cost == null ? BigDecimal.ZERO : cost;
-        acquisitions.put(userId, new UserAcquisition(userId, cohortDate, effectiveCost));
-
         if (acquisitionMapper != null) {
-            Thread.ofVirtual().name("cohort-acq-persister").start(() -> {
-                try {
-                    ReportCohortAcquisitionEntity entity = new ReportCohortAcquisitionEntity(
-                            UUID.randomUUID().toString(), "default", userId, cohortDate, effectiveCost, Instant.now()
-                    );
-                    acquisitionMapper.insert(entity);
-                } catch (Exception e) {
-                    log.error("Failed to persist cohort acquisition for user {}: {}", userId, e.getMessage());
-                }
-            });
+            LambdaQueryWrapper<ReportCohortAcquisitionEntity> query = new LambdaQueryWrapper<ReportCohortAcquisitionEntity>()
+                    .eq(ReportCohortAcquisitionEntity::getTenantId, tenant()).eq(ReportCohortAcquisitionEntity::getUserId, userId)
+                    .eq(ReportCohortAcquisitionEntity::getCohortDate, cohortDate);
+            ReportCohortAcquisitionEntity existing = acquisitionMapper.selectOne(query);
+            if (existing == null) acquisitionMapper.insert(new ReportCohortAcquisitionEntity(UUID.randomUUID().toString(), tenant(), userId, cohortDate, effectiveCost, Instant.now()));
+            else { existing.setCost(effectiveCost); acquisitionMapper.updateById(existing); }
         }
+        acquisitions.put(userId, new UserAcquisition(userId, cohortDate, effectiveCost));
     }
 
     /**
@@ -118,21 +114,10 @@ public class CohortAnalysisService {
     public void recordActivity(String userId, LocalDate activityDate, BigDecimal revenue) {
         if (userId == null || activityDate == null) return;
         BigDecimal effectiveRevenue = revenue == null ? BigDecimal.ZERO : revenue;
-        activities.computeIfAbsent(userId, k -> Collections.synchronizedList(new ArrayList<>()))
-                .add(new UserActivity(activityDate, effectiveRevenue));
-
         if (activityMapper != null) {
-            Thread.ofVirtual().name("cohort-act-persister").start(() -> {
-                try {
-                    ReportCohortActivityEntity entity = new ReportCohortActivityEntity(
-                            UUID.randomUUID().toString(), "default", userId, activityDate, effectiveRevenue, Instant.now()
-                    );
-                    activityMapper.insert(entity);
-                } catch (Exception e) {
-                    log.error("Failed to persist cohort activity for user {}: {}", userId, e.getMessage());
-                }
-            });
+            activityMapper.insert(new ReportCohortActivityEntity(UUID.randomUUID().toString(), tenant(), userId, activityDate, effectiveRevenue, Instant.now()));
         }
+        activities.computeIfAbsent(userId, k -> Collections.synchronizedList(new ArrayList<>())).add(new UserActivity(activityDate, effectiveRevenue));
     }
 
     /**
@@ -143,24 +128,24 @@ public class CohortAnalysisService {
         LocalDate end = to == null ? LocalDate.now() : to;
 
         // 若本地内存为空且已接入数据库，则从 PostgreSQL 自动回源加载指定区间数据
-        if (acquisitions.isEmpty() && acquisitionMapper != null) {
+        if (acquisitionMapper != null) {
             try {
                 LambdaQueryWrapper<ReportCohortAcquisitionEntity> acqQuery = new LambdaQueryWrapper<>();
-                acqQuery.ge(ReportCohortAcquisitionEntity::getCohortDate, start)
+                acqQuery.eq(ReportCohortAcquisitionEntity::getTenantId, tenant()).ge(ReportCohortAcquisitionEntity::getCohortDate, start)
                         .le(ReportCohortAcquisitionEntity::getCohortDate, end);
                 List<ReportCohortAcquisitionEntity> dbAcqs = acquisitionMapper.selectList(acqQuery);
                 for (ReportCohortAcquisitionEntity e : dbAcqs) {
-                    acquisitions.putIfAbsent(e.getUserId(), new UserAcquisition(e.getUserId(), e.getCohortDate(), e.getCost()));
+                    acquisitions.put(e.getUserId(), new UserAcquisition(e.getUserId(), e.getCohortDate(), e.getCost()));
                 }
 
                 if (activityMapper != null && !dbAcqs.isEmpty()) {
                     List<String> userIds = dbAcqs.stream().map(ReportCohortAcquisitionEntity::getUserId).toList();
                     LambdaQueryWrapper<ReportCohortActivityEntity> actQuery = new LambdaQueryWrapper<>();
-                    actQuery.in(ReportCohortActivityEntity::getUserId, userIds);
+                    actQuery.eq(ReportCohortActivityEntity::getTenantId, tenant()).in(ReportCohortActivityEntity::getUserId, userIds);
                     List<ReportCohortActivityEntity> dbActs = activityMapper.selectList(actQuery);
                     for (ReportCohortActivityEntity act : dbActs) {
-                        activities.computeIfAbsent(act.getUserId(), k -> Collections.synchronizedList(new ArrayList<>()))
-                                .add(new UserActivity(act.getActivityDate(), act.getRevenue()));
+                        List<UserActivity> values = activities.computeIfAbsent(act.getUserId(), k -> Collections.synchronizedList(new ArrayList<>()));
+                        synchronized (values) { values.add(new UserActivity(act.getActivityDate(), act.getRevenue())); }
                     }
                 }
             } catch (Exception e) {
@@ -257,5 +242,9 @@ public class CohortAnalysisService {
         }
 
         return new CohortMatrix(start, end, totalUsers, totalSpend, rows);
+    }
+
+    private static String tenant() {
+        return TenantContext.get() == null ? "public" : TenantContext.required();
     }
 }

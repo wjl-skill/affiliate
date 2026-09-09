@@ -1,6 +1,8 @@
 package com.affiliate.platform.affiliate.domain;
 
 import jakarta.persistence.*;
+import com.baomidou.mybatisplus.annotation.TableId;
+import com.baomidou.mybatisplus.annotation.TableName;
 import java.time.Instant;
 
 /**
@@ -13,9 +15,11 @@ import java.time.Instant;
         @Index(name = "idx_api_key_status", columnList = "status"),
         @Index(name = "idx_api_key_expires", columnList = "expires_at")
 })
+@TableName("affiliate_api_key")
 public class ApiKeyEntity {
 
     @Id
+    @TableId
     @Column(name = "id", length = 64)
     private String id;
 

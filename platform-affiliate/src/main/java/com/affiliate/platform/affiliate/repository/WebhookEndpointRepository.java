@@ -1,52 +1,43 @@
 package com.affiliate.platform.affiliate.repository;
 
 import com.affiliate.platform.affiliate.domain.WebhookEndpointEntity;
-import org.springframework.data.jpa.repository.JpaRepository;
-import org.springframework.data.jpa.repository.Modifying;
-import org.springframework.data.jpa.repository.Query;
-import org.springframework.data.repository.query.Param;
-import org.springframework.stereotype.Repository;
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
+import com.baomidou.mybatisplus.core.mapper.BaseMapper;
+import org.apache.ibatis.annotations.Mapper;
 
 import java.time.Instant;
 import java.util.List;
 
-/**
- * Webhook端点数据访问层
- */
-@Repository
-public interface WebhookEndpointRepository extends JpaRepository<WebhookEndpointEntity, String> {
-
-    /**
-     * 查找用户的所有Webhook端点
-     */
-    List<WebhookEndpointEntity> findByAffiliateId(String affiliateId);
-
-    /**
-     * 查找用户的活跃Webhook端点
-     */
-    List<WebhookEndpointEntity> findByAffiliateIdAndActive(String affiliateId, Boolean active);
-
-    /**
-     * 增加失败次数
-     */
-    @Modifying
-    @Query("UPDATE WebhookEndpointEntity w SET w.failureCount = w.failureCount + 1, " +
-           "w.lastFailedAt = :failedAt WHERE w.id = :webhookId")
-    void incrementFailureCount(@Param("webhookId") String webhookId, @Param("failedAt") Instant failedAt);
-
-    /**
-     * 记录成功调用
-     */
-    @Modifying
-    @Query("UPDATE WebhookEndpointEntity w SET w.failureCount = 0, " +
-           "w.lastSuccessAt = :successAt WHERE w.id = :webhookId")
-    void recordSuccess(@Param("webhookId") String webhookId, @Param("successAt") Instant successAt);
-
-    /**
-     * 禁用失败次数过多的端点
-     */
-    @Modifying
-    @Query("UPDATE WebhookEndpointEntity w SET w.active = false " +
-           "WHERE w.failureCount >= :threshold")
-    int disableFailedEndpoints(@Param("threshold") int threshold);
+/** MyBatis-Plus webhook endpoint store. */
+@Mapper
+public interface WebhookEndpointRepository extends BaseMapper<WebhookEndpointEntity> {
+    default WebhookEndpointEntity save(WebhookEndpointEntity entity) {
+        if (entity == null) return null;
+        if (entity.getId() == null || selectById(entity.getId()) == null) insert(entity);
+        else updateById(entity);
+        return entity;
+    }
+    default List<WebhookEndpointEntity> findByAffiliateId(String affiliateId) {
+        return selectList(new LambdaQueryWrapper<WebhookEndpointEntity>().eq(WebhookEndpointEntity::getAffiliateId, affiliateId));
+    }
+    default List<WebhookEndpointEntity> findByAffiliateIdAndActive(String affiliateId, Boolean active) {
+        return selectList(new LambdaQueryWrapper<WebhookEndpointEntity>().eq(WebhookEndpointEntity::getAffiliateId, affiliateId)
+                .eq(WebhookEndpointEntity::getActive, active));
+    }
+    default void incrementFailureCount(String webhookId, Instant failedAt) {
+        WebhookEndpointEntity entity = selectById(webhookId);
+        if (entity == null) return;
+        update(null, new LambdaUpdateWrapper<WebhookEndpointEntity>().eq(WebhookEndpointEntity::getId, webhookId)
+                .set(WebhookEndpointEntity::getFailureCount, (entity.getFailureCount() == null ? 0 : entity.getFailureCount()) + 1)
+                .set(WebhookEndpointEntity::getLastFailedAt, failedAt));
+    }
+    default void recordSuccess(String webhookId, Instant successAt) {
+        update(null, new LambdaUpdateWrapper<WebhookEndpointEntity>().eq(WebhookEndpointEntity::getId, webhookId)
+                .set(WebhookEndpointEntity::getFailureCount, 0).set(WebhookEndpointEntity::getLastSuccessAt, successAt));
+    }
+    default int disableFailedEndpoints(int threshold) {
+        return update(null, new LambdaUpdateWrapper<WebhookEndpointEntity>().ge(WebhookEndpointEntity::getFailureCount, threshold)
+                .set(WebhookEndpointEntity::getActive, false));
+    }
 }

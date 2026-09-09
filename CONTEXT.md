@@ -12,6 +12,8 @@
 - **Demand Partner（需求合作方）**：代表 DSP 或广告主投放系统的连接配置。
 - **DMP（数据管理平台）**：管理匿名的第三方/第二方 Cookie、设备 ID 和短生命周期受众，主要用于付费广告定向与 Lookalike 放大。
 - **CDP（客户数据平台）**：管理租户第一方实名身份、跨渠道行为和长期客户画像，负责 ID Mapping、同意状态和私域触达。
+- **Advertiser（广告主）**：创建 Offer 并承担转化事件的收入确认、审核和付款责任。
+- **Affiliate / Publisher（渠道客）**：获取已授权的 Offer 推广链接，导入流量并按有效转化获得佣金；Affiliate 是结算主体，Publisher 是其流量载体。
 
 ## 投放对象
 
@@ -31,12 +33,19 @@
 - **Auction（竞价）**：在单个请求内按规则筛选候选出价并确定胜出结果。
 - **Win Notice（胜出通知）**：交易完成后发送给胜出 DSP 的结算和追踪通知。
 - **Impression / Click / Conversion**：曝光、点击、转化事实事件，均可重放且带幂等键。
+- **Offer（推广计划）**：广告主面向渠道开放的一组转化规则、落地页、定向条件、Cap 和佣金价格。Offer 本身不是一次转化。
+- **Offer Goal（转化目标）**：Offer 内可独立计价的事件（如注册、安装、首充）；一个点击可以产生多个目标事件，但每个事件必须使用自己的幂等键。
+- **Click Session（点击会话）**：记录 click_id、渠道、流量来源和设备环境的归因证据，具有有限保留期。
+- **Attribution（归因）**：把 Conversion 绑定到一个有效 Click Session 和 Offer Goal 的判定过程；找不到证据时只能生成拒绝记录。
+- **Conversion Status（转化状态）**：PENDING、APPROVED、REJECTED、FRAUD_SUSPECTED 的业务状态机。只有 APPROVED 转化进入可结算金额。
 
 ## 资金与分析
 
 - **Budget Reservation（预算预占）**：竞价前原子锁定预算；成交确认或超时释放。
 - **Billing Entry（计费分录）**：不可变的借贷明细，以幂等键防止重复记账。
 - **Settlement（结算）**：按租户、合作方和账期汇总可结算金额并生成对账差异。
+- **Payout（渠道佣金）**：平台应付给 Affiliate 的金额；**Revenue（广告主收入）**是平台向广告主确认的金额；两者差额是平台毛利，不能互相替代。
+- **Cap（配额）**：按 Offer、目标事件和账期限制可接受的点击/转化/收入数量或金额。Cap 超限后应停止计费并按配置回退。
 - **Report（报表）**：从事件事实聚合出的可查询指标，不反向修改计费分录。
 
 ## 数据身份边界

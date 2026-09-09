@@ -11,9 +11,11 @@ import java.time.Instant;
         @Index(name = "idx_webhook_affiliate", columnList = "affiliate_id"),
         @Index(name = "idx_webhook_active", columnList = "active")
 })
+@com.baomidou.mybatisplus.annotation.TableName("affiliate_webhook_endpoint")
 public class WebhookEndpointEntity {
 
     @Id
+    @com.baomidou.mybatisplus.annotation.TableId(type = com.baomidou.mybatisplus.annotation.IdType.INPUT)
     @Column(name = "id", length = 64)
     private String id;
 

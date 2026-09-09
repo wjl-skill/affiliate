@@ -1,78 +1,60 @@
 package com.affiliate.platform.affiliate.repository;
 
 import com.affiliate.platform.affiliate.domain.ProductEntity;
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
+import com.baomidou.mybatisplus.core.mapper.BaseMapper;
+import org.apache.ibatis.annotations.Mapper;
 import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Pageable;
-import org.springframework.data.jpa.repository.JpaRepository;
-import org.springframework.data.jpa.repository.Modifying;
-import org.springframework.data.jpa.repository.Query;
-import org.springframework.data.repository.query.Param;
-import org.springframework.stereotype.Repository;
 
 import java.util.List;
+import java.util.Optional;
 
-/**
- * 商品数据访问层
- */
-@Repository
-public interface ProductRepository extends JpaRepository<ProductEntity, String> {
-
-    /**
-     * 查找 Offer 的所有商品
-     */
-    List<ProductEntity> findByOfferIdOrderByNameAsc(String offerId);
-
-    /**
-     * 分页查找 Offer 的商品
-     */
-    Page<ProductEntity> findByOfferId(String offerId, Pageable pageable);
-
-    /**
-     * 查找指定状态的商品
-     */
-    List<ProductEntity> findByOfferIdAndAvailability(String offerId, String availability);
-
-    /**
-     * 搜索商品（关键词）
-     */
-    @Query("SELECT p FROM ProductEntity p WHERE p.offerId = :offerId " +
-           "AND (LOWER(p.name) LIKE LOWER(CONCAT('%', :keyword, '%')) " +
-           "OR LOWER(p.description) LIKE LOWER(CONCAT('%', :keyword, '%')))")
-    List<ProductEntity> searchByKeyword(@Param("offerId") String offerId,
-                                       @Param("keyword") String keyword);
-
-    /**
-     * 按分类查找商品
-     */
-    List<ProductEntity> findByCategoryIdOrderByNameAsc(String categoryId);
-
-    /**
-     * 按品牌查找商品
-     */
-    List<ProductEntity> findByBrandOrderByNameAsc(String brand);
-
-    /**
-     * 统计 Offer 的商品数量
-     */
-    long countByOfferId(String offerId);
-
-    /**
-     * 统计缺货商品
-     */
-    long countByOfferIdAndAvailability(String offerId, String availability);
-
-    /**
-     * 批量更新库存
-     */
-    @Modifying
-    @Query("UPDATE ProductEntity p SET p.stockQuantity = :quantity, p.availability = :availability WHERE p.sku IN :skus")
-    int bulkUpdateStock(@Param("skus") List<String> skus,
-                        @Param("quantity") int quantity,
-                        @Param("availability") String availability);
-
-    /**
-     * 删除 Offer 的所有商品
-     */
-    @Modifying
-    void deleteByOfferId(String offerId);
+/** MyBatis-Plus product catalog store. */
+@Mapper
+public interface ProductRepository extends BaseMapper<ProductEntity> {
+    default ProductEntity save(ProductEntity entity) {
+        if (entity == null) return null;
+        if (entity.getSku() == null || selectById(entity.getSku()) == null) insert(entity);
+        else updateById(entity);
+        return entity;
+    }
+    default Optional<ProductEntity> findById(String sku) { return Optional.ofNullable(selectById(sku)); }
+    default List<ProductEntity> findByOfferIdOrderByNameAsc(String offerId) {
+        return selectList(new LambdaQueryWrapper<ProductEntity>().eq(ProductEntity::getOfferId, offerId).orderByAsc(ProductEntity::getName));
+    }
+    default Page<ProductEntity> findByOfferId(String offerId, Pageable pageable) {
+        LambdaQueryWrapper<ProductEntity> query = new LambdaQueryWrapper<ProductEntity>().eq(ProductEntity::getOfferId, offerId).orderByAsc(ProductEntity::getName);
+        long total = selectCount(query);
+        int page = Math.max(0, pageable.getPageNumber());
+        int size = Math.max(1, pageable.getPageSize());
+        List<ProductEntity> records = selectList(query.last("LIMIT " + size + " OFFSET " + ((long) page * size)));
+        return new PageImpl<>(records, pageable, total);
+    }
+    default List<ProductEntity> findByOfferIdAndAvailability(String offerId, String availability) {
+        return selectList(new LambdaQueryWrapper<ProductEntity>().eq(ProductEntity::getOfferId, offerId).eq(ProductEntity::getAvailability, availability));
+    }
+    default List<ProductEntity> searchByKeyword(String offerId, String keyword) {
+        String value = keyword == null ? "" : keyword;
+        return selectList(new LambdaQueryWrapper<ProductEntity>().eq(ProductEntity::getOfferId, offerId)
+                .and(q -> q.like(ProductEntity::getName, value).or().like(ProductEntity::getDescription, value)));
+    }
+    default List<ProductEntity> findByCategoryIdOrderByNameAsc(String categoryId) {
+        return selectList(new LambdaQueryWrapper<ProductEntity>().eq(ProductEntity::getCategoryId, categoryId).orderByAsc(ProductEntity::getName));
+    }
+    default List<ProductEntity> findByBrandOrderByNameAsc(String brand) {
+        return selectList(new LambdaQueryWrapper<ProductEntity>().eq(ProductEntity::getBrand, brand).orderByAsc(ProductEntity::getName));
+    }
+    default long countByOfferId(String offerId) { return selectCount(new LambdaQueryWrapper<ProductEntity>().eq(ProductEntity::getOfferId, offerId)); }
+    default long countByOfferIdAndAvailability(String offerId, String availability) {
+        return selectCount(new LambdaQueryWrapper<ProductEntity>().eq(ProductEntity::getOfferId, offerId).eq(ProductEntity::getAvailability, availability));
+    }
+    default int bulkUpdateStock(List<String> skus, int quantity, String availability) {
+        if (skus == null || skus.isEmpty()) return 0;
+        return update(null, new LambdaUpdateWrapper<ProductEntity>().in(ProductEntity::getSku, skus)
+                .set(ProductEntity::getStockQuantity, quantity).set(ProductEntity::getAvailability, availability));
+    }
+    default void deleteByOfferId(String offerId) { delete(new LambdaQueryWrapper<ProductEntity>().eq(ProductEntity::getOfferId, offerId)); }
 }

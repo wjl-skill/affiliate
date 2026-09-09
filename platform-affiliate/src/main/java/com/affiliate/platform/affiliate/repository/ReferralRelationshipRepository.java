@@ -1,74 +1,30 @@
 package com.affiliate.platform.affiliate.repository;
 
 import com.affiliate.platform.affiliate.domain.ReferralRelationshipEntity;
-import org.springframework.data.jpa.repository.JpaRepository;
-import org.springframework.data.jpa.repository.Query;
-import org.springframework.data.repository.query.Param;
-import org.springframework.stereotype.Repository;
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.mapper.BaseMapper;
+import org.apache.ibatis.annotations.Mapper;
 
 import java.util.List;
 import java.util.Optional;
 
-/**
- * 推荐关系数据访问层
- */
-@Repository
-public interface ReferralRelationshipRepository extends JpaRepository<ReferralRelationshipEntity, String> {
-
-    /**
-     * 根据被推荐人ID查找推荐关系
-     */
-    Optional<ReferralRelationshipEntity> findByRefereeId(String refereeId);
-
-    /**
-     * 查找推荐人的所有直接下线
-     */
-    List<ReferralRelationshipEntity> findByReferrerIdOrderByCreatedAtDesc(String referrerId);
-
-    /**
-     * 查找推荐人指定层级的下线
-     */
-    List<ReferralRelationshipEntity> findByReferrerIdAndTierOrderByCreatedAtDesc(
-            String referrerId,
-            Integer tier
-    );
-
-    /**
-     * 查找推荐人指定状态的下线
-     */
-    List<ReferralRelationshipEntity> findByReferrerIdAndStatus(String referrerId, String status);
-
-    /**
-     * 根据推荐码查找关系
-     */
-    Optional<ReferralRelationshipEntity> findByReferralCode(String referralCode);
-
-    /**
-     * 统计推荐人的下线数量
-     */
-    long countByReferrerId(String referrerId);
-
-    /**
-     * 统计推荐人指定层级的下线数量
-     */
-    long countByReferrerIdAndTier(String referrerId, Integer tier);
-
-    /**
-     * 检查是否存在推荐关系
-     */
-    boolean existsByRefereeId(String refereeId);
-
-    /**
-     * 查找活跃的推荐关系
-     */
-    @Query("SELECT r FROM ReferralRelationshipEntity r WHERE r.status = 'ACTIVE' " +
-           "ORDER BY r.totalCommissionEarned DESC")
-    List<ReferralRelationshipEntity> findActiveRelationships();
-
-    /**
-     * 查找高价值推荐关系（按总佣金排序）
-     */
-    @Query("SELECT r FROM ReferralRelationshipEntity r WHERE r.referrerId = :referrerId " +
-           "ORDER BY r.totalCommissionEarned DESC")
-    List<ReferralRelationshipEntity> findTopEarningReferrals(@Param("referrerId") String referrerId);
+/** MyBatis-Plus referral relationship store. */
+@Mapper
+public interface ReferralRelationshipRepository extends BaseMapper<ReferralRelationshipEntity> {
+    default ReferralRelationshipEntity save(ReferralRelationshipEntity entity) {
+        if (entity == null) return null;
+        if (entity.getId() == null || selectById(entity.getId()) == null) insert(entity); else updateById(entity);
+        return entity;
+    }
+    default Optional<ReferralRelationshipEntity> findById(String id) { return Optional.ofNullable(selectById(id)); }
+    default Optional<ReferralRelationshipEntity> findByRefereeId(String id) { return Optional.ofNullable(selectOne(new LambdaQueryWrapper<ReferralRelationshipEntity>().eq(ReferralRelationshipEntity::getRefereeId, id).last("LIMIT 1"))); }
+    default List<ReferralRelationshipEntity> findByReferrerIdOrderByCreatedAtDesc(String id) { return selectList(new LambdaQueryWrapper<ReferralRelationshipEntity>().eq(ReferralRelationshipEntity::getReferrerId, id).orderByDesc(ReferralRelationshipEntity::getCreatedAt)); }
+    default List<ReferralRelationshipEntity> findByReferrerIdAndTierOrderByCreatedAtDesc(String id, Integer tier) { return selectList(new LambdaQueryWrapper<ReferralRelationshipEntity>().eq(ReferralRelationshipEntity::getReferrerId, id).eq(ReferralRelationshipEntity::getTier, tier).orderByDesc(ReferralRelationshipEntity::getCreatedAt)); }
+    default List<ReferralRelationshipEntity> findByReferrerIdAndStatus(String id, String status) { return selectList(new LambdaQueryWrapper<ReferralRelationshipEntity>().eq(ReferralRelationshipEntity::getReferrerId, id).eq(ReferralRelationshipEntity::getStatus, status)); }
+    default Optional<ReferralRelationshipEntity> findByReferralCode(String code) { return Optional.ofNullable(selectOne(new LambdaQueryWrapper<ReferralRelationshipEntity>().eq(ReferralRelationshipEntity::getReferralCode, code).last("LIMIT 1"))); }
+    default long countByReferrerId(String id) { return selectCount(new LambdaQueryWrapper<ReferralRelationshipEntity>().eq(ReferralRelationshipEntity::getReferrerId, id)); }
+    default long countByReferrerIdAndTier(String id, Integer tier) { return selectCount(new LambdaQueryWrapper<ReferralRelationshipEntity>().eq(ReferralRelationshipEntity::getReferrerId, id).eq(ReferralRelationshipEntity::getTier, tier)); }
+    default boolean existsByRefereeId(String id) { return selectCount(new LambdaQueryWrapper<ReferralRelationshipEntity>().eq(ReferralRelationshipEntity::getRefereeId, id)) > 0; }
+    default List<ReferralRelationshipEntity> findActiveRelationships() { return selectList(new LambdaQueryWrapper<ReferralRelationshipEntity>().eq(ReferralRelationshipEntity::getStatus, "ACTIVE").orderByDesc(ReferralRelationshipEntity::getTotalCommissionEarned)); }
+    default List<ReferralRelationshipEntity> findTopEarningReferrals(String id) { return selectList(new LambdaQueryWrapper<ReferralRelationshipEntity>().eq(ReferralRelationshipEntity::getReferrerId, id).orderByDesc(ReferralRelationshipEntity::getTotalCommissionEarned)); }
 }

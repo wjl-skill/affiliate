@@ -14,9 +14,11 @@ import java.time.Instant;
         @Index(name = "idx_referral_code", columnList = "referral_code"),
         @Index(name = "idx_referral_status", columnList = "status")
 })
+@com.baomidou.mybatisplus.annotation.TableName("affiliate_referral_relationship")
 public class ReferralRelationshipEntity {
 
     @Id
+    @com.baomidou.mybatisplus.annotation.TableId(type = com.baomidou.mybatisplus.annotation.IdType.INPUT)
     @Column(name = "id", length = 64)
     private String id;
 

@@ -12,9 +12,11 @@ import java.time.Instant;
         @Index(name = "idx_tax_doc_status", columnList = "status"),
         @Index(name = "idx_tax_doc_expires", columnList = "expires_at")
 })
+@com.baomidou.mybatisplus.annotation.TableName("affiliate_tax_document")
 public class TaxDocumentEntity {
 
     @Id
+    @com.baomidou.mybatisplus.annotation.TableId(type = com.baomidou.mybatisplus.annotation.IdType.INPUT)
     @Column(name = "id", length = 64)
     private String id;
 

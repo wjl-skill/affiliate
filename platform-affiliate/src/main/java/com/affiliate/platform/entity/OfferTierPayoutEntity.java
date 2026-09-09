@@ -1,58 +1,33 @@
 package com.affiliate.platform.entity;
 
-import jakarta.persistence.*;
+import com.baomidou.mybatisplus.annotation.IdType;
+import com.baomidou.mybatisplus.annotation.TableId;
+import com.baomidou.mybatisplus.annotation.TableName;
+
 import java.math.BigDecimal;
 import java.time.Instant;
 
 /**
- * Offer阶梯出价实体（渠道或等级专属定价）
+ * 渠道专属阶梯出价实体 (Offer Tier Payout Entity)
+ * <p>
+ * 映射数据库表 `affiliate_offer_tier_payout`。
  */
-@Entity
-@Table(
-        name = "affiliate_offer_tier_payout",
-        indexes = {
-                @Index(name = "idx_offer_tier_payout_offer_id", columnList = "offer_id"),
-                @Index(name = "idx_offer_tier_payout_affiliate_id", columnList = "affiliate_id"),
-                @Index(name = "idx_offer_tier_payout_target_tier", columnList = "target_tier")
-        }
-)
+@TableName("affiliate_offer_tier_payout")
 public class OfferTierPayoutEntity {
 
-    @Id
-    @GeneratedValue(strategy = GenerationType.UUID)
-    @Column(name = "id", nullable = false, length = 64)
-    private String id;
-
-    @Column(name = "offer_id", nullable = false, length = 64)
+    @TableId(type = IdType.AUTO)
+    private Long id;
     private String offerId;
-
-    @Column(name = "affiliate_id", length = 64)
     private String affiliateId;
-
-    @Column(name = "target_tier", length = 32)
     private String targetTier;
-
-    @Column(name = "custom_payout", precision = 12, scale = 4)
     private BigDecimal customPayout;
-
-    @Column(name = "custom_revenue", precision = 12, scale = 4)
     private BigDecimal customRevenue;
-
-    @Column(name = "created_at", nullable = false)
     private Instant createdAt;
 
-    public OfferTierPayoutEntity() {
-    }
+    public OfferTierPayoutEntity() {}
 
-    public OfferTierPayoutEntity(
-            String id,
-            String offerId,
-            String affiliateId,
-            String targetTier,
-            BigDecimal customPayout,
-            BigDecimal customRevenue,
-            Instant createdAt
-    ) {
+    public OfferTierPayoutEntity(Long id, String offerId, String affiliateId, String targetTier,
+                                 BigDecimal customPayout, BigDecimal customRevenue, Instant createdAt) {
         this.id = id;
         this.offerId = offerId;
         this.affiliateId = affiliateId;
@@ -62,59 +37,24 @@ public class OfferTierPayoutEntity {
         this.createdAt = createdAt;
     }
 
-    public String getId() {
-        return id;
-    }
+    public Long getId() { return id; }
+    public void setId(Long id) { this.id = id; }
 
-    public void setId(String id) {
-        this.id = id;
-    }
+    public String getOfferId() { return offerId; }
+    public void setOfferId(String offerId) { this.offerId = offerId; }
 
-    public String getOfferId() {
-        return offerId;
-    }
+    public String getAffiliateId() { return affiliateId; }
+    public void setAffiliateId(String affiliateId) { this.affiliateId = affiliateId; }
 
-    public void setOfferId(String offerId) {
-        this.offerId = offerId;
-    }
+    public String getTargetTier() { return targetTier; }
+    public void setTargetTier(String targetTier) { this.targetTier = targetTier; }
 
-    public String getAffiliateId() {
-        return affiliateId;
-    }
+    public BigDecimal getCustomPayout() { return customPayout; }
+    public void setCustomPayout(BigDecimal customPayout) { this.customPayout = customPayout; }
 
-    public void setAffiliateId(String affiliateId) {
-        this.affiliateId = affiliateId;
-    }
+    public BigDecimal getCustomRevenue() { return customRevenue; }
+    public void setCustomRevenue(BigDecimal customRevenue) { this.customRevenue = customRevenue; }
 
-    public String getTargetTier() {
-        return targetTier;
-    }
-
-    public void setTargetTier(String targetTier) {
-        this.targetTier = targetTier;
-    }
-
-    public BigDecimal getCustomPayout() {
-        return customPayout;
-    }
-
-    public void setCustomPayout(BigDecimal customPayout) {
-        this.customPayout = customPayout;
-    }
-
-    public BigDecimal getCustomRevenue() {
-        return customRevenue;
-    }
-
-    public void setCustomRevenue(BigDecimal customRevenue) {
-        this.customRevenue = customRevenue;
-    }
-
-    public Instant getCreatedAt() {
-        return createdAt;
-    }
-
-    public void setCreatedAt(Instant createdAt) {
-        this.createdAt = createdAt;
-    }
+    public Instant getCreatedAt() { return createdAt; }
+    public void setCreatedAt(Instant createdAt) { this.createdAt = createdAt; }
 }

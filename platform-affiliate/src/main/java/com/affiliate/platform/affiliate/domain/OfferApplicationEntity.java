@@ -14,9 +14,11 @@ import java.time.Instant;
         @Index(name = "idx_app_created", columnList = "created_at"),
         @Index(name = "idx_app_unique", columnList = "offer_id,affiliate_id", unique = true)
 })
+@com.baomidou.mybatisplus.annotation.TableName("affiliate_offer_application")
 public class OfferApplicationEntity {
 
     @Id
+    @com.baomidou.mybatisplus.annotation.TableId(type = com.baomidou.mybatisplus.annotation.IdType.INPUT)
     @Column(name = "id", length = 64)
     private String id;
 

@@ -12,9 +12,11 @@ import java.time.Instant;
         @Index(name = "idx_terms_version", columnList = "version"),
         @Index(name = "idx_terms_accepted", columnList = "accepted_at")
 })
+@com.baomidou.mybatisplus.annotation.TableName("affiliate_terms_acceptance")
 public class TermsAcceptanceEntity {
 
     @Id
+    @com.baomidou.mybatisplus.annotation.TableId(type = com.baomidou.mybatisplus.annotation.IdType.INPUT)
     @Column(name = "id", length = 64)
     private String id;
 

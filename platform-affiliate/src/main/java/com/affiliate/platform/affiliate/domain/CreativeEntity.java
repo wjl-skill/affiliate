@@ -13,9 +13,11 @@ import java.time.Instant;
         @Index(name = "idx_creative_status", columnList = "status"),
         @Index(name = "idx_creative_created", columnList = "created_at")
 })
+@com.baomidou.mybatisplus.annotation.TableName("affiliate_creative")
 public class CreativeEntity {
 
     @Id
+    @com.baomidou.mybatisplus.annotation.TableId(type = com.baomidou.mybatisplus.annotation.IdType.INPUT)
     @Column(name = "id", length = 64)
     private String id;
 
