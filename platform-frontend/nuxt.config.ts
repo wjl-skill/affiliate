@@ -22,10 +22,25 @@ export default defineNuxtConfig({
       ]
     }
   },
+  runtimeConfig: {
+    public: {
+      // 同源为空字符串时走 Nitro 代理；独立部署可指向后端网关地址
+      apiBase: process.env.NUXT_PUBLIC_API_BASE || '',
+      tenantId: process.env.NUXT_PUBLIC_TENANT_ID || 'tenant-1'
+    }
+  },
   nitro: {
     routeRules: {
       '/api/**': {
         proxy: 'http://localhost:8080/api/**'
+      },
+      // 点击追踪与 S2S Postback 回传链路不在 /api 前缀内，需同样代理到后端；
+      // 仅精确匹配这两个后端端点，避免吞掉 /affiliate/macros、/affiliate/anti-fraud 等前端页面路由
+      '/affiliate/click': {
+        proxy: 'http://localhost:8080/affiliate/click'
+      },
+      '/affiliate/postback': {
+        proxy: 'http://localhost:8080/affiliate/postback'
       }
     }
   }

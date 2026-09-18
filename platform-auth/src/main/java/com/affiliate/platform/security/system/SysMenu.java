@@ -44,4 +44,9 @@ public record SysMenu(
     public SysMenu withChildren(List<SysMenu> newChildren) {
         return new SysMenu(id, parentId, title, icon, path, component, permissionCode, sortOrder, visible, status, newChildren);
     }
+
+    /** 以服务端生成的新 ID 复制一份（创建接口缺省 ID 时回填） */
+    public SysMenu withId(String newId) {
+        return new SysMenu(newId, parentId, title, icon, path, component, permissionCode, sortOrder, visible, status, children);
+    }
 }

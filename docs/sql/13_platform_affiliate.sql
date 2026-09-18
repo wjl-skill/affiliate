@@ -10,6 +10,8 @@
 --   6. affiliate_conversion       : S2S 服务端转化事实表 (订单幂等与CTIT风控质检)
 --   7. affiliate_invoice          : 渠道周期性结算发票账单表 (Net-7/15/30出账)
 --   8. affiliate_sub_id_stats     : Sub-ID 维度流式统计报表 (实时EPC与CR分析)
+--   9. affiliate_macro_param      : 标准追踪宏参数字典表 (平台级全局配置)
+--  10. affiliate_platform_macro_mapping : 第三方广告平台宏参数映射对照表
 -- ===================================================================
 
 -- 1. 联盟营销渠道客主表
@@ -149,7 +151,7 @@ create table if not exists affiliate_conversion (
     id varchar(64) primary key,                     -- 转化全局唯一 ID
     tenant_id varchar(64) not null default 'public',-- 租户标识
     click_id varchar(64) not null,                  -- 关联点击 ID
-    tx_id varchar(128) not null,                    -- 广告主端交易订单号 (幂等关键字段)
+    transaction_id varchar(128) not null,           -- 广告主端交易订单号 (幂等关键字段)
     offer_id varchar(64) not null,                  -- 关联 Offer ID
     affiliate_id varchar(64) not null,              -- 关联渠道客 ID
     payout numeric(12,4) not null default 0.0000,   -- 渠道客结算佣金 (USD)
@@ -158,20 +160,22 @@ create table if not exists affiliate_conversion (
     ctit_seconds bigint not null default 0,         -- 点击至转化时间差 CTIT (秒)
     status varchar(32) not null default 'PENDING',  -- 审核状态 (PENDING 待审, APPROVED 通过, REJECTED 驳回, FRAUD_SUSPECTED 疑似作弊)
     rejection_reason varchar(256),                  -- 驳回或作弊原因 (如 FAST_CONVERSION_CTIT_UNDER_3S)
+    sub1 varchar(128),                              -- 流量来源 Sub-1 标识 (归因自点击会话)
+    postback_status varchar(32) not null default 'PENDING', -- 渠道 Postback 回传状态 (PENDING/DELIVERED/FAILED)
     created_at timestamptz not null default now()   -- 转化上报发生时间
 );
 
 comment on table affiliate_conversion is 'S2S 服务端转化事实表';
 comment on column affiliate_conversion.id is '转化流水主键 ID';
 comment on column affiliate_conversion.click_id is '关联原始点击 click_id';
-comment on column affiliate_conversion.tx_id is '广告主订单流水号 (唯一幂等保障)';
+comment on column affiliate_conversion.transaction_id is '广告主订单流水号 (唯一幂等保障)';
 comment on column affiliate_conversion.payout is '渠道应付佣金';
 comment on column affiliate_conversion.revenue is '平台应收金额';
 comment on column affiliate_conversion.ctit_seconds is 'CTIT 时间差 (秒)';
 comment on column affiliate_conversion.status is '审核状态 (PENDING, APPROVED, REJECTED, FRAUD_SUSPECTED)';
 
 -- 严格保证单 Offer 下订单流水号全局唯一，防重刷攻击
-create unique index if not exists uk_conversion_offer_tx on affiliate_conversion(offer_id, tx_id);
+create unique index if not exists uk_conversion_offer_tx on affiliate_conversion(offer_id, transaction_id);
 create index if not exists ix_conversion_aff_status on affiliate_conversion(tenant_id, affiliate_id, status, created_at desc);
 
 -- 7. 渠道周期性结算发票账单表
@@ -179,11 +183,13 @@ create table if not exists affiliate_invoice (
     id varchar(64) primary key,                     -- 发票账单 ID (如 "inv_20260901_01")
     tenant_id varchar(64) not null default 'public',-- 租户标识
     affiliate_id varchar(64) not null,              -- 结算渠道客 ID
+    billing_cycle varchar(64) not null default '',  -- 结算账期周期标识 (如 CYCLE_2026-09)
     amount numeric(12,2) not null check (amount > 0), -- 结算打款金额 (USD)
-    conversion_count int not null,                  -- 本期核销转化单量
+    conversion_count int not null default 0,        -- 出账时快照的核销转化单量
     payment_term varchar(32) not null,              -- 付款账期 (NET_7, NET_15, NET_30)
     status varchar(32) not null default 'GENERATED',-- 账单状态 (GENERATED 已出账, PAID 已打款, CANCELLED 作废)
-    created_at timestamptz not null default now()   -- 出账时间
+    created_at timestamptz not null default now(),  -- 出账时间
+    paid_at timestamptz                             -- 确认打款时间 (未打款为空)
 );
 
 comment on table affiliate_invoice is '渠道营销结算发票账单表';
@@ -212,3 +218,38 @@ create table if not exists affiliate_sub_id_stats (
 comment on table affiliate_sub_id_stats is 'Sub-ID 维度流式多维统计表';
 comment on column affiliate_sub_id_stats.epc is '平均单点击收益 (EPC)';
 comment on column affiliate_sub_id_stats.cr_percent is '转化率百分比 (CR%)';
+
+-- 9. 标准追踪宏参数字典表 (平台级全局配置，无租户维度)
+create table if not exists affiliate_macro_param (
+    id varchar(64) primary key,                     -- 宏字典 ID (mcp_ 前缀)
+    macro_key varchar(64) not null,                 -- 标准宏键 (如 click_id、sub1)
+    display_name varchar(128),                      -- 宏中文名称
+    description varchar(512),                       -- 宏用途说明
+    sample_value varchar(256),                      -- 示例取值 (链接渲染预览用)
+    category varchar(32) not null default 'ATTRIBUTION', -- 分类 (ATTRIBUTION/SUB_TRACKING/TRANSACTION/ENVIRONMENT)
+    status varchar(32) not null default 'ACTIVE',   -- 状态 (ACTIVE 启用, DISABLED 停用)
+    created_at timestamptz not null default now(),  -- 创建时间
+    constraint uk_macro_param_key unique (macro_key)
+);
+
+comment on table affiliate_macro_param is '标准追踪宏参数字典表 (平台级全局配置)';
+comment on column affiliate_macro_param.macro_key is '本平台统一宏键，追踪链接中以 {macro_key} 形式书写';
+
+-- 10. 第三方广告平台宏参数映射对照表
+create table if not exists affiliate_platform_macro_mapping (
+    id varchar(64) primary key,                     -- 映射记录 ID (pmm_ 前缀)
+    platform_code varchar(64) not null,             -- 平台代码 (大写，如 AWIN、CJ、TIKTOK)
+    platform_name varchar(128),                     -- 平台展示名称
+    macro_key varchar(64) not null,                 -- 对应的本平台标准宏键
+    platform_macro_token varchar(128) not null,     -- 该平台宏原生写法 (如 {clickid}、[ssn]、__CLICKID__)
+    remark varchar(512),                            -- 备注说明
+    status varchar(32) not null default 'ACTIVE',   -- 状态 (ACTIVE 启用, DISABLED 停用)
+    created_at timestamptz not null default now(),  -- 创建时间
+    updated_at timestamptz not null default now(),  -- 最近更新时间
+    constraint uk_platform_macro unique (platform_code, macro_key)
+);
+
+comment on table affiliate_platform_macro_mapping is '第三方广告平台宏参数映射对照表';
+comment on column affiliate_platform_macro_mapping.platform_macro_token is '目标平台原生宏占位符写法，渲染时替换标准 {macro_key} 占位符';
+
+create index if not exists ix_platform_macro_mapping_code on affiliate_platform_macro_mapping(platform_code, status);

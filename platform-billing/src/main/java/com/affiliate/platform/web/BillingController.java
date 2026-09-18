@@ -91,6 +91,15 @@ public class BillingController {
     }
 
     /**
+     * 查询最近的放款批次列表
+     * GET /api/v1/billing/payouts/batches
+     */
+    @GetMapping("/payouts/batches")
+    public List<com.affiliate.platform.entity.PayoutBatchEntity> listBatches() {
+        return payoutService.listBatches();
+    }
+
+    /**
      * 查询指定放款批次主信息
      * GET /api/v1/billing/payouts/batch/{batchId}
      */

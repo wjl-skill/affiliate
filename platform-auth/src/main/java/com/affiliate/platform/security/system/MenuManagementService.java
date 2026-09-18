@@ -39,6 +39,10 @@ public class MenuManagementService {
                 if (count != null && count == 0) {
                     initDefaultMenus();
                 }
+                // 版本升级后新增菜单的缺失回填，保障既有库也能出现新页面入口
+                if (menuMapper.selectById("menu-macros") == null) {
+                    save(buildMacrosMenu());
+                }
             } catch (Exception e) {
                 initDefaultMenus();
             }
@@ -55,12 +59,18 @@ public class MenuManagementService {
         save(new SysMenu("menu-conversions", "0", "转化与归因", "🔄", "/conversions", "pages/conversions/index.vue", "conversion:audit", 5, true, SysMenu.Status.ACTIVE));
         save(new SysMenu("menu-finance", "0", "财务账期出账", "💰", "/finance", "pages/finance/index.vue", "finance:settle", 6, true, SysMenu.Status.ACTIVE));
         save(new SysMenu("menu-analytics", "0", "Sub-ID 报表", "📈", "/analytics", "pages/analytics/index.vue", "report:analytics", 7, true, SysMenu.Status.ACTIVE));
+        save(buildMacrosMenu());
         save(new SysMenu("menu-sys-users", "0", "用户管理", "👥", "/system/users", "pages/system/users.vue", "system:user:read", 10, true, SysMenu.Status.ACTIVE));
         save(new SysMenu("menu-sys-roles", "0", "角色管理", "🛡️", "/system/roles", "pages/system/roles.vue", "system:role:read", 11, true, SysMenu.Status.ACTIVE));
         save(new SysMenu("menu-sys-menus", "0", "菜单管理", "📑", "/system/menus", "pages/system/menus.vue", "system:menu:manage", 12, true, SysMenu.Status.ACTIVE));
         save(new SysMenu("menu-sys-perms", "0", "权限字典", "🔑", "/system/permissions", "pages/system/permissions.vue", "system:role:read", 13, true, SysMenu.Status.ACTIVE));
         save(new SysMenu("menu-sys-s3", "0", "S3 存储配置", "🗄️", "/system/s3", "pages/system/s3.vue", "system:s3:read", 14, true, SysMenu.Status.ACTIVE));
         save(new SysMenu("menu-sys-domains", "0", "域名池管理", "🌐", "/system/domains", "pages/system/domains.vue", "system:domain:read", 15, true, SysMenu.Status.ACTIVE));
+    }
+
+    private SysMenu buildMacrosMenu() {
+        return new SysMenu("menu-macros", "0", "宏参数与映射", "🧩", "/affiliate/macros",
+                "pages/affiliate/macros.vue", "affiliate:macro:manage", 8, true, SysMenu.Status.ACTIVE);
     }
 
     public SysMenu save(SysMenu menu) {

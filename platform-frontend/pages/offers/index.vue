@@ -66,7 +66,7 @@
       <!-- 操作列 -->
       <template #cell-actions="{ row }">
         <div class="flex items-center gap-2">
-          <CopyButton :text="`http://localhost:8080/affiliate/click?offer_id=${row.id}&aff_id=AFF_ID`">
+          <CopyButton :text="trackingUrl(row.id)">
             推广短链
           </CopyButton>
         </div>
@@ -81,10 +81,15 @@ import CommonTable from '~/components/common/CommonTable.vue'
 import StatusTag from '~/components/common/StatusTag.vue'
 import CopyButton from '~/components/common/CopyButton.vue'
 import { useApi } from '~/composables/useApi'
+import { useToasts } from '~/composables/useNotification'
 
 const { fetchApi } = useApi()
+const { showToast } = useToasts()
 const loading = ref(false)
 const offers = ref<any[]>([])
+
+const trackingUrl = (offerId: string) =>
+  `${window.location.origin}/affiliate/click?offer_id=${offerId}&aff_id=AFF_ID`
 
 const columns = [
   { key: 'title', label: '推广计划 (Title / ID)' },
@@ -98,46 +103,10 @@ const columns = [
 const loadOffers = async () => {
   loading.value = true
   try {
-    const res = await fetchApi<any[]>('/api/v1/affiliate/offers')
-    offers.value = res
-  } catch (err) {
-    // 降级演示初始数据
-    offers.value = [
-      {
-        id: 'off-101',
-        advertiserId: 'adv-nike',
-        title: 'Nike Summer Shoes 2026',
-        landingPageUrl: 'https://nike.com/buy?click_id={click_id}',
-        payoutType: 'CPA',
-        defaultPayout: '5.0000',
-        defaultRevenue: '8.0000',
-        status: 'ACTIVE',
-        dailyConversionCap: 200,
-        fallbackOfferId: 'off-102'
-      },
-      {
-        id: 'off-102',
-        advertiserId: 'adv-adidas',
-        title: 'Adidas Running Shoes Fallback',
-        landingPageUrl: 'https://adidas.com/buy?click_id={click_id}',
-        payoutType: 'CPA',
-        defaultPayout: '3.5000',
-        defaultRevenue: '5.5000',
-        status: 'ACTIVE',
-        dailyConversionCap: 0
-      },
-      {
-        id: 'off-201',
-        advertiserId: 'adv-fintech',
-        title: 'Credit Card Approval Lead',
-        landingPageUrl: 'https://bank.com/card?click_id={click_id}',
-        payoutType: 'CPL',
-        defaultPayout: '18.0000',
-        defaultRevenue: '25.0000',
-        status: 'ACTIVE',
-        dailyConversionCap: 50
-      }
-    ]
+    offers.value = await fetchApi<any[]>('/api/v1/affiliate/offers') || []
+  } catch (err: any) {
+    offers.value = []
+    showToast(`加载 Offer 计划失败：${err.message || err}`, 'error', 5000)
   } finally {
     loading.value = false
   }

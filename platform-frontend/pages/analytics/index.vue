@@ -22,7 +22,7 @@
       <div class="bg-white rounded-xl p-4 border border-slate-200">
         <span class="text-xs font-medium text-slate-400">综合平均 EPC (收益/点击)</span>
         <div class="text-2xl font-bold text-slate-900 mt-1 font-mono">${{ avgEpc }}</div>
-        <span class="text-[11px] text-emerald-600 font-semibold mt-1 inline-block">高于行业基准 $0.18</span>
+        <span class="text-[11px] text-slate-400 mt-1 inline-block">全渠道加权平均</span>
       </div>
 
       <div class="bg-white rounded-xl p-4 border border-slate-200">
@@ -98,8 +98,10 @@
 import { ref, computed, onMounted } from 'vue'
 import CommonTable from '~/components/common/CommonTable.vue'
 import DateRangeFilter from '~/components/common/DateRangeFilter.vue'
+import { useApi } from '~/composables/useApi'
 import { useToasts } from '~/composables/useNotification'
 
+const { fetchApi } = useApi()
 const { showToast } = useToasts()
 
 const loading = ref(false)
@@ -117,7 +119,7 @@ const columns = [
 ]
 
 const avgEpc = computed(() => {
-  if (!subIdRows.value.length) return '0.24'
+  if (!subIdRows.value.length) return '0.00'
   const sum = subIdRows.value.reduce((acc, r) => acc + parseFloat(r.epc || 0), 0)
   return (sum / subIdRows.value.length).toFixed(4)
 })
@@ -125,78 +127,63 @@ const avgEpc = computed(() => {
 const avgCr = computed(() => {
   const clicks = subIdRows.value.reduce((acc, r) => acc + r.clicks, 0)
   const convs = subIdRows.value.reduce((acc, r) => acc + r.conversions, 0)
-  if (!clicks) return '4.50'
+  if (!clicks) return '0.00'
   return ((convs / clicks) * 100).toFixed(2)
 })
 
 const avgRpc = computed(() => {
   const clicks = subIdRows.value.reduce((acc, r) => acc + r.clicks, 0)
   const rev = subIdRows.value.reduce((acc, r) => acc + parseFloat(r.revenue || 0), 0)
-  if (!clicks) return '0.36'
+  if (!clicks) return '0.00'
   return (rev / clicks).toFixed(4)
 })
 
 const marginPercent = computed(() => {
   const payout = subIdRows.value.reduce((acc, r) => acc + parseFloat(r.payout || 0), 0)
   const rev = subIdRows.value.reduce((acc, r) => acc + parseFloat(r.revenue || 0), 0)
-  if (!rev) return '33.3'
+  if (!rev) return '0.0'
   return (((rev - payout) / rev) * 100).toFixed(1)
 })
 
-const loadStats = () => {
+const loadStats = async () => {
   loading.value = true
-  setTimeout(() => {
-    subIdRows.value = [
-      {
-        affiliateId: 'aff-vip-888',
-        sub1: 'fb_lookalike_us',
-        clicks: 12500,
-        conversions: 625,
-        crPercent: '5.00',
-        payout: '3125.00',
-        revenue: '5000.00',
-        epc: '0.2500',
-        profit: '1875.00'
-      },
-      {
-        affiliateId: 'aff-vip-888',
-        sub1: 'google_search_brand',
-        clicks: 8400,
-        conversions: 588,
-        crPercent: '7.00',
-        payout: '2940.00',
-        revenue: '4704.00',
-        epc: '0.3500',
-        profit: '1764.00'
-      },
-      {
-        affiliateId: 'aff-gold-777',
-        sub1: 'tiktok_influencer_cr1',
-        clicks: 18200,
-        conversions: 546,
-        crPercent: '3.00',
-        payout: '1911.00',
-        revenue: '3003.00',
-        epc: '0.1050',
-        profit: '1092.00'
-      },
-      {
-        affiliateId: 'aff-gold-777',
-        sub1: 'email_newsletter_sep',
-        clicks: 3500,
-        conversions: 280,
-        crPercent: '8.00',
-        payout: '1400.00',
-        revenue: '2240.00',
-        epc: '0.4000',
-        profit: '840.00'
-      }
-    ]
+  try {
+    const res = await fetchApi<any[]>('/api/v1/affiliate/analytics/subid/list')
+    subIdRows.value = (res || []).map(r => ({
+      affiliateId: r.affiliateId,
+      sub1: r.sub1,
+      clicks: Number(r.clicks || 0),
+      conversions: Number(r.conversions || 0),
+      crPercent: Number(r.crPercent || 0).toFixed(2),
+      payout: r.totalPayout,
+      revenue: r.totalRevenue,
+      epc: r.epc,
+      profit: r.margin
+    }))
+  } catch (err: any) {
+    subIdRows.value = []
+    showToast(`加载 Sub-ID 报表失败：${err.message || err}`, 'error', 5000)
+  } finally {
     loading.value = false
-  }, 200)
+  }
 }
 
 const exportCsv = () => {
+  if (!subIdRows.value.length) {
+    showToast('当前无可导出的报表数据', 'warning')
+    return
+  }
+  const header = 'AffiliateID,Sub1,Clicks,Conversions,CR%,EPC,Payout,Revenue,Profit'
+  const lines = subIdRows.value.map(r =>
+    [r.affiliateId, r.sub1, r.clicks, r.conversions, r.crPercent, r.epc, r.payout, r.revenue, r.profit].join(',')
+  )
+  const blob = new Blob(['\ufeff' + [header, ...lines].join('\n')], { type: 'text/csv;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `subid_report_${new Date().toISOString().slice(0, 10)}.csv`
+  a.click()
+  URL.revokeObjectURL(url)
   showToast('报表数据已导出 (CSV 格式)', 'success')
 }
 

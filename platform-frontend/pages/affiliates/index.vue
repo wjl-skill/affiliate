@@ -77,8 +77,7 @@
           <input
             v-model="createForm.id"
             type="text"
-            required
-            placeholder="例如: aff-apex-01"
+            placeholder="留空则由服务端自动生成"
             class="w-full rounded-lg border border-slate-300 px-3 py-2 text-slate-900 font-mono"
           />
         </div>
@@ -192,7 +191,7 @@ import MacroInput from '~/components/common/MacroInput.vue'
 import { useApi } from '~/composables/useApi'
 import { useToasts } from '~/composables/useNotification'
 
-const { fetchApi } = useApi()
+const { fetchApi, currentTenant } = useApi()
 const { showToast } = useToasts()
 
 const loading = ref(false)
@@ -201,16 +200,15 @@ const showLinkModal = ref(false)
 const partners = ref<any[]>([])
 
 const selectedPartner = ref<any>(null)
-const linkOfferId = ref('off-101')
-const linkSub1 = ref('fb_ads')
-const linkSub2 = ref('cr01')
+const linkOfferId = ref('')
+const linkSub1 = ref('')
+const linkSub2 = ref('')
 
 const createForm = ref({
-  id: 'aff-' + Math.floor(Math.random() * 900 + 100),
-  tenantId: 'tenant-1',
+  id: '',
   name: '',
   tier: 'VIP',
-  postbackUrlTemplate: 'https://partner.com/postback?click_id={click_id}&payout={payout}&txid={txid}',
+  postbackUrlTemplate: '',
   paymentTerm: 'NET_15',
   minPayoutThreshold: 100.00,
   status: 'ACTIVE'
@@ -227,35 +225,16 @@ const columns = [
 
 const generatedTrackingUrl = computed(() => {
   if (!selectedPartner.value) return ''
-  return `http://localhost:8080/affiliate/click?offer_id=${linkOfferId.value}&aff_id=${selectedPartner.value.id}&sub1=${linkSub1.value}&sub2=${linkSub2.value}`
+  return `${window.location.origin}/affiliate/click?offer_id=${linkOfferId.value}&aff_id=${selectedPartner.value.id}&sub1=${linkSub1.value}&sub2=${linkSub2.value}`
 })
 
 const loadPartners = async () => {
   loading.value = true
   try {
-    const res = await fetchApi<any[]>('/api/v1/affiliate/partners')
-    partners.value = res
-  } catch (err) {
-    partners.value = [
-      {
-        id: 'aff-vip-888',
-        name: 'Apex Growth Media',
-        tier: 'VIP',
-        postbackUrlTemplate: 'https://apex.com/pb?click_id={click_id}&payout={payout}&txid={txid}',
-        paymentTerm: 'NET_15',
-        minPayoutThreshold: 100.00,
-        status: 'ACTIVE'
-      },
-      {
-        id: 'aff-gold-777',
-        name: 'ByteFlow Global',
-        tier: 'GOLD',
-        postbackUrlTemplate: 'https://byteflow.io/postback?cid={click_id}&amount={payout}',
-        paymentTerm: 'NET_30',
-        minPayoutThreshold: 200.00,
-        status: 'ACTIVE'
-      }
-    ]
+    partners.value = await fetchApi<any[]>('/api/v1/affiliate/partners') || []
+  } catch (err: any) {
+    partners.value = []
+    showToast(`加载渠道客列表失败：${err.message || err}`, 'error', 5000)
   } finally {
     loading.value = false
   }
@@ -267,16 +246,21 @@ const openLinkGenerator = (partner: any) => {
 }
 
 const savePartner = async () => {
+  if (!createForm.value.name.trim()) {
+    showToast('请填写渠道客名称', 'warning')
+    return
+  }
   try {
-    await fetchApi('/api/v1/affiliate/partners', {
+    const saved = await fetchApi<any>('/api/v1/affiliate/partners', {
       method: 'POST',
-      body: createForm.value
+      body: { ...createForm.value, tenantId: currentTenant.value }
     })
-  } catch (e) {}
-
-  partners.value.unshift({ ...createForm.value })
-  showCreateModal.value = false
-  showToast('渠道客档案保存成功', 'success')
+    partners.value.unshift(saved)
+    showCreateModal.value = false
+    showToast('渠道客档案保存成功', 'success')
+  } catch (err: any) {
+    showToast(`渠道客保存失败：${err.message || err}`, 'error', 5000)
+  }
 }
 
 onMounted(() => {

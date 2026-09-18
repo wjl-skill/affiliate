@@ -21,6 +21,7 @@ public class AffiliateInvoiceEntity {
     private String affiliateId;
     private String billingCycle;
     private BigDecimal amount;
+    private Integer conversionCount;
     private String status;
     private String paymentTerm;
     private Instant createdAt;
@@ -29,13 +30,14 @@ public class AffiliateInvoiceEntity {
     public AffiliateInvoiceEntity() {}
 
     public AffiliateInvoiceEntity(String id, String tenantId, String affiliateId,
-                                  String billingCycle, BigDecimal amount, String status,
-                                  String paymentTerm, Instant createdAt, Instant paidAt) {
+                                  String billingCycle, BigDecimal amount, Integer conversionCount,
+                                  String status, String paymentTerm, Instant createdAt, Instant paidAt) {
         this.id = id;
         this.tenantId = tenantId;
         this.affiliateId = affiliateId;
         this.billingCycle = billingCycle;
         this.amount = amount;
+        this.conversionCount = conversionCount;
         this.status = status;
         this.paymentTerm = paymentTerm;
         this.createdAt = createdAt;
@@ -56,6 +58,9 @@ public class AffiliateInvoiceEntity {
 
     public BigDecimal getAmount() { return amount; }
     public void setAmount(BigDecimal amount) { this.amount = amount; }
+
+    public Integer getConversionCount() { return conversionCount; }
+    public void setConversionCount(Integer conversionCount) { this.conversionCount = conversionCount; }
 
     public String getStatus() { return status; }
     public void setStatus(String status) { this.status = status; }

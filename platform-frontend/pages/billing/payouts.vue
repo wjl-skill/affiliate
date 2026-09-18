@@ -41,22 +41,38 @@
       <div class="p-4 border-b border-slate-200 flex flex-wrap items-center justify-between gap-4">
         <div>
           <div class="flex items-center gap-2">
-            <h4 class="text-sm font-bold text-slate-800">当前待支付批次: {{ currentBatch.batchId }}</h4>
-            <span class="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800">PENDING_DISBURSEMENT</span>
+            <h4 class="text-sm font-bold text-slate-800">
+              当前批次:
+              <select
+                v-if="batchList.length"
+                class="ml-1 text-xs font-mono border border-slate-300 rounded-md px-2 py-1 bg-white text-slate-800"
+                v-model="selectedBatchId"
+                @change="loadBatchDetail"
+              >
+                <option v-for="b in batchList" :key="b.id" :value="b.id">{{ b.batchNumber || b.id }}</option>
+              </select>
+              <span v-else class="text-slate-400 font-normal text-xs">暂无批次</span>
+            </h4>
+            <span
+              v-if="currentBatch"
+              class="px-2 py-0.5 rounded text-[10px] font-bold"
+              :class="currentBatch.status === 'DISBURSED' ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'"
+            >{{ currentBatch.status }}</span>
           </div>
           <p class="text-[11px] text-slate-400 mt-0.5">
-            共计 {{ currentBatch.items.length }} 笔打款单 · 总原始佣金 ${{ currentBatch.totalGrossUsd }} USD · 代扣税金 ${{ currentBatch.totalTaxUsd }} USD
+            共计 {{ items.length }} 笔打款单 · 总原始佣金 ${{ currentBatch?.totalGrossUsd ?? '0.00' }} USD · 代扣税金 ${{ currentBatch?.totalTaxUsd ?? '0.00' }} USD
           </p>
         </div>
 
         <div class="flex items-center gap-3 text-xs">
           <div class="text-right">
             <span class="text-slate-400 text-[10px] block">最终放款金额 (净付)</span>
-            <span class="font-bold text-emerald-600 font-mono text-base">${{ currentBatch.totalNetUsd }} USD</span>
+            <span class="font-bold text-emerald-600 font-mono text-base">${{ currentBatch?.totalNetUsd ?? '0.00' }} USD</span>
           </div>
           <button
             type="button"
-            class="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-semibold transition-colors shadow-sm"
+            :disabled="!currentBatch || currentBatch.status !== 'DRAFT' || disbursing"
+            class="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white font-semibold transition-colors shadow-sm"
             @click="disburseBatch"
           >
             🚀 提交全量批次打款
@@ -66,7 +82,7 @@
 
       <CommonTable
         :columns="columns"
-        :data="currentBatch.items"
+        :data="items"
         :loading="loading"
         search-placeholder="搜索渠道 ID 或税号..."
       >
@@ -124,14 +140,13 @@ import { useToasts } from '~/composables/useNotification'
 const { fetchApi } = useApi()
 const { showToast } = useToasts()
 const loading = ref(false)
+const disbursing = ref(false)
 
-const fxRates = ref<Record<string, { rate: string }>>({
-  EUR: { rate: '0.9200' },
-  GBP: { rate: '0.7850' },
-  JPY: { rate: '152.50' },
-  SGD: { rate: '1.3400' },
-  USDT: { rate: '1.0000' }
-})
+const fxRates = ref<Record<string, { rate: string }>>({})
+const batchList = ref<any[]>([])
+const selectedBatchId = ref('')
+const currentBatch = ref<any>(null)
+const items = ref<any[]>([])
 
 const columns = [
   { key: 'affiliate', label: '收款渠道 / 户名', slot: 'affiliate' },
@@ -143,54 +158,6 @@ const columns = [
   { key: 'beneficiary', label: '收款账号 / 邮箱', slot: 'beneficiary' }
 ]
 
-const currentBatch = ref({
-  batchId: 'batch_payout_20260904_01',
-  totalGrossUsd: '18500.00',
-  totalTaxUsd: '1850.00',
-  totalNetUsd: '16650.00',
-  items: [
-    {
-      affiliateId: 'aff-vip-888',
-      beneficiaryName: 'Nexus Global Media Pte.',
-      taxId: 'SG-UEN-20188992',
-      taxRate: 0.10,
-      grossUsd: '10000.00',
-      taxUsd: '1000.00',
-      currency: 'SGD',
-      fxRate: '1.3400',
-      targetAmount: '12060.00',
-      method: 'TIPALTI_WIRE',
-      account: 'DBS-SG-9988-121'
-    },
-    {
-      affiliateId: 'aff-traffic-hub',
-      beneficiaryName: 'Berlin Traffic Works GmbH',
-      taxId: 'DE-VAT-9928172',
-      taxRate: 0.00,
-      grossUsd: '5000.00',
-      taxUsd: '0.00',
-      currency: 'EUR',
-      fxRate: '0.9200',
-      targetAmount: '4600.00',
-      method: 'PAYONEER_MASS',
-      account: 'payoneer@berlintraffic.de'
-    },
-    {
-      affiliateId: 'aff-crypto-lead',
-      beneficiaryName: 'CryptoLeads Web3 Ltd',
-      taxId: 'BVI-IBC-44129',
-      taxRate: 0.10,
-      grossUsd: '3500.00',
-      taxUsd: '350.00',
-      currency: 'USDT',
-      fxRate: '1.0000',
-      targetAmount: '3150.00',
-      method: 'CRYPTO_USDT',
-      account: '0x71C8A3...82E9'
-    }
-  ]
-})
-
 const loadRates = async () => {
   try {
     const data: any = await fetchApi('/api/v1/billing/fx/rates')
@@ -201,28 +168,115 @@ const loadRates = async () => {
         }
       }
     }
-  } catch (ignored) {}
+  } catch (err: any) {
+    showToast(`加载实时汇率失败：${err.message || err}`, 'error', 5000)
+  }
+}
+
+const loadBatches = async () => {
+  loading.value = true
+  try {
+    batchList.value = await fetchApi<any[]>('/api/v1/billing/payouts/batches') || []
+    if (batchList.value.length) {
+      selectedBatchId.value = batchList.value[0].id
+      await loadBatchDetail()
+    }
+  } catch (err: any) {
+    batchList.value = []
+    showToast(`加载放款批次列表失败：${err.message || err}`, 'error', 5000)
+  } finally {
+    loading.value = false
+  }
+}
+
+const loadBatchDetail = async () => {
+  if (!selectedBatchId.value) return
+  loading.value = true
+  try {
+    currentBatch.value = await fetchApi<any>(`/api/v1/billing/payouts/batch/${selectedBatchId.value}`)
+    items.value = await fetchApi<any[]>(`/api/v1/billing/payouts/batch/${selectedBatchId.value}/items`) || []
+  } catch (err: any) {
+    currentBatch.value = null
+    items.value = []
+    showToast(`加载批次明细失败：${err.message || err}`, 'error', 5000)
+  } finally {
+    loading.value = false
+  }
 }
 
 const disburseBatch = async () => {
+  if (!currentBatch.value) return
+  disbursing.value = true
   try {
-    await fetchApi(`/api/v1/billing/payouts/batch/${currentBatch.value.batchId}/disburse`, { method: 'POST' })
-  } catch (ignored) {}
-  showToast(`批次 ${currentBatch.value.batchId} 打款指令已向银行通道提交！状态: DISBURSED`, 'success')
+    const res: any = await fetchApi(`/api/v1/billing/payouts/batch/${currentBatch.value.id}/disburse`, { method: 'POST' })
+    if (res?.success) {
+      showToast(`批次 ${currentBatch.value.id} 打款指令已提交，状态: DISBURSED`, 'success')
+      await loadBatches()
+    } else {
+      showToast(`批次 ${currentBatch.value.id} 打款下发失败，请检查批次状态`, 'error', 5000)
+    }
+  } catch (err: any) {
+    showToast(`打款下发失败：${err.message || err}`, 'error', 5000)
+  } finally {
+    disbursing.value = false
+  }
 }
 
-const exportTipaltiCsv = () => {
-  const content = 'BatchId,AffiliateId,TargetCurrency,NetAmount,BeneficiaryAccount\n' +
-    currentBatch.value.items.map(i => `${currentBatch.value.batchId},${i.affiliateId},${i.currency},${i.targetAmount},${i.account}`).join('\n')
-  downloadFile(content, 'tipalti_payout_batch.csv')
-  showToast('已成功导出 Tipalti 批次清单 CSV', 'success')
+const buildManifest = () => ({
+  batchId: currentBatch.value.id,
+  totalPayees: items.value.length,
+  totalGrossUsd: currentBatch.value.totalGrossUsd,
+  totalTaxUsd: currentBatch.value.totalTaxUsd,
+  totalNetUsd: currentBatch.value.totalNetUsd,
+  generatedAt: currentBatch.value.createdAt,
+  items: items.value.map(i => ({
+    affiliateId: i.affiliateId,
+    accountName: i.beneficiaryName,
+    paymentAccount: i.account,
+    payoutMethod: i.method,
+    grossUsd: i.grossUsd,
+    taxWithheldUsd: i.taxUsd,
+    netUsd: Number(i.grossUsd || 0) - Number(i.taxUsd || 0),
+    targetCurrency: i.currency,
+    fxRate: i.fxRate,
+    targetCurrencyAmount: i.targetAmount
+  }))
+})
+
+const exportTipaltiCsv = async () => {
+  if (!currentBatch.value) {
+    showToast('请先选择有效批次', 'warning')
+    return
+  }
+  try {
+    const csv = await fetchApi<string>('/api/v1/billing/payouts/batch/export/tipalti', {
+      method: 'POST',
+      body: buildManifest(),
+      responseType: 'text'
+    } as any)
+    downloadFile(csv, 'tipalti_payout_batch.csv')
+    showToast('已成功导出 Tipalti 批次清单 CSV', 'success')
+  } catch (err: any) {
+    showToast(`导出 Tipalti CSV 失败：${err.message || err}`, 'error', 5000)
+  }
 }
 
-const exportPayoneerCsv = () => {
-  const content = 'PayeeID,Amount,Currency,Comment\n' +
-    currentBatch.value.items.map(i => `${i.affiliateId},${i.targetAmount},${i.currency},Payout for Net-30`).join('\n')
-  downloadFile(content, 'payoneer_mass_payout.csv')
-  showToast('已成功导出 Payoneer 批量付款 CSV', 'success')
+const exportPayoneerCsv = async () => {
+  if (!currentBatch.value) {
+    showToast('请先选择有效批次', 'warning')
+    return
+  }
+  try {
+    const csv = await fetchApi<string>('/api/v1/billing/payouts/batch/export/payoneer', {
+      method: 'POST',
+      body: buildManifest(),
+      responseType: 'text'
+    } as any)
+    downloadFile(csv, 'payoneer_mass_payout.csv')
+    showToast('已成功导出 Payoneer 批量付款 CSV', 'success')
+  } catch (err: any) {
+    showToast(`导出 Payoneer CSV 失败：${err.message || err}`, 'error', 5000)
+  }
 }
 
 const downloadFile = (content: string, filename: string) => {
@@ -237,5 +291,6 @@ const downloadFile = (content: string, filename: string) => {
 
 onMounted(() => {
   loadRates()
+  loadBatches()
 })
 </script>

@@ -2,6 +2,7 @@ package com.affiliate.platform.affiliate.service;
 
 import com.affiliate.platform.entity.SubIdStatsEntity;
 import com.affiliate.platform.mapper.SubIdStatsMapper;
+import com.affiliate.platform.tenant.TenantContext;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
@@ -9,6 +10,10 @@ import org.springframework.stereotype.Service;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicLong;
@@ -20,6 +25,12 @@ import java.util.concurrent.atomic.AtomicLong;
  */
 @Service
 public class SubIdAnalyticsService {
+
+    /** 当前请求线程绑定的租户；离线/测试场景无上下文时归入 public 空间 */
+    private static String currentTenant() {
+        String tenant = TenantContext.get();
+        return tenant != null && !tenant.isBlank() ? tenant : "public";
+    }
 
     private final SubIdStatsMapper statsMapper;
     private final ConcurrentMap<String, SubIdMetricBucket> fallbackMetrics = new ConcurrentHashMap<>();
@@ -39,11 +50,11 @@ public class SubIdAnalyticsService {
 
         if (statsMapper != null) {
             QueryWrapper<SubIdStatsEntity> qw = new QueryWrapper<>();
-            qw.eq("affiliate_id", affId).eq("sub1", s1);
+            qw.eq("tenant_id", currentTenant()).eq("affiliate_id", affId).eq("sub1", s1);
             SubIdStatsEntity entity = statsMapper.selectOne(qw);
 
             if (entity == null) {
-                entity = new SubIdStatsEntity("public", affId, s1, 1L, 0L, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, Instant.now());
+                entity = new SubIdStatsEntity(currentTenant(), affId, s1, 1L, 0L, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, Instant.now());
                 statsMapper.insert(entity);
             } else {
                 entity.setClicks(entity.getClicks() + 1);
@@ -65,11 +76,11 @@ public class SubIdAnalyticsService {
 
         if (statsMapper != null) {
             QueryWrapper<SubIdStatsEntity> qw = new QueryWrapper<>();
-            qw.eq("affiliate_id", affId).eq("sub1", s1);
+            qw.eq("tenant_id", currentTenant()).eq("affiliate_id", affId).eq("sub1", s1);
             SubIdStatsEntity entity = statsMapper.selectOne(qw);
 
             if (entity == null) {
-                entity = new SubIdStatsEntity("public", affId, s1, 1L, 1L, p, r, BigDecimal.ZERO, BigDecimal.ZERO, Instant.now());
+                entity = new SubIdStatsEntity(currentTenant(), affId, s1, 1L, 1L, p, r, BigDecimal.ZERO, BigDecimal.ZERO, Instant.now());
                 recomputeMetrics(entity);
                 statsMapper.insert(entity);
             } else {
@@ -95,7 +106,7 @@ public class SubIdAnalyticsService {
 
         if (statsMapper != null) {
             QueryWrapper<SubIdStatsEntity> qw = new QueryWrapper<>();
-            qw.eq("affiliate_id", affId).eq("sub1", s1);
+            qw.eq("tenant_id", currentTenant()).eq("affiliate_id", affId).eq("sub1", s1);
             SubIdStatsEntity entity = statsMapper.selectOne(qw);
 
             if (entity == null) {
@@ -135,6 +146,66 @@ public class SubIdAnalyticsService {
         return new SubIdPerformance(affId, s1, clicks, conversions, payout, revenue, epc, cr, rpc, margin);
     }
 
+    /**
+     * 查询当前租户全部 Sub-ID 分组的多维表现报表（按毛利/收益倒序）
+     *
+     * @param affiliateId 可选渠道客过滤条件
+     * @param sub1        可选 Sub-ID 过滤条件
+     * @return Sub-ID 表现明细列表
+     */
+    public List<SubIdPerformance> listPerformance(String affiliateId, String sub1) {
+        if (statsMapper != null) {
+            QueryWrapper<SubIdStatsEntity> qw = new QueryWrapper<>();
+            qw.eq("tenant_id", currentTenant());
+            if (affiliateId != null && !affiliateId.isBlank() && !"all".equalsIgnoreCase(affiliateId)) {
+                qw.eq("affiliate_id", affiliateId);
+            }
+            if (sub1 != null && !sub1.isBlank() && !"all".equalsIgnoreCase(sub1) && !"default".equalsIgnoreCase(sub1)) {
+                qw.eq("sub1", sub1);
+            }
+            qw.orderByDesc("total_revenue - total_payout", "total_revenue");
+            List<SubIdStatsEntity> entities = statsMapper.selectList(qw);
+            return entities.stream().map(this::toPerformance).toList();
+        }
+
+        List<SubIdPerformance> rows = new ArrayList<>();
+        for (Map.Entry<String, SubIdMetricBucket> e : fallbackMetrics.entrySet()) {
+            String[] parts = e.getKey().split(":", 3);
+            if (!currentTenant().equals(parts[0])) {
+                continue;
+            }
+            rows.add(buildPerformance(parts.length > 1 ? parts[1] : "all",
+                    parts.length > 2 ? parts[2] : "default",
+                    e.getValue().clicks.get(), e.getValue().conversions.get(),
+                    e.getValue().getPayout(), e.getValue().getRevenue()));
+        }
+        rows.sort(Comparator.comparing(SubIdAnalyticsService.SubIdPerformance::margin).reversed());
+        return rows;
+    }
+
+    private SubIdPerformance toPerformance(SubIdStatsEntity entity) {
+        long clicks = entity.getClicks();
+        BigDecimal payout = entity.getTotalPayout() != null ? entity.getTotalPayout() : BigDecimal.ZERO;
+        BigDecimal revenue = entity.getTotalRevenue() != null ? entity.getTotalRevenue() : BigDecimal.ZERO;
+        double cr = entity.getCrPercent() != null ? entity.getCrPercent().doubleValue() : 0.0;
+        BigDecimal epc = entity.getEpc() != null ? entity.getEpc() : BigDecimal.ZERO;
+        BigDecimal rpc = clicks <= 0 ? BigDecimal.ZERO : revenue.divide(BigDecimal.valueOf(clicks), 4, RoundingMode.HALF_UP);
+        BigDecimal margin = revenue.subtract(payout).setScale(4, RoundingMode.HALF_UP);
+        return new SubIdPerformance(entity.getAffiliateId(), entity.getSub1(), clicks,
+                entity.getConversions(), payout, revenue, epc, cr, rpc, margin);
+    }
+
+    private SubIdPerformance buildPerformance(String affiliateId, String sub1,
+                                              long clicks, long conversions,
+                                              BigDecimal payout, BigDecimal revenue) {
+        double cr = clicks <= 0 ? 0.0 : ((double) conversions / clicks) * 100.0;
+        cr = BigDecimal.valueOf(cr).setScale(2, RoundingMode.HALF_UP).doubleValue();
+        BigDecimal epc = clicks <= 0 ? BigDecimal.ZERO : payout.divide(BigDecimal.valueOf(clicks), 4, RoundingMode.HALF_UP);
+        BigDecimal rpc = clicks <= 0 ? BigDecimal.ZERO : revenue.divide(BigDecimal.valueOf(clicks), 4, RoundingMode.HALF_UP);
+        BigDecimal margin = revenue.subtract(payout).setScale(4, RoundingMode.HALF_UP);
+        return new SubIdPerformance(affiliateId, sub1, clicks, conversions, payout, revenue, epc, cr, rpc, margin);
+    }
+
     private void recomputeMetrics(SubIdStatsEntity entity) {
         long c = entity.getClicks();
         long conv = entity.getConversions();
@@ -152,7 +223,7 @@ public class SubIdAnalyticsService {
     }
 
     private static String key(String affiliateId, String sub1) {
-        return (affiliateId == null ? "all" : affiliateId) + ":" + (sub1 == null ? "default" : sub1);
+        return currentTenant() + ":" + (affiliateId == null ? "all" : affiliateId) + ":" + (sub1 == null ? "default" : sub1);
     }
 
     public record SubIdPerformance(

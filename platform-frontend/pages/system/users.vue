@@ -217,20 +217,27 @@ const users = ref<any[]>([])
 const selectedUser = ref<any>(null)
 const userRolesSelection = ref<string[]>([])
 
-const availableRoles = [
-  { code: 'SUPER_ADMIN', name: '超级管理员', desc: '平台全量资源最高通配权限' },
-  { code: 'AFFILIATE_MANAGER', name: '网盟商务主管', desc: '管理计划、渠道客关系维护及日常转化质检' },
-  { code: 'FINANCE_OFFICER', name: '财务结算专员', desc: '负责账单出账核算、起提门槛审批与打款核销' },
-  { code: 'TRAFFICKER', name: '广告投放优化师', desc: '负责广告活动定向配置与物料上传' },
-  { code: 'VIEWER', name: '只读观察员', desc: '仅具备多维报表查看权限' }
-]
+const availableRoles = ref<Array<{ code: string; name: string; desc: string }>>([])
+
+const loadRoles = async () => {
+  try {
+    const res = await fetchApi<any[]>('/api/v1/system/roles')
+    availableRoles.value = (res || []).map(r => ({
+      code: r.roleCode,
+      name: r.roleName,
+      desc: r.description || ''
+    }))
+  } catch (err: any) {
+    showToast(`加载角色清单失败：${err?.message || '服务请求失败'}`, 'error', 5000)
+  }
+}
 
 const createForm = ref({
   username: '',
   displayName: '',
   email: '',
   phone: '',
-  role: 'AFFILIATE_MANAGER'
+  role: 'VIEWER'
 })
 
 const columns = [
@@ -250,41 +257,10 @@ const loadUsers = async () => {
   loading.value = true
   try {
     const res = await fetchApi<any[]>('/api/v1/system/users')
-    users.value = res
-  } catch (err) {
-    // 降级兜底数据
-    users.value = [
-      {
-        id: 'usr-admin-01',
-        username: 'admin',
-        displayName: 'Super Administrator',
-        email: 'admin@affiliate.io',
-        phone: '+1-800-555-0199',
-        status: 'ACTIVE',
-        roles: ['SUPER_ADMIN'],
-        lastLoginAt: new Date().toISOString()
-      },
-      {
-        id: 'usr-bd-01',
-        username: 'alex_bd',
-        displayName: 'Alex Wang (商务主管)',
-        email: 'alex@affiliate.io',
-        phone: '+1-800-555-0123',
-        status: 'ACTIVE',
-        roles: ['AFFILIATE_MANAGER'],
-        lastLoginAt: '2026-09-03T09:00:00Z'
-      },
-      {
-        id: 'usr-fn-01',
-        username: 'sarah_fin',
-        displayName: 'Sarah Lee (财务总监)',
-        email: 'sarah@affiliate.io',
-        phone: '+1-800-555-0188',
-        status: 'ACTIVE',
-        roles: ['FINANCE_OFFICER'],
-        lastLoginAt: '2026-09-02T16:20:00Z'
-      }
-    ]
+    users.value = res || []
+  } catch (err: any) {
+    users.value = []
+    showToast(`加载用户列表失败：${err?.message || '服务请求失败'}`, 'error', 5000)
   } finally {
     loading.value = false
   }
@@ -292,11 +268,12 @@ const loadUsers = async () => {
 
 const toggleStatus = async (row: any, newStatus: string) => {
   try {
-    await fetchApi(`/api/v1/system/users/${row.id}/status?status=${newStatus}`, { method: 'POST' })
-  } catch (e) {}
-
-  row.status = newStatus
-  showToast(`用户 ${row.username} 状态已更新为 ${newStatus}`, 'success')
+    const updated = await fetchApi<any>(`/api/v1/system/users/${row.id}/status?status=${newStatus}`, { method: 'POST' })
+    row.status = updated?.status ?? newStatus
+    showToast(`用户 ${row.username} 状态已更新为 ${row.status}`, 'success')
+  } catch (err: any) {
+    showToast(`状态更新失败：${err?.message || '服务请求失败'}`, 'error', 5000)
+  }
 }
 
 const openRolesModal = (user: any) => {
@@ -308,18 +285,23 @@ const openRolesModal = (user: any) => {
 const submitReassignRoles = async () => {
   if (!selectedUser.value) return
   try {
-    await fetchApi(`/api/v1/system/users/${selectedUser.value.id}/roles`, {
+    const updated = await fetchApi<any>(`/api/v1/system/users/${selectedUser.value.id}/roles`, {
       method: 'POST',
       body: userRolesSelection.value
     })
-  } catch (e) {}
-
-  selectedUser.value.roles = [...userRolesSelection.value]
-  showRolesModal.value = false
-  showToast('角色权限已重新生效！', 'success')
+    selectedUser.value.roles = Array.from(updated?.roles ?? userRolesSelection.value)
+    showRolesModal.value = false
+    showToast('角色权限已重新生效！', 'success')
+  } catch (err: any) {
+    showToast(`角色分配失败：${err?.message || '服务请求失败'}`, 'error', 5000)
+  }
 }
 
 const submitCreate = async () => {
+  if (!createForm.value.username || !createForm.value.email) {
+    showToast('请填写必填的账号名与邮箱', 'warning')
+    return
+  }
   const payload = {
     username: createForm.value.username,
     displayName: createForm.value.displayName,
@@ -334,20 +316,15 @@ const submitCreate = async () => {
       body: payload
     })
     if (res) users.value.unshift(res)
-  } catch (e) {
-    users.value.unshift({
-      id: 'usr-' + Math.floor(Math.random() * 9000 + 1000),
-      ...payload,
-      status: 'ACTIVE',
-      lastLoginAt: null
-    })
+    showCreateModal.value = false
+    showToast('系统用户创建成功！', 'success')
+  } catch (err: any) {
+    showToast(`用户创建失败：${err?.message || '服务请求失败'}`, 'error', 5000)
   }
-
-  showCreateModal.value = false
-  showToast('系统用户创建成功！', 'success')
 }
 
 onMounted(() => {
   loadUsers()
+  loadRoles()
 })
 </script>

@@ -197,12 +197,12 @@ const configs = ref<any[]>([])
 const createForm = ref({
   name: '',
   provider: 'AWS_S3',
-  region: 'us-east-1',
-  endpoint: 'https://s3.us-east-1.amazonaws.com',
+  region: '',
+  endpoint: '',
   bucketName: '',
   accessKeyId: '',
   secretAccessKey: '',
-  publicCdnUrl: 'https://cdn.affnetwork.com'
+  publicCdnUrl: ''
 })
 
 const columns = [
@@ -218,36 +218,10 @@ const loadConfigs = async () => {
   loading.value = true
   try {
     const res = await fetchApi<any[]>('/api/v1/system/s3')
-    configs.value = res
-  } catch (err) {
-    configs.value = [
-      {
-        id: 's3-aws-global',
-        name: 'AWS 美东广告素材主桶',
-        provider: 'AWS_S3',
-        region: 'us-east-1',
-        endpoint: 'https://s3.us-east-1.amazonaws.com',
-        bucketName: 'aff-creatives-global',
-        accessKeyId: 'AKIAIOSFODNN7EXAMPLE',
-        secretAccessKey: 'wJalrX********YKEY',
-        publicCdnUrl: 'https://cdn.affnetwork.com',
-        isDefault: true,
-        status: 'ACTIVE'
-      },
-      {
-        id: 's3-r2-apac',
-        name: 'Cloudflare R2 亚太离线报表桶',
-        provider: 'CLOUDFLARE_R2',
-        region: 'auto',
-        endpoint: 'https://cf-r2.cloudflarestorage.com',
-        bucketName: 'aff-reports-apac',
-        accessKeyId: 'R2ACCESSKEY998877',
-        secretAccessKey: 'R2SECR********9877',
-        publicCdnUrl: 'https://r2-static.affnetwork.com',
-        isDefault: false,
-        status: 'ACTIVE'
-      }
-    ]
+    configs.value = res || []
+  } catch (err: any) {
+    configs.value = []
+    showToast(`加载 S3 存储配置失败：${err?.message || '服务请求失败'}`, 'error', 5000)
   } finally {
     loading.value = false
   }
@@ -257,9 +231,13 @@ const testConnection = async (row: any) => {
   testingId.value = row.id
   try {
     const res = await fetchApi<any>(`/api/v1/system/s3/${row.id}/test`, { method: 'POST' })
-    showToast(`连通性测试通过！响应耗时: ${res.latencyMs || 28}ms`, 'success')
-  } catch (err) {
-    showToast(`连通性探测成功 (32ms)`, 'success')
+    if (res?.success) {
+      showToast(`${res.message || '连通性测试通过'} (响应 ${res.latencyMs}ms)`, 'success')
+    } else {
+      showToast(`连通性测试失败：${res?.message || '未知原因'}`, 'error', 5000)
+    }
+  } catch (err: any) {
+    showToast(`连通性测试失败：${err?.message || '服务请求失败'}`, 'error', 5000)
   } finally {
     testingId.value = null
   }
@@ -268,13 +246,18 @@ const testConnection = async (row: any) => {
 const setAsDefault = async (row: any) => {
   try {
     await fetchApi(`/api/v1/system/s3/${row.id}/default`, { method: 'POST' })
-  } catch (e) {}
-
-  configs.value.forEach(c => c.isDefault = (c.id === row.id))
-  showToast(`已将 ${row.name} 设为默认存储桶`, 'success')
+    await loadConfigs()
+    showToast(`已将 ${row.name} 设为默认存储桶`, 'success')
+  } catch (err: any) {
+    showToast(`设置默认桶失败：${err?.message || '服务请求失败'}`, 'error', 5000)
+  }
 }
 
 const submitCreateConfig = async () => {
+  if (!createForm.value.name || !createForm.value.bucketName || !createForm.value.accessKeyId || !createForm.value.secretAccessKey) {
+    showToast('请填写名称、Bucket 与 AK/SK 必填项', 'warning')
+    return
+  }
   const payload = {
     name: createForm.value.name,
     provider: createForm.value.provider,
@@ -292,18 +275,11 @@ const submitCreateConfig = async () => {
       body: payload
     })
     if (res) configs.value.push(res)
-  } catch (e) {
-    configs.value.push({
-      id: 's3-' + Math.floor(Math.random() * 9000 + 1000),
-      ...payload,
-      secretAccessKey: '••••••••••••••••',
-      isDefault: false,
-      status: 'ACTIVE'
-    })
+    showCreateModal.value = false
+    showToast('S3 存储配置添加成功！', 'success')
+  } catch (err: any) {
+    showToast(`存储配置保存失败：${err?.message || '服务请求失败'}`, 'error', 5000)
   }
-
-  showCreateModal.value = false
-  showToast('S3 存储配置添加成功！', 'success')
 }
 
 onMounted(() => {

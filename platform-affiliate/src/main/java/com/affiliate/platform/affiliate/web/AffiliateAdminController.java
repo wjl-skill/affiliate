@@ -7,6 +7,7 @@ import com.affiliate.platform.affiliate.domain.SmartLink;
 import com.affiliate.platform.affiliate.service.*;
 import com.affiliate.platform.entity.SmartLinkEntity;
 import com.affiliate.platform.mapper.SmartLinkMapper;
+import com.affiliate.platform.tenant.TenantContext;
 import jakarta.validation.Valid;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
@@ -15,6 +16,7 @@ import org.springframework.web.bind.annotation.*;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
@@ -84,28 +86,82 @@ public class AffiliateAdminController {
     // ==========================================
     // 1. 监控大盘总览 (Dashboard Overview)
     // ==========================================
+    /** 当前请求线程租户；无上下文（离线测试）时不收窄 */
+    private static Optional<String> requestTenant() {
+        String tenant = TenantContext.get();
+        return tenant != null && !tenant.isBlank() ? Optional.of(tenant) : Optional.empty();
+    }
+
+    /** 判断实体租户归属：无请求上下文或实体缺失租户时放行 */
+    private static boolean withinTenant(String entityTenantId) {
+        Optional<String> tenant = requestTenant();
+        return tenant.isEmpty() || entityTenantId == null || entityTenantId.isBlank() || tenant.get().equals(entityTenantId);
+    }
+
     @GetMapping("/dashboard/overview")
     public Map<String, Object> getOverview() {
-        List<Offer> offers = offerService.list();
-        List<AffiliatePartner> partners = postbackService.listPartners();
-        List<Conversion> conversions = postbackService.listConversions();
+        List<Offer> offers = offerService.list().stream().filter(o -> withinTenant(o.tenantId())).toList();
+        List<AffiliatePartner> partners = postbackService.listPartners().stream()
+                .filter(p -> withinTenant(p.tenantId())).toList();
+        List<Conversion> conversions = postbackService.listConversions().stream()
+                .filter(c -> withinTenant(c.tenantId())).toList();
 
         long totalConversions = conversions.size();
         long approvedConversions = conversions.stream().filter(c -> c.status() == Conversion.Status.APPROVED).count();
-        BigDecimal totalPayout = conversions.stream().map(Conversion::payout).reduce(BigDecimal.ZERO, BigDecimal::add);
-        BigDecimal totalRevenue = conversions.stream().map(Conversion::revenue).reduce(BigDecimal.ZERO, BigDecimal::add);
+        // 仅 APPROVED 转化进入营收/佣金/毛利等可结算金额口径
+        List<Conversion> approvedList = conversions.stream().filter(c -> c.status() == Conversion.Status.APPROVED).toList();
+        BigDecimal totalPayout = approvedList.stream().map(Conversion::payout).reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal totalRevenue = approvedList.stream().map(Conversion::revenue).reduce(BigDecimal.ZERO, BigDecimal::add);
         BigDecimal grossProfit = totalRevenue.subtract(totalPayout);
 
-        return Map.of(
-                "totalOffers", offers.size(),
-                "activeOffers", offers.stream().filter(Offer::isAvailable).count(),
-                "totalPartners", partners.size(),
-                "totalConversions", totalConversions,
-                "approvedConversions", approvedConversions,
-                "totalPayout", totalPayout,
-                "totalRevenue", totalRevenue,
-                "grossProfit", grossProfit
-        );
+        // 近 7 天 vs 前 7 天环比趋势
+        Instant now = Instant.now();
+        Instant weekStart = now.minus(java.time.Duration.ofDays(7));
+        Instant twoWeeksAgo = now.minus(java.time.Duration.ofDays(14));
+        List<Conversion> curWeek = conversions.stream().filter(c -> c.createdAt() != null && c.createdAt().isAfter(weekStart)).toList();
+        List<Conversion> prevWeek = conversions.stream()
+                .filter(c -> c.createdAt() != null && c.createdAt().isAfter(twoWeeksAgo) && !c.createdAt().isAfter(weekStart)).toList();
+
+        // 仅 APPROVED 转化进入可结算金额（CONTEXT.md 状态机约束）
+        BigDecimal curRevenue = curWeek.stream().filter(c -> c.status() == Conversion.Status.APPROVED)
+                .map(Conversion::revenue).reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal prevRevenue = prevWeek.stream().filter(c -> c.status() == Conversion.Status.APPROVED)
+                .map(Conversion::revenue).reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal curProfit = curRevenue.subtract(curWeek.stream().filter(c -> c.status() == Conversion.Status.APPROVED)
+                .map(Conversion::payout).reduce(BigDecimal.ZERO, BigDecimal::add));
+        BigDecimal prevProfit = prevRevenue.subtract(prevWeek.stream().filter(c -> c.status() == Conversion.Status.APPROVED)
+                .map(Conversion::payout).reduce(BigDecimal.ZERO, BigDecimal::add));
+
+        long curPartners = partners.stream().filter(p -> p.createdAt() != null && p.createdAt().isAfter(weekStart)).count();
+        long prevPartners = partners.stream()
+                .filter(p -> p.createdAt() != null && p.createdAt().isAfter(twoWeeksAgo) && !p.createdAt().isAfter(weekStart)).count();
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("totalOffers", offers.size());
+        result.put("activeOffers", offers.stream().filter(Offer::isAvailable).count());
+        result.put("totalPartners", partners.size());
+        result.put("totalConversions", totalConversions);
+        result.put("approvedConversions", approvedConversions);
+        result.put("totalPayout", totalPayout);
+        result.put("totalRevenue", totalRevenue);
+        result.put("grossProfit", grossProfit);
+        result.put("revenueTrendPercent", trendPercent(prevRevenue, curRevenue));
+        result.put("profitTrendPercent", trendPercent(prevProfit, curProfit));
+        result.put("conversionTrendPercent", trendPercent(
+                BigDecimal.valueOf(prevWeek.stream().filter(c -> c.status() == Conversion.Status.APPROVED).count()),
+                BigDecimal.valueOf(curWeek.stream().filter(c -> c.status() == Conversion.Status.APPROVED).count())));
+        result.put("partnerTrendPercent", trendPercent(BigDecimal.valueOf(prevPartners), BigDecimal.valueOf(curPartners)));
+        return result;
+    }
+
+    private static double trendPercent(BigDecimal previous, BigDecimal current) {
+        if (previous.compareTo(BigDecimal.ZERO) == 0) {
+            return current.compareTo(BigDecimal.ZERO) > 0 ? 100.0 : 0.0;
+        }
+        return current.subtract(previous)
+                .multiply(BigDecimal.valueOf(100))
+                .divide(previous, 1, RoundingMode.HALF_UP)
+                .doubleValue();
     }
 
     // ==========================================
@@ -119,6 +175,9 @@ public class AffiliateAdminController {
     @PostMapping("/offers")
     @ResponseStatus(HttpStatus.CREATED)
     public Offer createOffer(@Valid @RequestBody Offer offer) {
+        if (offer.id() == null || offer.id().isBlank()) {
+            offer = offer.withId("off_" + UUID.randomUUID().toString().replace("-", "").substring(0, 12));
+        }
         return offerService.save(offer);
     }
 
@@ -146,6 +205,13 @@ public class AffiliateAdminController {
     @PostMapping("/smartlinks")
     @ResponseStatus(HttpStatus.CREATED)
     public SmartLink saveSmartLink(@Valid @RequestBody SmartLink link) {
+        if (link.id() == null || link.id().isBlank()) {
+            link = new SmartLink(
+                    "sl_" + UUID.randomUUID().toString().replace("-", "").substring(0, 12),
+                    link.tenantId(), link.name(), link.category(), link.targetOfferIds(),
+                    link.routingStrategy(), link.fallbackOfferId(), link.createdAt()
+            );
+        }
         smartLinks.put(link.id(), link);
         if (smartLinkMapper != null) {
             SmartLinkEntity entity = new SmartLinkEntity(
@@ -201,6 +267,14 @@ public class AffiliateAdminController {
     @PostMapping("/partners")
     @ResponseStatus(HttpStatus.CREATED)
     public AffiliatePartner savePartner(@Valid @RequestBody AffiliatePartner partner) {
+        if (partner.id() == null || partner.id().isBlank()) {
+            partner = new AffiliatePartner(
+                    "aff_" + UUID.randomUUID().toString().replace("-", "").substring(0, 12),
+                    partner.tenantId(), partner.name(), partner.status(), partner.tier(),
+                    partner.postbackUrlTemplate(), partner.paymentTerm(),
+                    partner.minPayoutThreshold(), partner.createdAt()
+            );
+        }
         postbackService.registerPartner(partner);
         return partner;
     }
@@ -244,6 +318,13 @@ public class AffiliateAdminController {
         return invoice.map(ResponseEntity::ok).orElse(ResponseEntity.noContent().build());
     }
 
+    @PostMapping("/invoices/{id}/mark-paid")
+    public ResponseEntity<AffiliateSettlementService.AffiliateInvoice> markInvoicePaid(@PathVariable String id) {
+        return settlementService.markInvoicePaid(id)
+                .map(ResponseEntity::ok)
+                .orElse(ResponseEntity.notFound().build());
+    }
+
     // ==========================================
     // 7. Sub-ID 报表分析 (Sub-ID Analytics)
     // ==========================================
@@ -255,15 +336,41 @@ public class AffiliateAdminController {
         return analyticsService.getPerformance(affiliateId, sub1);
     }
 
+    @GetMapping("/analytics/subid/list")
+    public List<SubIdAnalyticsService.SubIdPerformance> listSubIdAnalytics(
+            @RequestParam(required = false) String affiliateId,
+            @RequestParam(required = false) String sub1
+    ) {
+        return analyticsService.listPerformance(affiliateId, sub1);
+    }
+
     // ==========================================
     // 8. 反欺诈与风控中控台 (Anti-Fraud Console)
     // ==========================================
     @GetMapping("/antifraud/stats")
     public Map<String, Object> getAntiFraudStats() {
+        Map<String, Long> counters = antiFraudEngine.getCumulativeCounters();
+        List<Conversion> conversions = postbackService.listConversions().stream()
+                .filter(c -> withinTenant(c.tenantId())).toList();
+        List<Conversion> blocked = conversions.stream()
+                .filter(c -> c.status() == Conversion.Status.FRAUD_SUSPECTED || c.status() == Conversion.Status.REJECTED)
+                .toList();
+        BigDecimal savedAmount = blocked.stream().map(Conversion::payout).reduce(BigDecimal.ZERO, BigDecimal::add);
+        double interceptRate = conversions.isEmpty() ? 0.0
+                : BigDecimal.valueOf(blocked.size() * 100.0 / conversions.size()).setScale(1, RoundingMode.HALF_UP).doubleValue();
+
+        Map<String, Object> summary = new LinkedHashMap<>();
+        summary.put("interceptRatePercent", interceptRate);
+        summary.put("savedAmountUsd", savedAmount);
+        summary.put("blockedConversions", blocked.size());
+        summary.put("blacklistCount", antiFraudEngine.getIpBlacklist().size() + antiFraudEngine.getSubIdBlacklist().size());
+        summary.putAll(counters);
+
         return Map.of(
                 "recentLogs", antiFraudEngine.getRecentRiskLogs(),
                 "ipBlacklist", antiFraudEngine.getIpBlacklist(),
-                "subIdBlacklist", antiFraudEngine.getSubIdBlacklist()
+                "subIdBlacklist", antiFraudEngine.getSubIdBlacklist(),
+                "summary", summary
         );
     }
 

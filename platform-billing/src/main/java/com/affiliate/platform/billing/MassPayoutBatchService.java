@@ -4,6 +4,7 @@ import com.affiliate.platform.entity.PayoutBatchEntity;
 import com.affiliate.platform.entity.PayoutItemEntity;
 import com.affiliate.platform.mapper.PayoutBatchMapper;
 import com.affiliate.platform.mapper.PayoutItemMapper;
+import com.affiliate.platform.tenant.TenantContext;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import org.slf4j.Logger;
@@ -31,6 +32,12 @@ import java.util.*;
 public class MassPayoutBatchService {
 
     private static final Logger log = LoggerFactory.getLogger(MassPayoutBatchService.class);
+
+    /** 当前请求线程绑定的租户；离线/测试场景无上下文时归入 default 空间 */
+    private static String currentTenant() {
+        String tenant = TenantContext.get();
+        return tenant != null && !tenant.isBlank() ? tenant : "default";
+    }
 
     private final CurrencyFxService fxService;
     private final PayoutBatchMapper batchMapper;
@@ -126,9 +133,10 @@ public class MassPayoutBatchService {
 
         // 持久化存储至 PostgreSQL
         if (batchMapper != null && itemMapper != null && !items.isEmpty()) {
+            String tenantId = currentTenant();
             PayoutBatchEntity batchEntity = new PayoutBatchEntity(
                     batchId,
-                    "default",
+                    tenantId,
                     batchId,
                     "MIXED",
                     "DRAFT",
@@ -145,7 +153,7 @@ public class MassPayoutBatchService {
                 PayoutItemEntity itemEntity = new PayoutItemEntity(
                         UUID.randomUUID().toString(),
                         batchId,
-                        "default",
+                        tenantId,
                         item.affiliateId(),
                         item.accountName(),
                         null,
@@ -181,8 +189,8 @@ public class MassPayoutBatchService {
         }
         if (batchMapper != null && itemMapper != null) {
             PayoutBatchEntity batch = batchMapper.selectById(batchId);
-            if (batch == null) {
-                log.warn("Payout batch [{}] not found", batchId);
+            if (batch == null || !currentTenant().equals(batch.getTenantId())) {
+                log.warn("Payout batch [{}] not found in current tenant", batchId);
                 return false;
             }
             batch.setStatus("DISBURSED");
@@ -201,22 +209,38 @@ public class MassPayoutBatchService {
     }
 
     /**
-     * 查询批次主表信息
+     * 查询当前租户最近的放款批次列表（按创建时间倒序）
+     */
+    public List<PayoutBatchEntity> listBatches() {
+        if (batchMapper != null) {
+            LambdaQueryWrapper<PayoutBatchEntity> wrapper = new LambdaQueryWrapper<>();
+            wrapper.eq(PayoutBatchEntity::getTenantId, currentTenant())
+                    .orderByDesc(PayoutBatchEntity::getCreatedAt)
+                    .last("LIMIT 100");
+            return batchMapper.selectList(wrapper);
+        }
+        return List.of();
+    }
+
+    /**
+     * 查询批次主表信息（限当前租户）
      */
     public Optional<PayoutBatchEntity> findBatch(String batchId) {
         if (batchMapper != null && batchId != null) {
-            return Optional.ofNullable(batchMapper.selectById(batchId));
+            return Optional.ofNullable(batchMapper.selectById(batchId))
+                    .filter(b -> currentTenant().equals(b.getTenantId()));
         }
         return Optional.empty();
     }
 
     /**
-     * 查询批次包含的明细记录列表
+     * 查询批次包含的明细记录列表（限当前租户）
      */
     public List<PayoutItemEntity> listBatchItems(String batchId) {
         if (itemMapper != null && batchId != null) {
             LambdaQueryWrapper<PayoutItemEntity> wrapper = new LambdaQueryWrapper<>();
-            wrapper.eq(PayoutItemEntity::getBatchId, batchId);
+            wrapper.eq(PayoutItemEntity::getBatchId, batchId)
+                    .eq(PayoutItemEntity::getTenantId, currentTenant());
             return itemMapper.selectList(wrapper);
         }
         return List.of();

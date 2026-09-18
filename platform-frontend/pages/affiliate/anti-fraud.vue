@@ -20,19 +20,19 @@
     <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
       <div class="bg-white rounded-xl p-4 border border-slate-200 shadow-sm">
         <span class="text-xs font-medium text-slate-400">作弊流量拦截率 (Fraud Block Rate)</span>
-        <div class="text-2xl font-bold text-rose-600 mt-1 font-mono">14.8%</div>
-        <span class="text-[11px] text-slate-500 mt-1 inline-block">已挽回预算损失 ≈ $12,480</span>
+        <div class="text-2xl font-bold text-rose-600 mt-1 font-mono">{{ fraudSummary.interceptRatePercent }}%</div>
+        <span class="text-[11px] text-slate-500 mt-1 inline-block">已拦截渠道佣金支出 (Payout) ≈ ${{ fraudSummary.savedAmountUsd }}</span>
       </div>
 
       <div class="bg-white rounded-xl p-4 border border-slate-200 shadow-sm">
         <span class="text-xs font-medium text-slate-400">异常 CTIT 极速转化 (&lt; 3秒)</span>
-        <div class="text-2xl font-bold text-amber-600 mt-1 font-mono">342 笔</div>
+        <div class="text-2xl font-bold text-amber-600 mt-1 font-mono">{{ fraudSummary.ctitAnomalyCount }} 笔</div>
         <span class="text-[11px] text-amber-600 font-semibold mt-1 inline-block">疑似脚本自动注入</span>
       </div>
 
       <div class="bg-white rounded-xl p-4 border border-slate-200 shadow-sm">
         <span class="text-xs font-medium text-slate-400">机房/数据中心代理 IP (Datacenter IP)</span>
-        <div class="text-2xl font-bold text-slate-900 mt-1 font-mono">819 次</div>
+        <div class="text-2xl font-bold text-slate-900 mt-1 font-mono">{{ fraudSummary.datacenterIpCount }} 次</div>
         <span class="text-[11px] text-slate-500 mt-1 inline-block">AWS / GCP / Cloudflare 机房</span>
       </div>
 
@@ -82,11 +82,13 @@
 
         <template #cell-ctit="{ row }">
           <span
+            v-if="row.ctitSeconds !== null && row.ctitSeconds !== undefined"
             class="text-xs font-mono font-bold"
             :class="row.ctitSeconds < 3 ? 'text-rose-600' : 'text-slate-700'"
           >
             {{ row.ctitSeconds }}s
           </span>
+          <span v-else class="text-xs text-slate-400">-</span>
         </template>
 
         <template #cell-score="{ row }">
@@ -178,7 +180,14 @@ const loading = ref(false)
 const showBlacklistModal = ref(false)
 const blacklistType = ref('IP')
 const blacklistValue = ref('')
-const activeBlacklistCount = ref(18)
+const activeBlacklistCount = ref(0)
+
+const fraudSummary = ref({
+  interceptRatePercent: '0.0',
+  savedAmountUsd: '0.00',
+  ctitAnomalyCount: 0,
+  datacenterIpCount: 0
+})
 
 const columns = [
   { key: 'clickTx', label: '交易 / 点击 ID', slot: 'clickTx' },
@@ -191,93 +200,40 @@ const columns = [
   { key: 'time', label: '拦截时间', slot: 'time' }
 ]
 
-const auditLogs = ref<any[]>([
-  {
-    transactionId: 'tx_spam_0192',
-    clickId: 'clk_828192a8',
-    affiliateId: 'aff-crawler-99',
-    ip: '198.51.100.42',
-    isDatacenter: true,
-    ctitSeconds: 1.2,
-    riskScore: 92,
-    primaryReason: 'FAST_CONVERSION_CTIT_UNDER_3S',
-    action: 'REJECTED',
-    time: '2026-09-04 11:42:01'
-  },
-  {
-    transactionId: 'tx_bot_7721',
-    clickId: 'clk_110948bf',
-    affiliateId: 'aff-traffic-hub',
-    ip: '52.14.88.19',
-    isDatacenter: true,
-    ctitSeconds: 8.5,
-    riskScore: 78,
-    primaryReason: 'DATACENTER_PROXY_IP',
-    action: 'REJECTED',
-    time: '2026-09-04 11:39:15'
-  },
-  {
-    transactionId: 'tx_dup_9918',
-    clickId: 'clk_773612cd',
-    affiliateId: 'aff-vip-888',
-    ip: '172.56.21.90',
-    isDatacenter: false,
-    ctitSeconds: 45.0,
-    riskScore: 85,
-    primaryReason: 'DUPLICATE_TRANSACTION_ID',
-    action: 'REJECTED',
-    time: '2026-09-04 11:28:30'
-  },
-  {
-    transactionId: 'tx_burst_4412',
-    clickId: 'clk_662819ef',
-    affiliateId: 'aff-media-pro',
-    ip: '24.120.99.11',
-    isDatacenter: false,
-    ctitSeconds: 22.4,
-    riskScore: 50,
-    primaryReason: 'SUB_ID_CLICK_BURST_SPIKE',
-    action: 'FLAGGED',
-    time: '2026-09-04 11:15:08'
-  },
-  {
-    transactionId: 'tx_legit_5510',
-    clickId: 'clk_330912ab',
-    affiliateId: 'aff-vip-888',
-    ip: '98.210.45.18',
-    isDatacenter: false,
-    ctitSeconds: 88.0,
-    riskScore: 10,
-    primaryReason: 'NORMAL_USER_BEHAVIOR',
-    action: 'APPROVED',
-    time: '2026-09-04 11:05:22'
-  }
-])
+const auditLogs = ref<any[]>([])
 
 const loadStats = async () => {
   loading.value = true
   try {
     const res: any = await fetchApi('/api/v1/affiliate/antifraud/stats')
     if (res) {
-      if (res.recentLogs && res.recentLogs.length > 0) {
-        auditLogs.value = res.recentLogs.map((l: any) => ({
-          transactionId: l.transactionId,
-          clickId: l.clickId,
-          affiliateId: l.affiliateId,
-          ip: l.ip,
-          isDatacenter: l.isDatacenter,
-          ctitSeconds: l.ctitSeconds,
-          riskScore: l.riskScore,
-          primaryReason: l.primaryReason,
-          action: l.action,
-          time: l.timestamp ? new Date(l.timestamp).toLocaleString() : 'Just now'
-        }))
-      }
-      if (res.ipBlacklist && res.subIdBlacklist) {
-        activeBlacklistCount.value = res.ipBlacklist.length + res.subIdBlacklist.length
+      auditLogs.value = (res.recentLogs || []).map((l: any) => ({
+        transactionId: l.txId,
+        clickId: l.clickId,
+        affiliateId: l.affiliateId,
+        ip: l.ip,
+        isDatacenter: (l.riskReasons || []).includes('DATACENTER_PROXY_IP_DETECTED'),
+        ctitSeconds: l.ctitSeconds ?? null,
+        riskScore: l.riskScore,
+        primaryReason: (l.riskReasons && l.riskReasons.length) ? l.riskReasons[0] : 'NONE',
+        action: l.actionVerdict,
+        time: l.timestamp ? new Date(l.timestamp).toLocaleString() : '-'
+      }))
+      activeBlacklistCount.value = res.summary?.blacklistCount
+        ?? ((res.ipBlacklist || []).length + (res.subIdBlacklist || []).length)
+      if (res.summary) {
+        fraudSummary.value = {
+          interceptRatePercent: String(res.summary.interceptRatePercent ?? '0.0'),
+          savedAmountUsd: String(res.summary.savedAmountUsd ?? '0.00'),
+          ctitAnomalyCount: Number(res.summary.ctitAnomalyCount ?? 0),
+          datacenterIpCount: Number(res.summary.datacenterIpCount ?? 0)
+        }
       }
     }
-  } catch (ignored) {} finally {
+  } catch (err: any) {
+    auditLogs.value = []
+    showToast(`加载风控数据失败：${err.message || err}`, 'error', 5000)
+  } finally {
     loading.value = false
   }
 }
@@ -294,11 +250,13 @@ const addBlacklistEntry = async () => {
     } else {
       await fetchApi(`/api/v1/affiliate/antifraud/blacklist/subid?subId=${encodeURIComponent(val)}`, { method: 'POST' })
     }
-  } catch (ignored) {}
-  activeBlacklistCount.value++
-  showToast(`已成功将 ${val} 加入作弊黑名单`, 'success')
-  blacklistValue.value = ''
-  showBlacklistModal.value = false
+    showToast(`已成功将 ${val} 加入作弊黑名单`, 'success')
+    blacklistValue.value = ''
+    showBlacklistModal.value = false
+    await loadStats()
+  } catch (err: any) {
+    showToast(`封禁失败：${err.message || err}`, 'error', 5000)
+  }
 }
 
 onMounted(() => {

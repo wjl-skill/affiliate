@@ -25,7 +25,7 @@
       <template #cell-invoiceInfo="{ row }">
         <div class="flex flex-col">
           <span class="font-bold text-slate-900 font-mono">{{ row.id }}</span>
-          <span class="text-[11px] text-slate-400">出账时间: {{ formatDate(row.createdAt) }}</span>
+          <span class="text-[11px] text-slate-400">账期: {{ row.billingCycle || '-' }} · 出账: {{ formatDate(row.createdAt) }}</span>
         </div>
       </template>
 
@@ -48,7 +48,10 @@
       </template>
 
       <template #cell-status="{ row }">
-        <StatusTag :status="row.status" />
+        <div class="flex flex-col gap-0.5">
+          <StatusTag :status="row.status" />
+          <span v-if="row.paidAt" class="text-[11px] text-slate-400">打款: {{ formatDate(row.paidAt) }}</span>
+        </div>
       </template>
 
       <!-- 操作按钮 -->
@@ -85,7 +88,7 @@
             v-model="targetAffiliateId"
             type="text"
             required
-            placeholder="例如: aff-vip-888"
+            placeholder="请输入渠道客 ID (如合作方列表中的 ID)"
             class="w-full rounded-lg border border-slate-300 px-3 py-2 text-slate-900 font-mono"
           />
         </div>
@@ -107,7 +110,7 @@ const { showToast } = useToasts()
 
 const loading = ref(false)
 const showGenerateModal = ref(false)
-const targetAffiliateId = ref('aff-vip-888')
+const targetAffiliateId = ref('')
 const invoices = ref<any[]>([])
 
 const columns = [
@@ -128,65 +131,45 @@ const formatDate = (isoStr: string) => {
 const loadInvoices = async () => {
   loading.value = true
   try {
-    const res = await fetchApi<any[]>('/api/v1/affiliate/invoices')
-    invoices.value = res
-  } catch (err) {
-    invoices.value = [
-      {
-        id: 'inv-20260901-001',
-        affiliateId: 'aff-vip-888',
-        amount: '1250.00',
-        conversionCount: 250,
-        paymentTerm: 'NET_15',
-        status: 'PAID',
-        createdAt: '2026-09-01T10:00:00Z'
-      },
-      {
-        id: 'inv-20260903-002',
-        affiliateId: 'aff-gold-777',
-        amount: '380.00',
-        conversionCount: 76,
-        paymentTerm: 'NET_30',
-        status: 'GENERATED',
-        createdAt: '2026-09-03T08:30:00Z'
-      }
-    ]
+    invoices.value = await fetchApi<any[]>('/api/v1/affiliate/invoices') || []
+  } catch (err: any) {
+    invoices.value = []
+    showToast(`加载结算发票失败：${err.message || err}`, 'error', 5000)
   } finally {
     loading.value = false
   }
 }
 
 const generateInvoice = async () => {
+  const affiliateId = targetAffiliateId.value.trim()
+  if (!affiliateId) {
+    showToast('请输入待出账渠道客 ID', 'warning')
+    return
+  }
   try {
-    const res = await fetchApi<any>(`/api/v1/affiliate/invoices/generate?affiliateId=${targetAffiliateId.value}`, {
+    const res = await fetchApi<any>(`/api/v1/affiliate/invoices/generate?affiliateId=${encodeURIComponent(affiliateId)}`, {
       method: 'POST'
     })
     if (res) {
-      invoices.value.unshift(res)
+      await loadInvoices()
       showToast('结算发票生成成功！', 'success')
       showGenerateModal.value = false
-      return
+    } else {
+      showToast('未生成发票：该渠道客暂无达到起提门槛的已审核通过转化', 'warning', 5000)
     }
-  } catch (e) {}
-
-  // 演示出账
-  const mockInv = {
-    id: 'inv-' + Math.floor(Math.random() * 90000 + 10000),
-    affiliateId: targetAffiliateId.value,
-    amount: '450.00',
-    conversionCount: 90,
-    paymentTerm: 'NET_15',
-    status: 'GENERATED',
-    createdAt: new Date().toISOString()
+  } catch (err: any) {
+    showToast(`出账核算失败：${err.message || err}`, 'error', 5000)
   }
-  invoices.value.unshift(mockInv)
-  showGenerateModal.value = false
-  showToast('结算发票生成成功！', 'success')
 }
 
-const markAsPaid = (row: any) => {
-  row.status = 'PAID'
-  showToast(`发票 ${row.id} 已确认打款核销`, 'success')
+const markAsPaid = async (row: any) => {
+  try {
+    await fetchApi(`/api/v1/affiliate/invoices/${row.id}/mark-paid`, { method: 'POST' })
+    showToast(`发票 ${row.id} 已确认打款核销`, 'success')
+    await loadInvoices()
+  } catch (err: any) {
+    showToast(`确认打款失败：${err.message || err}`, 'error', 5000)
+  }
 }
 
 onMounted(() => {

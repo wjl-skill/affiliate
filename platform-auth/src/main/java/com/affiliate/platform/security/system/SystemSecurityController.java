@@ -159,6 +159,9 @@ public class SystemSecurityController {
     @PostMapping("/menus")
     @ResponseStatus(HttpStatus.CREATED)
     public SysMenu saveMenu(@Valid @RequestBody SysMenu menu) {
+        if (menu.id() == null || menu.id().isBlank()) {
+            menu = menu.withId("menu-" + UUID.randomUUID().toString().replace("-", "").substring(0, 12));
+        }
         return menuService.save(menu);
     }
 

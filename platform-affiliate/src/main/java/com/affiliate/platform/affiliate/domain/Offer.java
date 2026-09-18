@@ -36,6 +36,12 @@ public record Offer(
         Instant expiresAt,
         Instant createdAt
 ) {
+    /** 以服务端生成的新 ID 复制一份不可变实体（用于创建接口缺省 ID 时回填） */
+    public Offer withId(String newId) {
+        return new Offer(newId, tenantId, advertiserId, title, landingPageUrl, payoutType,
+                defaultPayout, defaultRevenue, status, dailyConversionCap, dailyRevenueCap,
+                fallbackOfferId, allowedCountries, allowedDevices, expiresAt, createdAt);
+    }
     public Offer {
         status = status == null ? Status.ACTIVE : status;
         allowedCountries = allowedCountries == null ? Set.of() : allowedCountries.stream().map(String::toUpperCase).collect(Collectors.toUnmodifiableSet());

@@ -10,6 +10,14 @@ spring:
     # 默认激活本地 PostgreSQL + MyBatis-Plus 环境 (Profile: pg)
     active: ${SPRING_PROFILES_ACTIVE:pg}
 
+  # 安全过滤链仅拦截 REQUEST/ASYNC 派发；排除 ERROR 派发，
+  # 避免处理器内部异常或 404 被鉴权链掩盖为 401 导致前端误判登录失效
+  security:
+    filter:
+      dispatcher-types:
+        - async
+        - request
+
   # Java 21 Project Loom 虚拟线程全量调度支持 (Sub-millisecond Concurrency)
   threads:
     virtual:
@@ -94,8 +102,12 @@ management:
 
 app:
   security:
-    # 是否强制启用基于 JWT Resource Server 的安全鉴权（本地默认关闭，生产开启）
-    enabled: false
+    # 是否强制启用 JWT 鉴权（本地默认开启；设为 false 可临时放开全部接口的安全链）
+    enabled: ${APP_SECURITY_ENABLED:true}
+    # HS256 签名密钥（生产环境务必通过环境变量注入随机长密钥）
+    jwt-secret: ${APP_JWT_SECRET:affiliate-platform-dev-jwt-secret-change-me-in-prod-0518}
+    # 访问令牌有效期（分钟）
+    token-ttl-minutes: ${APP_JWT_TTL_MINUTES:720}
   infrastructure:
     # 启用真实关系型数据库 (PostgreSQL) 持久化
     database-enabled: true

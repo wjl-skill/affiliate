@@ -425,7 +425,7 @@ create table if not exists affiliate_conversion (
     id varchar(64) primary key,
     tenant_id varchar(64) not null default 'public',
     click_id varchar(64) not null,
-    tx_id varchar(128) not null,
+    transaction_id varchar(128) not null,
     offer_id varchar(64) not null,
     affiliate_id varchar(64) not null,
     payout numeric(12,4) not null default 0.0000,
@@ -434,21 +434,25 @@ create table if not exists affiliate_conversion (
     ctit_seconds bigint not null default 0,
     status varchar(32) not null default 'PENDING',
     rejection_reason varchar(256),
+    sub1 varchar(128),
+    postback_status varchar(32) not null default 'PENDING',
     created_at timestamptz not null default now()
 );
 comment on table affiliate_conversion is 'S2S 服务端转化事实表';
-create unique index if not exists uk_conversion_offer_tx on affiliate_conversion(offer_id, tx_id);
+create unique index if not exists uk_conversion_offer_tx on affiliate_conversion(offer_id, transaction_id);
 create index if not exists ix_conversion_aff_status on affiliate_conversion(tenant_id, affiliate_id, status, created_at desc);
 
 create table if not exists affiliate_invoice (
     id varchar(64) primary key,
     tenant_id varchar(64) not null default 'public',
     affiliate_id varchar(64) not null,
+    billing_cycle varchar(64) not null default '',
     amount numeric(12,2) not null check (amount > 0),
-    conversion_count int not null,
+    conversion_count int not null default 0,
     payment_term varchar(32) not null,
     status varchar(32) not null default 'GENERATED',
-    created_at timestamptz not null default now()
+    created_at timestamptz not null default now(),
+    paid_at timestamptz
 );
 comment on table affiliate_invoice is '渠道营销结算发票账单表';
 create index if not exists ix_affiliate_invoice_lookup on affiliate_invoice(tenant_id, affiliate_id, status);
@@ -467,6 +471,34 @@ create table if not exists affiliate_sub_id_stats (
     primary key (tenant_id, affiliate_id, sub1)
 );
 comment on table affiliate_sub_id_stats is 'Sub-ID 维度流式多维统计表';
+
+create table if not exists affiliate_macro_param (
+    id varchar(64) primary key,
+    macro_key varchar(64) not null,
+    display_name varchar(128),
+    description varchar(512),
+    sample_value varchar(256),
+    category varchar(32) not null default 'ATTRIBUTION',
+    status varchar(32) not null default 'ACTIVE',
+    created_at timestamptz not null default now(),
+    constraint uk_macro_param_key unique (macro_key)
+);
+comment on table affiliate_macro_param is '标准追踪宏参数字典表 (平台级全局配置)';
+
+create table if not exists affiliate_platform_macro_mapping (
+    id varchar(64) primary key,
+    platform_code varchar(64) not null,
+    platform_name varchar(128),
+    macro_key varchar(64) not null,
+    platform_macro_token varchar(128) not null,
+    remark varchar(512),
+    status varchar(32) not null default 'ACTIVE',
+    created_at timestamptz not null default now(),
+    updated_at timestamptz not null default now(),
+    constraint uk_platform_macro unique (platform_code, macro_key)
+);
+comment on table affiliate_platform_macro_mapping is '第三方广告平台宏参数映射对照表';
+create index if not exists ix_platform_macro_mapping_code on affiliate_platform_macro_mapping(platform_code, status);
 
 -- =====================================================================================
 -- 14. platform-system: 企业级系统管理中心 (用户、角色、权限、菜单、S3、域名池)

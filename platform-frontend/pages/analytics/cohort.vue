@@ -14,26 +14,26 @@
     <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
       <div class="bg-white rounded-xl p-4 border border-slate-200 shadow-sm">
         <span class="text-xs font-medium text-slate-400">总获客用户数 (Acquired Users)</span>
-        <div class="text-2xl font-bold text-slate-900 mt-1 font-mono">14,250 人</div>
-        <span class="text-[11px] text-slate-500 mt-1 inline-block">过去 30 天自然与买量总和</span>
+        <div class="text-2xl font-bold text-slate-900 mt-1 font-mono">{{ summary.totalUsers.toLocaleString() }} 人</div>
+        <span class="text-[11px] text-slate-500 mt-1 inline-block">当前查询周期获客总和</span>
       </div>
 
       <div class="bg-white rounded-xl p-4 border border-slate-200 shadow-sm">
         <span class="text-xs font-medium text-slate-400">平均获客成本 (Blended CAC)</span>
-        <div class="text-2xl font-bold text-slate-900 mt-1 font-mono">$4.20</div>
+        <div class="text-2xl font-bold text-slate-900 mt-1 font-mono">${{ summary.blendedCac }}</div>
         <span class="text-[11px] text-emerald-600 font-semibold mt-1 inline-block">单客获客支出</span>
       </div>
 
       <div class="bg-white rounded-xl p-4 border border-slate-200 shadow-sm">
         <span class="text-xs font-medium text-slate-400">平均投资回收期 (Avg Payback)</span>
-        <div class="text-2xl font-bold text-indigo-600 mt-1 font-mono">D4.8 天</div>
+        <div class="text-2xl font-bold text-indigo-600 mt-1 font-mono">{{ summary.avgPayback }}</div>
         <span class="text-[11px] text-indigo-600 font-semibold mt-1 inline-block">LTV 覆盖 CAC 均线</span>
       </div>
 
       <div class="bg-white rounded-xl p-4 border border-slate-200 shadow-sm">
         <span class="text-xs font-medium text-slate-400">D30 整体投资回报率 (ROAS)</span>
-        <div class="text-2xl font-bold text-emerald-600 mt-1 font-mono">+168.4%</div>
-        <span class="text-[11px] text-emerald-600 font-semibold mt-1 inline-block">净利润率 +68.4%</span>
+        <div class="text-2xl font-bold text-emerald-600 mt-1 font-mono">{{ summary.avgRoiD30 }}</div>
+        <span class="text-[11px] text-emerald-600 font-semibold mt-1 inline-block">周期内队列 D30 ROI 均值</span>
       </div>
     </div>
 
@@ -73,6 +73,9 @@
             </tr>
           </thead>
           <tbody class="divide-y divide-slate-100 text-xs font-mono">
+            <tr v-if="!cohortData.length && !loading">
+              <td colspan="15" class="py-8 text-center text-slate-400 font-sans text-xs">暂无 Cohort 数据</td>
+            </tr>
             <tr v-for="row in cohortData" :key="row.date" class="hover:bg-slate-50/60 transition-colors">
               <td class="py-3 px-4 font-bold text-slate-800">{{ row.date }}</td>
               <td class="py-3 px-3 text-slate-700">{{ row.users.toLocaleString() }}</td>
@@ -123,13 +126,16 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import DateRangeFilter from '~/components/common/DateRangeFilter.vue'
 import { useApi } from '~/composables/useApi'
+import { useToasts } from '~/composables/useNotification'
 
 const { fetchApi } = useApi()
+const { showToast } = useToasts()
 const selectedRange = ref('30d')
 const loading = ref(false)
+const totals = ref<{ users: number; spend: number }>({ users: 0, spend: 0 })
 
 const getHeatmapStyle = (rate: number | undefined) => {
   if (!rate) return {}
@@ -144,76 +150,46 @@ const getHeatmapStyle = (rate: number | undefined) => {
   }
 }
 
-const cohortData = ref([
-  {
-    date: '2026-08-01',
-    users: 2400,
-    spend: '9600.00',
-    cac: '4.00',
-    retention: { 1: 52.4, 3: 41.2, 7: 32.8, 14: 24.5, 30: 18.2 },
-    ltv: { 0: '2.10', 3: '3.80', 7: '5.40', 30: '11.20' },
-    paybackDay: 7,
-    roiD30: 180.0
-  },
-  {
-    date: '2026-08-05',
-    users: 3100,
-    spend: '13020.00',
-    cac: '4.20',
-    retention: { 1: 55.0, 3: 44.5, 7: 35.1, 14: 26.0, 30: 19.8 },
-    ltv: { 0: '2.30', 3: '4.30', 7: '6.10', 30: '12.50' },
-    paybackDay: 3,
-    roiD30: 197.6
-  },
-  {
-    date: '2026-08-10',
-    users: 2850,
-    spend: '12825.00',
-    cac: '4.50',
-    retention: { 1: 48.2, 3: 36.4, 7: 28.0, 14: 20.1, 30: 15.0 },
-    ltv: { 0: '1.90', 3: '3.40', 7: '4.80', 30: '9.80' },
-    paybackDay: 7,
-    roiD30: 117.8
-  },
-  {
-    date: '2026-08-15',
-    users: 3500,
-    spend: '14000.00',
-    cac: '4.00',
-    retention: { 1: 53.8, 3: 42.0, 7: 33.5, 14: 25.0, 30: 18.9 },
-    ltv: { 0: '2.20', 3: '4.10', 7: '5.90', 30: '11.80' },
-    paybackDay: 3,
-    roiD30: 195.0
-  },
-  {
-    date: '2026-08-20',
-    users: 2400,
-    spend: '10320.00',
-    cac: '4.30',
-    retention: { 1: 51.0, 3: 39.5, 7: 31.0, 14: 22.8, 30: 16.5 },
-    ltv: { 0: '2.00', 3: '3.90', 7: '5.20', 30: '10.50' },
-    paybackDay: 7,
-    roiD30: 144.2
-  }
-])
+const cohortData = ref<any[]>([])
+
+const summary = computed(() => {
+  const users = totals.value.users
+  const spend = totals.value.spend
+  const blendedCac = users > 0 ? (spend / users).toFixed(2) : '0.00'
+  const paybackRows = cohortData.value.filter(r => r.paybackDay !== null && r.paybackDay !== undefined)
+  const avgPayback = paybackRows.length
+    ? `D${(paybackRows.reduce((a, r) => a + Number(r.paybackDay), 0) / paybackRows.length).toFixed(1)} 天`
+    : '未回本'
+  const roiRows = cohortData.value.filter(r => r.roiD30 !== null && r.roiD30 !== undefined)
+  const avgRoi = roiRows.length
+    ? `${(roiRows.reduce((a, r) => a + Number(r.roiD30), 0) / roiRows.length).toFixed(1)}%`
+    : '0.0%'
+  return { totalUsers: users || 0, blendedCac, avgPayback, avgRoiD30: avgRoi }
+})
 
 const loadCohort = async () => {
   loading.value = true
   try {
     const res: any = await fetchApi('/api/v1/reports/cohort')
-    if (res && res.rows && res.rows.length > 0) {
-      cohortData.value = res.rows.map((r: any) => ({
-        date: r.cohortDate,
-        users: r.cohortSize,
-        spend: r.acquisitionCost,
-        cac: r.cac,
-        retention: r.retentionRates || {},
-        ltv: r.cumulativeLtv || {},
-        paybackDay: r.paybackDay,
-        roiD30: r.roiD30 || 0
-      }))
+    cohortData.value = (res?.rows || []).map((r: any) => ({
+      date: r.cohortDate,
+      users: Number(r.cohortSize || 0),
+      spend: r.acquisitionCost,
+      cac: r.cac,
+      retention: r.retentionRates || {},
+      ltv: r.cumulativeLtv || {},
+      paybackDay: r.paybackDay,
+      roiD30: r.roiD30 || 0
+    }))
+    totals.value = {
+      users: Number(res?.totalAcquiredUsers || 0),
+      spend: Number(res?.totalSpend || 0)
     }
-  } catch (ignored) {} finally {
+  } catch (err: any) {
+    cohortData.value = []
+    totals.value = { users: 0, spend: 0 }
+    showToast(`加载 Cohort 报表失败：${err.message || err}`, 'error', 5000)
+  } finally {
     loading.value = false
   }
 }

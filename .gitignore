@@ -5,7 +5,7 @@ target/
 *.log
 .DS_Store
 
-node_moduiles/
+node_modules/
 .nuxt/
 /doc/
 .output

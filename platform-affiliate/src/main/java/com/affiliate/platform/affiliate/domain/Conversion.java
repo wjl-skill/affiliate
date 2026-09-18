@@ -26,10 +26,13 @@ public record Conversion(
         long ctitSeconds,
         Status status,
         String rejectionReason,
+        String sub1,
+        PostbackStatus postbackStatus,
         Instant createdAt
 ) {
     public Conversion {
         status = status == null ? Status.PENDING : status;
+        postbackStatus = postbackStatus == null ? PostbackStatus.PENDING : postbackStatus;
         if (saleAmount == null) saleAmount = BigDecimal.ZERO;
         createdAt = createdAt == null ? Instant.now() : createdAt;
     }
@@ -45,17 +48,33 @@ public record Conversion(
         FRAUD_SUSPECTED
     }
 
+    public enum PostbackStatus {
+        /** 尚未向渠道发起回传（风控拦截或未配置 Postback 模板） */
+        PENDING,
+        /** 已成功回传渠道 Postback URL */
+        DELIVERED,
+        /** 回传执行失败 */
+        FAILED
+    }
+
     /**
      * 审核通过转化
      */
     public Conversion approve() {
-        return new Conversion(id, tenantId, clickId, txId, offerId, affiliateId, payout, revenue, saleAmount, ctitSeconds, Status.APPROVED, null, createdAt);
+        return new Conversion(id, tenantId, clickId, txId, offerId, affiliateId, payout, revenue, saleAmount, ctitSeconds, Status.APPROVED, null, sub1, postbackStatus, createdAt);
     }
 
     /**
      * 审核驳回转化
      */
     public Conversion reject(String reason) {
-        return new Conversion(id, tenantId, clickId, txId, offerId, affiliateId, payout, revenue, saleAmount, ctitSeconds, Status.REJECTED, reason, createdAt);
+        return new Conversion(id, tenantId, clickId, txId, offerId, affiliateId, payout, revenue, saleAmount, ctitSeconds, Status.REJECTED, reason, sub1, postbackStatus, createdAt);
+    }
+
+    /**
+     * 更新下游 Postback 回传执行状态
+     */
+    public Conversion withPostbackStatus(PostbackStatus newStatus) {
+        return new Conversion(id, tenantId, clickId, txId, offerId, affiliateId, payout, revenue, saleAmount, ctitSeconds, status, rejectionReason, sub1, newStatus, createdAt);
     }
 }

@@ -216,6 +216,7 @@ import StatusTag from '~/components/common/StatusTag.vue'
 import ModalDialog from '~/components/common/ModalDialog.vue'
 import { useApi } from '~/composables/useApi'
 import { useToasts } from '~/composables/useNotification'
+import { flattenMenuTree } from '~/utils/menu'
 
 const { fetchApi } = useApi()
 const { showToast } = useToasts()
@@ -230,21 +231,19 @@ const selectedPerms = ref<string[]>([])
 const selectedMenus = ref<string[]>([])
 const groupedPermissions = ref<Record<string, any[]>>({})
 
-const allMenuOptions = [
-  { id: 'menu-dashboard', title: '监控大盘', path: '/', icon: '📊' },
-  { id: 'menu-offers', title: 'Offer 计划', path: '/offers', icon: '🎯' },
-  { id: 'menu-smartlinks', title: 'SmartLink 分流', path: '/smartlinks', icon: '⚡' },
-  { id: 'menu-affiliates', title: '渠道客管理', path: '/affiliates', icon: '🤝' },
-  { id: 'menu-conversions', title: '转化与归因', path: '/conversions', icon: '🔄' },
-  { id: 'menu-finance', title: '财务账期出账', path: '/finance', icon: '💰' },
-  { id: 'menu-analytics', title: 'Sub-ID 报表', path: '/analytics', icon: '📈' },
-  { id: 'menu-sys-users', title: '用户管理', path: '/system/users', icon: '👥' },
-  { id: 'menu-sys-roles', title: '角色管理', path: '/system/roles', icon: '🛡️' },
-  { id: 'menu-sys-menus', title: '菜单管理', path: '/system/menus', icon: '📑' },
-  { id: 'menu-sys-perms', title: '权限字典', path: '/system/permissions', icon: '🔑' },
-  { id: 'menu-sys-s3', title: 'S3 存储配置', path: '/system/s3', icon: '🗄️' },
-  { id: 'menu-sys-domains', title: '域名池管理', path: '/system/domains', icon: '🌐' }
-]
+// 菜单可选项从 GET /api/v1/system/menus 树形接口拍平加载
+const allMenuOptions = ref<Array<{ id: string; title: string; path: string; icon: string }>>([])
+
+const loadMenuOptions = async () => {
+  try {
+    const tree = await fetchApi<any[]>('/api/v1/system/menus')
+    allMenuOptions.value = flattenMenuTree(tree || [])
+      .map(n => ({ id: n.id, title: n.title, path: n.path, icon: n.icon }))
+  } catch (err: any) {
+    allMenuOptions.value = []
+    showToast(`加载菜单树失败：${err?.message || '服务请求失败'}`, 'error', 5000)
+  }
+}
 
 const createForm = ref({
   roleCode: '',
@@ -266,30 +265,10 @@ const loadRoles = async () => {
   loading.value = true
   try {
     const res = await fetchApi<any[]>('/api/v1/system/roles')
-    roles.value = res
-  } catch (err) {
-    roles.value = [
-      {
-        id: 'role-super-admin',
-        roleCode: 'SUPER_ADMIN',
-        roleName: '超级管理员',
-        dataScope: 'ALL',
-        isSystem: true,
-        status: 'ACTIVE',
-        permissionCodes: ['*'],
-        menuIds: allMenuOptions.map(m => m.id)
-      },
-      {
-        id: 'role-aff-manager',
-        roleCode: 'AFFILIATE_MANAGER',
-        roleName: '网盟商务主管',
-        dataScope: 'TENANT_ONLY',
-        isSystem: false,
-        status: 'ACTIVE',
-        permissionCodes: ['offer:read', 'offer:write', 'smartlink:manage', 'affiliate:read', 'affiliate:write', 'conversion:audit'],
-        menuIds: ['menu-dashboard', 'menu-offers', 'menu-smartlinks', 'menu-affiliates', 'menu-conversions', 'menu-analytics']
-      }
-    ]
+    roles.value = res || []
+  } catch (err: any) {
+    roles.value = []
+    showToast(`加载角色列表失败：${err?.message || '服务请求失败'}`, 'error', 5000)
   } finally {
     loading.value = false
   }
@@ -298,21 +277,10 @@ const loadRoles = async () => {
 const loadPermissions = async () => {
   try {
     const res = await fetchApi<Record<string, any[]>>('/api/v1/system/permissions')
-    groupedPermissions.value = res
-  } catch (e) {
-    groupedPermissions.value = {
-      '用户管理': [
-        { code: 'system:user:read', name: '用户查看' },
-        { code: 'system:user:write', name: '用户维护' }
-      ],
-      'Offer计划': [
-        { code: 'offer:read', name: '计划查询' },
-        { code: 'offer:write', name: '计划维护' }
-      ],
-      '财务结算': [
-        { code: 'finance:settle', name: '账期结算' }
-      ]
-    }
+    groupedPermissions.value = res || {}
+  } catch (err: any) {
+    groupedPermissions.value = {}
+    showToast(`加载权限字典失败：${err?.message || '服务请求失败'}`, 'error', 5000)
   }
 }
 
@@ -325,38 +293,45 @@ const openPermissionsModal = (role: any) => {
 const savePermissions = async () => {
   if (!selectedRole.value) return
   try {
-    await fetchApi(`/api/v1/system/roles/${selectedRole.value.id}/permissions`, {
+    const updated = await fetchApi<any>(`/api/v1/system/roles/${selectedRole.value.id}/permissions`, {
       method: 'POST',
       body: selectedPerms.value
     })
-  } catch (e) {}
-
-  selectedRole.value.permissionCodes = [...selectedPerms.value]
-  showPermsModal.value = false
-  showToast('角色权限已更新生效', 'success')
+    selectedRole.value.permissionCodes = Array.from(updated?.permissionCodes ?? selectedPerms.value)
+    showPermsModal.value = false
+    showToast('角色权限已更新生效', 'success')
+  } catch (err: any) {
+    showToast(`权限保存失败：${err?.message || '服务请求失败'}`, 'error', 5000)
+  }
 }
 
 const openMenusModal = (role: any) => {
   selectedRole.value = role
   selectedMenus.value = [...(role.menuIds || [])]
+  if (allMenuOptions.value.length === 0) loadMenuOptions()
   showMenusModal.value = true
 }
 
 const saveMenus = async () => {
   if (!selectedRole.value) return
   try {
-    await fetchApi(`/api/v1/system/roles/${selectedRole.value.id}/menus`, {
+    const updated = await fetchApi<any>(`/api/v1/system/roles/${selectedRole.value.id}/menus`, {
       method: 'POST',
       body: selectedMenus.value
     })
-  } catch (e) {}
-
-  selectedRole.value.menuIds = [...selectedMenus.value]
-  showMenusModal.value = false
-  showToast('角色菜单授权已更新', 'success')
+    selectedRole.value.menuIds = Array.from(updated?.menuIds ?? selectedMenus.value)
+    showMenusModal.value = false
+    showToast('角色菜单授权已更新', 'success')
+  } catch (err: any) {
+    showToast(`菜单授权保存失败：${err?.message || '服务请求失败'}`, 'error', 5000)
+  }
 }
 
 const submitCreateRole = async () => {
+  if (!createForm.value.roleCode || !createForm.value.roleName) {
+    showToast('请填写角色代码与角色名称', 'warning')
+    return
+  }
   const payload = {
     roleCode: createForm.value.roleCode,
     roleName: createForm.value.roleName,
@@ -370,23 +345,16 @@ const submitCreateRole = async () => {
       body: payload
     })
     if (res) roles.value.unshift(res)
-  } catch (e) {
-    roles.value.unshift({
-      id: 'role-' + Math.floor(Math.random() * 9000 + 1000),
-      ...payload,
-      isSystem: false,
-      status: 'ACTIVE',
-      permissionCodes: [],
-      menuIds: []
-    })
+    showCreateModal.value = false
+    showToast('自定义角色创建成功', 'success')
+  } catch (err: any) {
+    showToast(`角色创建失败：${err?.message || '服务请求失败'}`, 'error', 5000)
   }
-
-  showCreateModal.value = false
-  showToast('自定义角色创建成功', 'success')
 }
 
 onMounted(() => {
   loadRoles()
   loadPermissions()
+  loadMenuOptions()
 })
 </script>

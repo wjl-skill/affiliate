@@ -17,6 +17,7 @@ import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * 商业级网盟反欺诈与流量质检风控引擎 (Commercial Affiliate Anti-Fraud & Risk Engine)
@@ -61,6 +62,12 @@ public class AffiliateAntiFraudEngine {
     private final Deque<RiskLogEntry> recentRiskLogs = new ConcurrentLinkedDeque<>();
     private static final int MAX_LOG_SIZE = 200;
 
+    // 风控汇总累计计数器
+    private final AtomicLong totalInspections = new AtomicLong();
+    private final AtomicLong blockedInspections = new AtomicLong();
+    private final AtomicLong ctitAnomalyCount = new AtomicLong();
+    private final AtomicLong datacenterIpCount = new AtomicLong();
+
     public AffiliateAntiFraudEngine() {
         this(null, null);
     }
@@ -103,6 +110,8 @@ public class AffiliateAntiFraudEngine {
      */
     public FraudInspectionResult inspectConversion(ClickSession session, String txId, Instant now) {
         if (session == null) {
+            totalInspections.incrementAndGet();
+            blockedInspections.incrementAndGet();
             return new FraudInspectionResult(false, Conversion.Status.REJECTED, "CLICK_SESSION_NOT_FOUND", 100, List.of("NO_SESSION"));
         }
 
@@ -114,7 +123,9 @@ public class AffiliateAntiFraudEngine {
         if (!processedTxIds.add(txKey)) {
             riskScore = 100;
             riskReasons.add("DUPLICATE_TRANSACTION_ID");
-            recordRiskLog(session, txId, riskScore, riskReasons, "AUTO_REJECTED");
+            totalInspections.incrementAndGet();
+            blockedInspections.incrementAndGet();
+            recordRiskLog(session, txId, ctitOf(session, now), riskScore, riskReasons, "AUTO_REJECTED");
             return new FraudInspectionResult(false, Conversion.Status.REJECTED, "DUPLICATE_TRANSACTION_ID", riskScore, riskReasons);
         }
 
@@ -157,7 +168,15 @@ public class AffiliateAntiFraudEngine {
             riskReasons.add("BOT_OR_HEADLESS_USER_AGENT");
         }
 
-        // 6. 判定最终风控建议
+        // 6. 累计风控汇总计数
+        totalInspections.incrementAndGet();
+        // 仅统计 <3 秒极速转化（点击注入级别），与大盘"异常 CTIT 极速转化 (< 3秒)"口径一致
+        if (riskReasons.contains("FAST_CONVERSION_CTIT_UNDER_3S")) {
+            ctitAnomalyCount.incrementAndGet();
+        }
+        if (riskReasons.contains("DATACENTER_PROXY_IP_DETECTED")) datacenterIpCount.incrementAndGet();
+
+        // 7. 判定最终风控建议
         Conversion.Status recommendedStatus;
         boolean passed;
 
@@ -179,6 +198,7 @@ public class AffiliateAntiFraudEngine {
         if (riskScore >= 70) {
             recommendedStatus = Conversion.Status.FRAUD_SUSPECTED;
             passed = false;
+            blockedInspections.incrementAndGet();
         } else if (riskScore >= 35) {
             recommendedStatus = Conversion.Status.PENDING; // 需人工审核
             passed = true;
@@ -187,7 +207,7 @@ public class AffiliateAntiFraudEngine {
             passed = true;
         }
 
-        recordRiskLog(session, txId, riskScore, riskReasons, passed ? (riskScore >= 35 ? "SUSPICIOUS_HELD" : "APPROVED") : "FRAUD_SUSPECTED");
+        recordRiskLog(session, txId, ctitSeconds, riskScore, riskReasons, passed ? (riskScore >= 35 ? "SUSPICIOUS_HELD" : "APPROVED") : "FRAUD_SUSPECTED");
 
         return new FraudInspectionResult(passed, recommendedStatus, primaryReason, riskScore, riskReasons);
     }
@@ -303,7 +323,23 @@ public class AffiliateAntiFraudEngine {
         return List.copyOf(recentRiskLogs);
     }
 
-    private void recordRiskLog(ClickSession session, String txId, int score, List<String> reasons, String action) {
+    /**
+     * 累计风控汇总指标（服务重启后重新计数）
+     */
+    public Map<String, Long> getCumulativeCounters() {
+        return Map.of(
+                "totalInspections", totalInspections.get(),
+                "blockedInspections", blockedInspections.get(),
+                "ctitAnomalyCount", ctitAnomalyCount.get(),
+                "datacenterIpCount", datacenterIpCount.get()
+        );
+    }
+
+    private static Long ctitOf(ClickSession session, Instant now) {
+        return session.createdAt() != null ? Duration.between(session.createdAt(), now).toSeconds() : null;
+    }
+
+    private void recordRiskLog(ClickSession session, String txId, Long ctitSeconds, int score, List<String> reasons, String action) {
         RiskLogEntry entry = new RiskLogEntry(
                 session.clickId(),
                 session.offerId(),
@@ -313,7 +349,8 @@ public class AffiliateAntiFraudEngine {
                 score,
                 reasons,
                 action,
-                Instant.now()
+                Instant.now(),
+                ctitSeconds
         );
         recentRiskLogs.addFirst(entry);
         while (recentRiskLogs.size() > MAX_LOG_SIZE) {
@@ -332,7 +369,7 @@ public class AffiliateAntiFraudEngine {
                             session.clickId(),
                             session.affiliateId(),
                             session.ip(),
-                            null,
+                            ctitSeconds != null ? BigDecimal.valueOf(ctitSeconds) : null,
                             score,
                             reasons != null && !reasons.isEmpty() ? reasons.get(0) : "NONE",
                             action,
@@ -366,6 +403,7 @@ public class AffiliateAntiFraudEngine {
             int riskScore,
             List<String> riskReasons,
             String actionVerdict,
-            Instant timestamp
+            Instant timestamp,
+            Long ctitSeconds
     ) {}
 }

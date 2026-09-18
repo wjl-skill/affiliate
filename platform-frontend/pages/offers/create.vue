@@ -18,12 +18,11 @@
       <!-- 基础字段 -->
       <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div>
-          <label class="block text-xs font-medium text-slate-700 mb-1">Offer 计划 ID <span class="text-rose-500">*</span></label>
+          <label class="block text-xs font-medium text-slate-700 mb-1">Offer 计划 ID</label>
           <input
             v-model="form.id"
             type="text"
-            required
-            placeholder="例如: off-summer-01"
+            placeholder="留空则由服务端自动生成"
             class="w-full rounded-lg border border-slate-300 px-3 py-2 text-xs text-slate-900 font-mono focus:border-brand-500 focus:ring-brand-500"
           />
         </div>
@@ -152,22 +151,21 @@ import { useApi } from '~/composables/useApi'
 import { useToasts } from '~/composables/useNotification'
 
 const router = useRouter()
-const { fetchApi } = useApi()
+const { fetchApi, currentTenant } = useApi()
 const { showToast } = useToasts()
 
 const submitting = ref(false)
 
 const form = ref({
-  id: 'off-' + Math.floor(Math.random() * 900 + 100),
-  tenantId: 'tenant-1',
+  id: '',
   advertiserId: '',
   title: '',
-  landingPageUrl: 'https://brand.com/deal?click_id={click_id}&sub1={sub1}',
+  landingPageUrl: '',
   payoutType: 'CPA',
-  defaultPayout: '5.00',
-  defaultRevenue: '8.00',
+  defaultPayout: '',
+  defaultRevenue: '',
   status: 'ACTIVE',
-  dailyConversionCap: 100,
+  dailyConversionCap: 0,
   dailyRevenueCap: null,
   fallbackOfferId: '',
   allowedCountries: ['US', 'GB'],
@@ -179,13 +177,12 @@ const submitForm = async () => {
   try {
     await fetchApi('/api/v1/affiliate/offers', {
       method: 'POST',
-      body: form.value
+      body: { ...form.value, tenantId: currentTenant.value }
     })
     showToast('推广计划创建成功！', 'success')
     router.push('/offers')
   } catch (err: any) {
-    showToast('已完成本地暂存保存', 'success')
-    router.push('/offers')
+    showToast(`推广计划创建失败：${err.message || err}`, 'error', 5000)
   } finally {
     submitting.value = false
   }

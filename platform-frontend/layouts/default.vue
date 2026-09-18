@@ -54,13 +54,13 @@
         </div>
       </nav>
 
-      <!-- 底部系统健康状态 -->
+      <!-- 底部系统运行状态 -->
       <div class="p-4 border-t border-slate-800 bg-slate-950/40 text-xs">
         <div class="flex items-center justify-between text-slate-400">
-          <span>RTB 撮合引擎</span>
-          <span class="inline-flex items-center gap-1 text-emerald-400 font-semibold">
-            <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping"></span>
-            0.10ms P99
+          <span>后端 API 服务</span>
+          <span class="inline-flex items-center gap-1 font-semibold" :class="apiOnline ? 'text-emerald-400' : 'text-rose-400'">
+            <span class="w-1.5 h-1.5 rounded-full animate-ping" :class="apiOnline ? 'bg-emerald-400' : 'bg-rose-400'"></span>
+            {{ apiOnline ? '在线' : '未连通' }}
           </span>
         </div>
         <div class="mt-2 text-[11px] text-slate-500 font-mono">
@@ -83,20 +83,26 @@
           <div class="flex items-center gap-2 text-xs bg-slate-100 rounded-lg px-3 py-1.5 border border-slate-200">
             <span class="text-slate-500 font-medium">租户:</span>
             <select v-model="currentTenant" class="bg-transparent font-semibold text-slate-800 focus:outline-none cursor-pointer">
-              <option value="tenant-1">Tenant-1 (生产空间)</option>
-              <option value="tenant-vip">Tenant-VIP (大户独享)</option>
+              <option v-for="t in tenantList" :key="t.id" :value="t.id">{{ t.name }}</option>
             </select>
           </div>
 
-          <!-- 用户头像与角色 -->
+          <!-- 当前登录用户与退出 -->
           <div class="flex items-center gap-2.5 pl-3 border-l border-slate-200">
-            <div class="w-8 h-8 rounded-full bg-slate-200 flex items-center justify-center font-bold text-slate-600 text-xs">
-              AD
+            <div class="w-8 h-8 rounded-full bg-gradient-to-tr from-brand-600 to-indigo-400 flex items-center justify-center font-bold text-white text-xs">
+              {{ userInitials }}
             </div>
             <div class="text-left">
-              <p class="text-xs font-bold text-slate-800 leading-none">admin</p>
-              <span class="text-[10px] text-brand-600 font-semibold uppercase">SUPER_ADMIN</span>
+              <p class="text-xs font-bold text-slate-800 leading-none">{{ authUser?.displayName || authUser?.username || '未登录' }}</p>
+              <span class="text-[10px] text-brand-600 font-semibold uppercase">{{ primaryRole }}</span>
             </div>
+            <button
+              class="ml-1 text-xs font-semibold text-slate-500 hover:text-rose-600 border border-slate-200 hover:border-rose-200 rounded-lg px-2.5 py-1 transition-colors"
+              :disabled="loggingOut"
+              @click="handleLogout"
+            >
+              {{ loggingOut ? '...' : '退出' }}
+            </button>
           </div>
         </div>
       </header>
@@ -110,14 +116,31 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { useApi } from '~/composables/useApi'
+import { useAuth } from '~/composables/useAuth'
+import { useToasts } from '~/composables/useNotification'
 
 const route = useRoute()
 const { currentTenant, fetchApi } = useApi()
+const { user: authUser, logout } = useAuth()
+const { showToast } = useToasts()
 
-// 默认预置菜单 (提供离线快速渲染与接口降级兜底)
+const loggingOut = ref(false)
+const userInitials = computed(() => {
+  const name = authUser.value?.displayName || authUser.value?.username || '?'
+  return name.slice(0, 2).toUpperCase()
+})
+const primaryRole = computed(() => authUser.value?.roles?.[0] || 'VIEWER')
+
+const handleLogout = async () => {
+  loggingOut.value = true
+  await logout()
+  window.location.href = '/login'
+}
+
+// 本地导航配置：接口不可用时保证侧边栏可正常浏览（数据页面均会展示真实错误空态）
 const defaultBusinessMenus = [
   { id: 'm-dash', title: '监控大盘', path: '/', icon: '📊' },
   { id: 'm-off', title: 'Offer 推广计划', path: '/offers', icon: '🎯' },
@@ -128,7 +151,8 @@ const defaultBusinessMenus = [
   { id: 'm-fin', title: '财务出账结算', path: '/finance', icon: '💰' },
   { id: 'm-payout', title: '批量打款与结汇', path: '/billing/payouts', icon: '💳' },
   { id: 'm-rep', title: 'Sub-ID 多维报表', path: '/analytics', icon: '📈' },
-  { id: 'm-cohort', title: 'Cohort留存与LTV', path: '/analytics/cohort', icon: '🧬' }
+  { id: 'm-cohort', title: 'Cohort留存与LTV', path: '/analytics/cohort', icon: '🧬' },
+  { id: 'm-macro', title: '宏参数与映射', path: '/affiliate/macros', icon: '🧩' }
 ]
 
 const defaultSystemMenus = [
@@ -143,7 +167,16 @@ const defaultSystemMenus = [
 const businessMenus = ref<any[]>(defaultBusinessMenus)
 const systemMenus = ref<any[]>(defaultSystemMenus)
 
+// 租户列表从 GET /api/v1/tenants 加载；加载失败时仅保留当前租户 ID
+const tenantList = ref<Array<{ id: string; name: string }>>([{ id: currentTenant.value, name: currentTenant.value }])
+const apiOnline = ref(false)
+
 const allMenus = computed(() => [...businessMenus.value, ...systemMenus.value])
+
+// 切换租户后整页刷新，确保各页面接口以新的 X-Tenant-ID 重新拉取数据
+watch(currentTenant, () => {
+  window.location.reload()
+})
 
 const currentPageTitle = computed(() => {
   const item = allMenus.value.find(i => i.path === route.path)
@@ -157,12 +190,29 @@ const loadDynamicMenus = async () => {
       businessMenus.value = tree.filter(m => !m.path.startsWith('/system/'))
       systemMenus.value = tree.filter(m => m.path.startsWith('/system/'))
     }
-  } catch (err) {
-    // 降级使用 default menus
+  } catch (err: any) {
+    showToast(`加载动态菜单失败：${err?.message || '服务请求失败'}`, 'error', 5000)
+  }
+}
+
+const loadTenants = async () => {
+  try {
+    const list = await fetchApi<any[]>('/api/v1/tenants')
+    apiOnline.value = true
+    if (list && list.length > 0) {
+      tenantList.value = list.map(t => ({ id: t.id, name: `${t.name} (${t.id})` }))
+      if (!list.some(t => t.id === currentTenant.value)) {
+        currentTenant.value = list[0].id
+      }
+    }
+  } catch (err: any) {
+    apiOnline.value = false
+    showToast(`加载租户列表失败：${err?.message || '服务请求失败'}`, 'error', 5000)
   }
 }
 
 onMounted(() => {
+  loadTenants()
   loadDynamicMenus()
 })
 </script>

@@ -59,7 +59,7 @@
               >
                 🧪 测试路由
               </button>
-              <CopyButton :text="`http://localhost:8080/affiliate/click?smartlink_id=${row.id}&aff_id=AFF_ID`">
+              <CopyButton :text="trackingUrl(row.id)">
                 分流链接
               </CopyButton>
             </div>
@@ -149,8 +149,7 @@
           <input
             v-model="createForm.id"
             type="text"
-            required
-            placeholder="例如: smart-global-ecom"
+            placeholder="留空则由服务端自动生成"
             class="w-full rounded-lg border border-slate-300 px-3 py-2 text-slate-900 font-mono"
           />
         </div>
@@ -194,23 +193,23 @@ import ModalDialog from '~/components/common/ModalDialog.vue'
 import { useApi } from '~/composables/useApi'
 import { useToasts } from '~/composables/useNotification'
 
-const { fetchApi } = useApi()
+const { fetchApi, currentTenant } = useApi()
 const { showToast } = useToasts()
 
 const loading = ref(false)
 const showCreateModal = ref(false)
 const smartLinks = ref<any[]>([])
 
-const simSmartLinkId = ref('smart-ecom-01')
+const simSmartLinkId = ref('')
 const simCountry = ref('US')
 const simDeviceType = ref(1)
 const simResult = ref<any>(null)
 
 const createForm = ref({
-  id: 'smart-' + Math.floor(Math.random() * 900 + 100),
+  id: '',
   name: '',
   category: 'E-Commerce',
-  targetOffersText: 'off-101, off-102',
+  targetOffersText: '',
   routingStrategy: 'HIGHEST_EPC'
 })
 
@@ -221,29 +220,16 @@ const columns = [
   { key: 'actions', label: '操作' }
 ]
 
+const trackingUrl = (smartLinkId: string) =>
+  `${window.location.origin}/affiliate/click?smartlink_id=${smartLinkId}&aff_id=AFF_ID`
+
 const loadSmartLinks = async () => {
   loading.value = true
   try {
-    const res = await fetchApi<any[]>('/api/v1/affiliate/smartlinks')
-    smartLinks.value = res
-  } catch (err) {
-    // 降级兜底数据
-    smartLinks.value = [
-      {
-        id: 'smart-ecom-01',
-        name: '全球电商综合智能分流',
-        category: 'E-Commerce',
-        targetOfferIds: ['off-101', 'off-102'],
-        routingStrategy: 'HIGHEST_EPC'
-      },
-      {
-        id: 'smart-fintech-02',
-        name: '北美金融信贷 SmartLink',
-        category: 'Finance',
-        targetOfferIds: ['off-201'],
-        routingStrategy: 'HIGHEST_EPC'
-      }
-    ]
+    smartLinks.value = await fetchApi<any[]>('/api/v1/affiliate/smartlinks') || []
+  } catch (err: any) {
+    smartLinks.value = []
+    showToast(`加载 SmartLink 列表失败：${err.message || err}`, 'error', 5000)
   } finally {
     loading.value = false
   }
@@ -255,30 +241,33 @@ const selectForSimulation = (row: any) => {
 }
 
 const runSimulation = async () => {
+  if (!simSmartLinkId.value.trim()) {
+    showToast('请先输入或选择测试目标 SmartLink', 'warning')
+    return
+  }
+  simResult.value = null
   try {
     const res = await fetchApi<any>(`/api/v1/affiliate/smartlinks/${simSmartLinkId.value}/simulate?country=${simCountry.value}&deviceType=${simDeviceType.value}`)
-    if (res) {
+    if (res && res.id) {
       simResult.value = res
       showToast('TDS 仿真计算成功', 'success')
-      return
+    } else {
+      showToast('该 SmartLink 当前无可用候选 Offer 命中路由', 'warning')
     }
-  } catch (e) {}
-
-  // 兜底演算
-  simResult.value = {
-    id: 'off-101',
-    title: 'Nike 2026 Summer CPA (EPC 榜首)',
-    defaultPayout: '5.00',
-    defaultRevenue: '8.00'
+  } catch (err: any) {
+    showToast(`TDS 仿真计算失败：${err.message || err}`, 'error', 5000)
   }
-  showToast('TDS 仿真计算成功', 'success')
 }
 
 const createSmartLink = async () => {
+  if (!createForm.value.name.trim()) {
+    showToast('请填写 SmartLink 名称', 'warning')
+    return
+  }
   const ids = createForm.value.targetOffersText.split(',').map(s => s.trim()).filter(Boolean)
   const payload = {
     id: createForm.value.id,
-    tenantId: 'tenant-1',
+    tenantId: currentTenant.value,
     name: createForm.value.name,
     category: createForm.value.category,
     targetOfferIds: ids,
@@ -286,15 +275,16 @@ const createSmartLink = async () => {
   }
 
   try {
-    await fetchApi('/api/v1/affiliate/smartlinks', {
+    const saved = await fetchApi<any>('/api/v1/affiliate/smartlinks', {
       method: 'POST',
       body: payload
     })
-  } catch (e) {}
-
-  smartLinks.value.unshift(payload)
-  showCreateModal.value = false
-  showToast('SmartLink 创建成功', 'success')
+    smartLinks.value.unshift(saved)
+    showCreateModal.value = false
+    showToast('SmartLink 创建成功', 'success')
+  } catch (err: any) {
+    showToast(`SmartLink 创建失败：${err.message || err}`, 'error', 5000)
+  }
 }
 
 onMounted(() => {

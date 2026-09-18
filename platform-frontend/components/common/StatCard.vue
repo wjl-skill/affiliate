@@ -18,7 +18,7 @@
       >
         {{ trend >= 0 ? '↑ +' : '↓ ' }}{{ trend }}%
       </span>
-      <span class="text-slate-400">较昨日同期</span>
+      <span class="text-slate-400">较上一周期</span>
     </div>
   </div>
 </template>

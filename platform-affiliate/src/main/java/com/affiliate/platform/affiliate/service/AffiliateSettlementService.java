@@ -4,6 +4,7 @@ import com.affiliate.platform.affiliate.domain.AffiliatePartner;
 import com.affiliate.platform.affiliate.domain.Conversion;
 import com.affiliate.platform.entity.AffiliateInvoiceEntity;
 import com.affiliate.platform.mapper.AffiliateInvoiceMapper;
+import com.affiliate.platform.tenant.TenantContext;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
@@ -60,6 +61,7 @@ public class AffiliateSettlementService {
 
         List<Conversion> approvedList = postbackService.listConversions().stream()
                 .filter(c -> c.affiliateId().equalsIgnoreCase(affiliateId) && c.status() == Conversion.Status.APPROVED)
+                .filter(c -> c.tenantId() == null || c.tenantId().equalsIgnoreCase(partner.tenantId()))
                 .toList();
 
         if (approvedList.isEmpty()) {
@@ -75,15 +77,19 @@ public class AffiliateSettlementService {
         }
 
         String invoiceId = "inv_" + UUID.randomUUID().toString().replace("-", "");
+        String billingCycle = "CYCLE_" + Instant.now().toString().substring(0, 7);
+        Instant issuedAt = Instant.now();
         AffiliateInvoice invoice = new AffiliateInvoice(
                 invoiceId,
                 partner.tenantId(),
                 affiliateId,
+                billingCycle,
                 totalPayout,
                 approvedList.size(),
                 partner.paymentTerm(),
                 InvoiceStatus.GENERATED,
-                Instant.now()
+                issuedAt,
+                null
         );
 
         if (invoiceMapper != null) {
@@ -91,11 +97,12 @@ public class AffiliateSettlementService {
                     invoiceId,
                     partner.tenantId(),
                     affiliateId,
-                    "CYCLE_" + Instant.now().toString().substring(0, 7),
+                    billingCycle,
                     totalPayout,
+                    approvedList.size(),
                     InvoiceStatus.GENERATED.name(),
                     partner.paymentTerm().name(),
-                    Instant.now(),
+                    issuedAt,
                     null
             );
             invoiceMapper.insert(entity);
@@ -106,34 +113,89 @@ public class AffiliateSettlementService {
         return Optional.of(invoice);
     }
 
+    /** 当前请求线程绑定的租户；非请求线程（离线测试）为空时不做租户收窄 */
+    private static Optional<String> requestTenant() {
+        String tenant = TenantContext.get();
+        return tenant != null && !tenant.isBlank() ? Optional.of(tenant) : Optional.empty();
+    }
+
     public List<AffiliateInvoice> listInvoices() {
         if (invoiceMapper != null) {
             QueryWrapper<AffiliateInvoiceEntity> qw = new QueryWrapper<>();
+            requestTenant().ifPresent(t -> qw.eq("tenant_id", t));
             qw.orderByDesc("created_at").last("LIMIT 1000");
             List<AffiliateInvoiceEntity> list = invoiceMapper.selectList(qw);
-            return list.stream().map(e -> new AffiliateInvoice(
-                    e.getId(),
-                    e.getTenantId(),
-                    e.getAffiliateId(),
-                    e.getAmount(),
-                    1,
-                    AffiliatePartner.PaymentTerm.valueOf(e.getPaymentTerm()),
-                    InvoiceStatus.valueOf(e.getStatus()),
-                    e.getCreatedAt()
-            )).toList();
+            return list.stream().map(this::toDomain).toList();
         }
-        return List.copyOf(fallbackInvoices.values());
+        String tenant = requestTenant().orElse(null);
+        return fallbackInvoices.values().stream()
+                .filter(inv -> tenant == null || tenant.equals(inv.tenantId()))
+                .toList();
+    }
+
+    /**
+     * 将结算发票标记为已支付 (GENERATED -> PAID)，仅限当前租户
+     *
+     * @param invoiceId 发票 ID
+     * @return 更新后的发票，未找到或跨租户时为 empty
+     */
+    public Optional<AffiliateInvoice> markInvoicePaid(String invoiceId) {
+        if (invoiceId == null || invoiceId.isBlank()) return Optional.empty();
+
+        if (invoiceMapper != null) {
+            AffiliateInvoiceEntity entity = invoiceMapper.selectById(invoiceId);
+            if (entity == null) return Optional.empty();
+            String tenant = requestTenant().orElse(null);
+            if (tenant != null && !tenant.equals(entity.getTenantId())) {
+                return Optional.empty();
+            }
+            entity.setStatus(InvoiceStatus.PAID.name());
+            entity.setPaidAt(Instant.now());
+            invoiceMapper.updateById(entity);
+            return Optional.of(toDomain(entity));
+        }
+
+        AffiliateInvoice invoice = fallbackInvoices.get(invoiceId);
+        if (invoice == null) return Optional.empty();
+        String tenant = requestTenant().orElse(null);
+        if (tenant != null && !tenant.equals(invoice.tenantId())) {
+            return Optional.empty();
+        }
+        AffiliateInvoice paid = new AffiliateInvoice(
+                invoice.id(), invoice.tenantId(), invoice.affiliateId(), invoice.billingCycle(),
+                invoice.amount(), invoice.conversionCount(), invoice.paymentTerm(),
+                InvoiceStatus.PAID, invoice.createdAt(), Instant.now()
+        );
+        fallbackInvoices.put(invoiceId, paid);
+        return Optional.of(paid);
+    }
+
+    private AffiliateInvoice toDomain(AffiliateInvoiceEntity e) {
+        return new AffiliateInvoice(
+                e.getId(),
+                e.getTenantId(),
+                e.getAffiliateId(),
+                e.getBillingCycle(),
+                e.getAmount(),
+                e.getConversionCount() == null ? 0 : e.getConversionCount(),
+                AffiliatePartner.PaymentTerm.valueOf(e.getPaymentTerm()),
+                InvoiceStatus.valueOf(e.getStatus()),
+                e.getCreatedAt(),
+                e.getPaidAt()
+        );
     }
 
     public record AffiliateInvoice(
             String id,
             String tenantId,
             String affiliateId,
+            String billingCycle,
             BigDecimal amount,
             int conversionCount,
             AffiliatePartner.PaymentTerm paymentTerm,
             InvoiceStatus status,
-            Instant createdAt
+            Instant createdAt,
+            Instant paidAt
     ) {}
 
     public enum InvoiceStatus {

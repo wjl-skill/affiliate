@@ -270,7 +270,7 @@ CREATE INDEX idx_click_session_lookup ON affiliate_click_session(click_id) WHERE
 CREATE INDEX idx_click_session_cleanup ON affiliate_click_session(expires_at) WHERE expires_at < NOW();
 
 -- Conversion queries
-CREATE UNIQUE INDEX uk_conversion_offer_tx ON affiliate_conversion(offer_id, tx_id);
+CREATE UNIQUE INDEX uk_conversion_offer_tx ON affiliate_conversion(offer_id, transaction_id);
 CREATE INDEX idx_conversion_aff_status ON affiliate_conversion(tenant_id, affiliate_id, status, created_at DESC);
 CREATE INDEX idx_conversion_approval ON affiliate_conversion(status, created_at) WHERE status = 'PENDING';
 

@@ -166,7 +166,8 @@ public class S2sPostbackService {
             Conversion rejected = new Conversion(convId, "default", clickId != null ? clickId : "unmatched", txId,
                     offerIdFallback != null ? offerIdFallback : "unknown", "unknown",
                     BigDecimal.ZERO, BigDecimal.ZERO, saleAmount, 0,
-                    Conversion.Status.REJECTED, "CLICK_SESSION_NOT_FOUND", current);
+                    Conversion.Status.REJECTED, "CLICK_SESSION_NOT_FOUND", null,
+                    Conversion.PostbackStatus.PENDING, current);
             saveConversion(rejected);
             return rejected;
         }
@@ -224,17 +225,26 @@ public class S2sPostbackService {
                 ctit,
                 fraudRes.recommendedStatus(),
                 fraudRes.rejectionReason(),
+                session.sub1(),
+                Conversion.PostbackStatus.PENDING,
                 current
         );
 
         saveConversion(conversion);
 
-        // 6. 若风控通过，分发下游 Postback
+        // 6. 若风控通过，分发下游 Postback 并回写真实回执状态
+        Conversion result = conversion;
         if (fraudRes.passed() && partner != null) {
-            postbackDispatcher.dispatch(partner, conversion, session);
+            PublisherPostbackDispatcher.PostbackDeliveryLog log =
+                    postbackDispatcher.dispatch(partner, conversion, session);
+            if (log != null) {
+                result = conversion.withPostbackStatus(
+                        log.success() ? Conversion.PostbackStatus.DELIVERED : Conversion.PostbackStatus.FAILED);
+                saveConversion(result);
+            }
         }
 
-        return conversion;
+        return result;
     }
 
     private void saveConversion(Conversion conv) {
@@ -248,10 +258,12 @@ public class S2sPostbackService {
                     conv.txId(),
                     conv.payout(),
                     conv.revenue(),
+                    conv.saleAmount(),
                     conv.status().name(),
                     conv.ctitSeconds(),
-                    null,
-                    "DELIVERED",
+                    conv.rejectionReason(),
+                    conv.sub1(),
+                    conv.postbackStatus().name(),
                     conv.createdAt()
             );
             if (conversionMapper.selectById(conv.id()) != null) {
@@ -299,6 +311,12 @@ public class S2sPostbackService {
     }
 
     private Conversion toConversionDomain(ConversionEntity e) {
+        Conversion.PostbackStatus postbackStatus = Conversion.PostbackStatus.PENDING;
+        if (e.getPostbackStatus() != null) {
+            try {
+                postbackStatus = Conversion.PostbackStatus.valueOf(e.getPostbackStatus());
+            } catch (Exception ignored) {}
+        }
         return new Conversion(
                 e.getId(),
                 e.getTenantId(),
@@ -308,10 +326,12 @@ public class S2sPostbackService {
                 e.getAffiliateId(),
                 e.getPayout(),
                 e.getRevenue(),
-                BigDecimal.ZERO,
+                e.getSaleAmount(),
                 e.getCtitSeconds() != null ? e.getCtitSeconds() : 0,
                 Conversion.Status.valueOf(e.getStatus()),
-                null,
+                e.getRejectionReason(),
+                e.getSub1(),
+                postbackStatus,
                 e.getCreatedAt()
         );
     }

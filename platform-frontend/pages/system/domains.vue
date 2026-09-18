@@ -183,31 +183,10 @@ const loadDomains = async () => {
   loading.value = true
   try {
     const res = await fetchApi<any[]>('/api/v1/system/domains')
-    domains.value = res
-  } catch (err) {
-    domains.value = [
-      {
-        id: 'dom-01',
-        domain: 'trk.smartaff.com',
-        domainType: 'TRACKING',
-        cnameTarget: 'lb-global.affnetwork.com',
-        dnsStatus: 'VERIFIED',
-        sslStatus: 'AUTO_SSL_ACTIVE',
-        isDefault: true,
-        status: 'ACTIVE'
-      },
-      {
-        id: 'dom-02',
-        domain: 'click.apexmedia.io',
-        domainType: 'TRACKING',
-        cnameTarget: 'lb-global.affnetwork.com',
-        dnsStatus: 'PENDING_CNAME',
-        sslStatus: 'AUTO_SSL_ACTIVE',
-        assignedAffiliateId: 'aff-vip-888',
-        isDefault: false,
-        status: 'ACTIVE'
-      }
-    ]
+    domains.value = res || []
+  } catch (err: any) {
+    domains.value = []
+    showToast(`加载域名池失败：${err?.message || '服务请求失败'}`, 'error', 5000)
   } finally {
     loading.value = false
   }
@@ -216,24 +195,38 @@ const loadDomains = async () => {
 const verifyDns = async (row: any) => {
   verifyingId.value = row.id
   try {
-    await fetchApi(`/api/v1/system/domains/${row.id}/verify-dns`, { method: 'POST' })
-  } catch (e) {}
-
-  row.dnsStatus = 'VERIFIED'
-  verifyingId.value = null
-  showToast(`域名 ${row.domain} CNAME 解析核验通过！`, 'success')
+    const updated = await fetchApi<any>(`/api/v1/system/domains/${row.id}/verify-dns`, { method: 'POST' })
+    if (updated) {
+      Object.assign(row, updated)
+      showToast(
+        updated.dnsStatus === 'VERIFIED'
+          ? `域名 ${row.domain} CNAME 解析核验通过！`
+          : `域名 ${row.domain} 尚未检测到 CNAME 解析 (当前: ${updated.dnsStatus})`,
+        updated.dnsStatus === 'VERIFIED' ? 'success' : 'warning'
+      )
+    }
+  } catch (err: any) {
+    showToast(`DNS 核验失败：${err?.message || '服务请求失败'}`, 'error', 5000)
+  } finally {
+    verifyingId.value = null
+  }
 }
 
 const setAsDefault = async (row: any) => {
   try {
     await fetchApi(`/api/v1/system/domains/${row.id}/default`, { method: 'POST' })
-  } catch (e) {}
-
-  domains.value.forEach(d => d.isDefault = (d.id === row.id))
-  showToast(`已将 ${row.domain} 设为全平台默认追踪主域名`, 'success')
+    await loadDomains()
+    showToast(`已将 ${row.domain} 设为全平台默认追踪主域名`, 'success')
+  } catch (err: any) {
+    showToast(`设置主域名失败：${err?.message || '服务请求失败'}`, 'error', 5000)
+  }
 }
 
 const submitCreateDomain = async () => {
+  if (!createForm.value.domain) {
+    showToast('请填写域名地址', 'warning')
+    return
+  }
   const payload = {
     domain: createForm.value.domain,
     domainType: createForm.value.domainType,
@@ -247,19 +240,11 @@ const submitCreateDomain = async () => {
       body: payload
     })
     if (res) domains.value.push(res)
-  } catch (e) {
-    domains.value.push({
-      id: 'dom-' + Math.floor(Math.random() * 9000 + 1000),
-      ...payload,
-      dnsStatus: 'PENDING_CNAME',
-      sslStatus: 'AUTO_SSL_ACTIVE',
-      isDefault: false,
-      status: 'ACTIVE'
-    })
+    showCreateModal.value = false
+    showToast('域名绑定成功，请尽快配置 CNAME 解析', 'success')
+  } catch (err: any) {
+    showToast(`域名绑定失败：${err?.message || '服务请求失败'}`, 'error', 5000)
   }
-
-  showCreateModal.value = false
-  showToast('域名绑定成功，请尽快配置 CNAME 解析', 'success')
 }
 
 onMounted(() => {

@@ -24,8 +24,10 @@ public class ConversionEntity {
     private String transactionId;
     private BigDecimal payout;
     private BigDecimal revenue;
+    private BigDecimal saleAmount;
     private String status;
     private Long ctitSeconds;
+    private String rejectionReason;
     private String sub1;
     private String postbackStatus;
     private Instant createdAt;
@@ -34,8 +36,9 @@ public class ConversionEntity {
 
     public ConversionEntity(String id, String tenantId, String clickId, String offerId,
                             String affiliateId, String transactionId, BigDecimal payout,
-                            BigDecimal revenue, String status, Long ctitSeconds,
-                            String sub1, String postbackStatus, Instant createdAt) {
+                            BigDecimal revenue, BigDecimal saleAmount, String status,
+                            Long ctitSeconds, String rejectionReason, String sub1,
+                            String postbackStatus, Instant createdAt) {
         this.id = id;
         this.tenantId = tenantId;
         this.clickId = clickId;
@@ -44,8 +47,10 @@ public class ConversionEntity {
         this.transactionId = transactionId;
         this.payout = payout;
         this.revenue = revenue;
+        this.saleAmount = saleAmount;
         this.status = status;
         this.ctitSeconds = ctitSeconds;
+        this.rejectionReason = rejectionReason;
         this.sub1 = sub1;
         this.postbackStatus = postbackStatus;
         this.createdAt = createdAt;
@@ -75,11 +80,17 @@ public class ConversionEntity {
     public BigDecimal getRevenue() { return revenue; }
     public void setRevenue(BigDecimal revenue) { this.revenue = revenue; }
 
+    public BigDecimal getSaleAmount() { return saleAmount; }
+    public void setSaleAmount(BigDecimal saleAmount) { this.saleAmount = saleAmount; }
+
     public String getStatus() { return status; }
     public void setStatus(String status) { this.status = status; }
 
     public Long getCtitSeconds() { return ctitSeconds; }
     public void setCtitSeconds(Long ctitSeconds) { this.ctitSeconds = ctitSeconds; }
+
+    public String getRejectionReason() { return rejectionReason; }
+    public void setRejectionReason(String rejectionReason) { this.rejectionReason = rejectionReason; }
 
     public String getSub1() { return sub1; }
     public void setSub1(String sub1) { this.sub1 = sub1; }

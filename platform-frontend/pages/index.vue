@@ -25,25 +25,24 @@
         title="平台广告营收"
         prefix="$"
         :value="overview.totalRevenue || '0.00'"
-        :trend="12.5"
+        :trend="overview.revenueTrendPercent"
       />
       <StatCard
         title="渠道佣金支出"
         prefix="$"
         :value="overview.totalPayout || '0.00'"
-        :trend="8.3"
       />
       <StatCard
         title="网盟净毛利"
         prefix="$"
         :value="overview.grossProfit || '0.00'"
-        :trend="18.9"
+        :trend="overview.profitTrendPercent"
       />
       <StatCard
         title="累计核销转化单数"
         suffix="单"
-        :value="overview.totalConversions || 0"
-        :trend="5.2"
+        :value="overview.approvedConversions || 0"
+        :trend="overview.conversionTrendPercent"
       />
     </div>
 
@@ -144,7 +143,7 @@ const { fetchApi } = useApi()
 const { showToast } = useToasts()
 
 const selectedRange = ref('today')
-const overview = ref<any>({
+const emptyOverview = () => ({
   totalOffers: 0,
   activeOffers: 0,
   totalPartners: 0,
@@ -155,32 +154,24 @@ const overview = ref<any>({
   grossProfit: '0.00'
 })
 
+const overview = ref<any>(emptyOverview())
+
 const approvalRate = computed(() => {
-  if (!overview.value.totalConversions) return 100
+  if (!overview.value.totalConversions) return 0
   return Math.round((overview.value.approvedConversions / overview.value.totalConversions) * 100)
 })
 
 const activeOfferRate = computed(() => {
-  if (!overview.value.totalOffers) return 100
+  if (!overview.value.totalOffers) return 0
   return Math.round((overview.value.activeOffers / overview.value.totalOffers) * 100)
 })
 
 const loadOverview = async () => {
   try {
-    const res = await fetchApi<any>('/api/v1/affiliate/dashboard/overview')
-    overview.value = res
-  } catch (err) {
-    // 降级兜底展示
-    overview.value = {
-      totalOffers: 8,
-      activeOffers: 6,
-      totalPartners: 12,
-      totalConversions: 350,
-      approvedConversions: 320,
-      totalPayout: '1600.00',
-      totalRevenue: '2450.00',
-      grossProfit: '850.00'
-    }
+    overview.value = await fetchApi<any>('/api/v1/affiliate/dashboard/overview')
+  } catch (err: any) {
+    overview.value = emptyOverview()
+    showToast(`加载大盘数据失败：${err.message || err}`, 'error', 5000)
   }
 }
 

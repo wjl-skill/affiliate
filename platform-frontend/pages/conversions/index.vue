@@ -71,8 +71,23 @@
         </div>
       </template>
 
+      <template #cell-source="{ row }">
+        <div class="flex flex-col gap-1 text-xs">
+          <span class="font-mono text-slate-700">{{ row.sub1 || '-' }}</span>
+          <span
+            class="inline-flex w-fit items-center px-2 py-0.5 rounded text-[11px] font-semibold border"
+            :class="row.postbackStatus === 'DELIVERED' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : row.postbackStatus === 'FAILED' ? 'bg-rose-50 text-rose-700 border-rose-200' : 'bg-slate-50 text-slate-500 border-slate-200'"
+          >
+            {{ row.postbackStatus === 'DELIVERED' ? '已回传' : row.postbackStatus === 'FAILED' ? '回传失败' : '待回传' }}
+          </span>
+        </div>
+      </template>
+
       <template #cell-status="{ row }">
-        <StatusTag :status="row.status" />
+        <div class="flex flex-col gap-0.5">
+          <StatusTag :status="row.status" />
+          <span v-if="row.rejectionReason" class="text-[10px] text-rose-500 font-mono">{{ row.rejectionReason }}</span>
+        </div>
       </template>
 
       <!-- 审核操作按钮 -->
@@ -187,9 +202,9 @@ const rejectReason = ref('CTIT_FAST_CONVERSION')
 const conversions = ref<any[]>([])
 
 const simForm = ref({
-  clickId: 'c_test_' + Math.floor(Math.random() * 9000 + 1000),
-  txId: 'tx_ord_' + Math.floor(Math.random() * 90000 + 10000),
-  saleAmount: 88.00
+  clickId: '',
+  txId: '',
+  saleAmount: ''
 })
 
 const columns = [
@@ -197,6 +212,7 @@ const columns = [
   { key: 'offerAffiliate', label: 'Offer / 渠道客' },
   { key: 'ctit', label: 'CTIT 转化耗时' },
   { key: 'pricing', label: '佣金 Payout / 营收' },
+  { key: 'source', label: '来源 Sub1 / 回传状态' },
   { key: 'status', label: '审核状态' },
   { key: 'actions', label: '操作' }
 ]
@@ -211,44 +227,10 @@ const formatCtit = (seconds: number) => {
 const loadConversions = async () => {
   loading.value = true
   try {
-    const res = await fetchApi<any[]>('/api/v1/affiliate/conversions')
-    conversions.value = res
-  } catch (err) {
-    conversions.value = [
-      {
-        id: 'conv-001',
-        clickId: 'c_101',
-        txId: 'tx_nike_001',
-        offerId: 'off-101',
-        affiliateId: 'aff-vip-888',
-        payout: '5.0000',
-        revenue: '8.0000',
-        ctitSeconds: 142,
-        status: 'APPROVED'
-      },
-      {
-        id: 'conv-002',
-        clickId: 'c_102',
-        txId: 'tx_bot_002',
-        offerId: 'off-101',
-        affiliateId: 'aff-gold-777',
-        payout: '5.0000',
-        revenue: '8.0000',
-        ctitSeconds: 1,
-        status: 'FRAUD_SUSPECTED'
-      },
-      {
-        id: 'conv-003',
-        clickId: 'c_103',
-        txId: 'tx_bank_003',
-        offerId: 'off-201',
-        affiliateId: 'aff-vip-888',
-        payout: '18.0000',
-        revenue: '25.0000',
-        ctitSeconds: 58,
-        status: 'PENDING'
-      }
-    ]
+    conversions.value = await fetchApi<any[]>('/api/v1/affiliate/conversions') || []
+  } catch (err: any) {
+    conversions.value = []
+    showToast(`加载转化流水失败：${err.message || err}`, 'error', 5000)
   } finally {
     loading.value = false
   }
@@ -256,12 +238,14 @@ const loadConversions = async () => {
 
 const approveConversion = async (id: string) => {
   try {
-    await fetchApi(`/api/v1/affiliate/conversions/${id}/approve`, { method: 'POST' })
-  } catch (e) {}
-
-  const item = conversions.value.find(c => c.id === id)
-  if (item) item.status = 'APPROVED'
-  showToast(`转化 ${id} 已审核通过`, 'success')
+    const updated = await fetchApi<any>(`/api/v1/affiliate/conversions/${id}/approve`, { method: 'POST' })
+    const item = conversions.value.find(c => c.id === id)
+    if (item && updated) Object.assign(item, updated)
+    else if (item) item.status = 'APPROVED'
+    showToast(`转化 ${id} 已审核通过`, 'success')
+  } catch (err: any) {
+    showToast(`审核通过失败：${err.message || err}`, 'error', 5000)
+  }
 }
 
 const openRejectModal = (id: string) => {
@@ -271,30 +255,35 @@ const openRejectModal = (id: string) => {
 
 const confirmReject = async () => {
   try {
-    await fetchApi(`/api/v1/affiliate/conversions/${rejectingId.value}/reject`, {
+    const updated = await fetchApi<any>(`/api/v1/affiliate/conversions/${rejectingId.value}/reject`, {
       method: 'POST',
       body: { reason: rejectReason.value }
     })
-  } catch (e) {}
-
-  const item = conversions.value.find(c => c.id === rejectingId.value)
-  if (item) item.status = 'REJECTED'
-  showRejectModal.value = false
-  showToast(`转化单已驳回`, 'warning')
+    const item = conversions.value.find(c => c.id === rejectingId.value)
+    if (item && updated) Object.assign(item, updated)
+    else if (item) item.status = 'REJECTED'
+    showRejectModal.value = false
+    showToast(`转化单已驳回`, 'warning')
+  } catch (err: any) {
+    showToast(`驳回操作失败：${err.message || err}`, 'error', 5000)
+  }
 }
 
 const submitPostbackSim = async () => {
+  if (!simForm.value.clickId.trim() || !simForm.value.txId.trim()) {
+    showToast('请填写真实的 click_id 与 txid', 'warning')
+    return
+  }
   simulating.value = true
   try {
-    await fetchApi(`/affiliate/postback?click_id=${simForm.value.clickId}&txid=${simForm.value.txId}&sale_amount=${simForm.value.saleAmount}`, {
+    await fetchApi(`/affiliate/postback?click_id=${encodeURIComponent(simForm.value.clickId.trim())}&txid=${encodeURIComponent(simForm.value.txId.trim())}&sale_amount=${encodeURIComponent(simForm.value.saleAmount || '0')}`, {
       method: 'POST'
     })
     showToast('Postback 回传触发成功', 'success')
     showSimModal.value = false
     loadConversions()
-  } catch (err) {
-    showToast('模拟回传已完成', 'success')
-    showSimModal.value = false
+  } catch (err: any) {
+    showToast(`模拟回传失败：${err.message || err}`, 'error', 5000)
   } finally {
     simulating.value = false
   }

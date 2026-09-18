@@ -70,12 +70,11 @@
     >
       <div class="space-y-4 text-xs">
         <div>
-          <label class="block font-medium text-slate-700 mb-1">菜单 ID <span class="text-rose-500">*</span></label>
+          <label class="block font-medium text-slate-700 mb-1">菜单 ID</label>
           <input
             v-model="createForm.id"
             type="text"
-            required
-            placeholder="例如: menu-custom-report"
+            placeholder="留空则由服务端自动生成"
             class="w-full rounded-lg border border-slate-300 px-3 py-2 text-slate-900 font-mono"
           />
         </div>
@@ -150,6 +149,7 @@ import StatusTag from '~/components/common/StatusTag.vue'
 import ModalDialog from '~/components/common/ModalDialog.vue'
 import { useApi } from '~/composables/useApi'
 import { useToasts } from '~/composables/useNotification'
+import { flattenMenuTree } from '~/utils/menu'
 
 const { fetchApi } = useApi()
 const { showToast } = useToasts()
@@ -159,7 +159,7 @@ const showCreateModal = ref(false)
 const menus = ref<any[]>([])
 
 const createForm = ref({
-  id: 'menu-' + Math.floor(Math.random() * 9000 + 1000),
+  id: '',
   parentId: '0',
   title: '',
   icon: '⚡',
@@ -182,22 +182,10 @@ const loadMenus = async () => {
   loading.value = true
   try {
     const res = await fetchApi<any[]>('/api/v1/system/menus')
-    menus.value = res
-  } catch (err) {
-    menus.value = [
-      { id: 'menu-dashboard', title: '监控大盘', icon: '📊', path: '/', sortOrder: 1, status: 'ACTIVE' },
-      { id: 'menu-offers', title: 'Offer 计划', icon: '🎯', path: '/offers', permissionCode: 'offer:read', sortOrder: 2, status: 'ACTIVE' },
-      { id: 'menu-smartlinks', title: 'SmartLink 分流', icon: '⚡', path: '/smartlinks', permissionCode: 'smartlink:manage', sortOrder: 3, status: 'ACTIVE' },
-      { id: 'menu-affiliates', title: '渠道客管理', icon: '🤝', path: '/affiliates', permissionCode: 'affiliate:read', sortOrder: 4, status: 'ACTIVE' },
-      { id: 'menu-conversions', title: '转化与归因', icon: '🔄', path: '/conversions', permissionCode: 'conversion:audit', sortOrder: 5, status: 'ACTIVE' },
-      { id: 'menu-finance', title: '财务账期出账', icon: '💰', path: '/finance', permissionCode: 'finance:settle', sortOrder: 6, status: 'ACTIVE' },
-      { id: 'menu-analytics', title: 'Sub-ID 报表', icon: '📈', path: '/analytics', permissionCode: 'report:analytics', sortOrder: 7, status: 'ACTIVE' },
-      { id: 'menu-sys-users', title: '用户管理', icon: '👥', path: '/system/users', permissionCode: 'system:user:read', sortOrder: 10, status: 'ACTIVE' },
-      { id: 'menu-sys-roles', title: '角色管理', icon: '🛡️', path: '/system/roles', permissionCode: 'system:role:read', sortOrder: 11, status: 'ACTIVE' },
-      { id: 'menu-sys-menus', title: '菜单管理', icon: '📑', path: '/system/menus', permissionCode: 'system:menu:manage', sortOrder: 12, status: 'ACTIVE' },
-      { id: 'menu-sys-s3', title: 'S3 存储配置', icon: '🗄️', path: '/system/s3', permissionCode: 'system:s3:read', sortOrder: 14, status: 'ACTIVE' },
-      { id: 'menu-sys-domains', title: '域名池管理', icon: '🌐', path: '/system/domains', permissionCode: 'system:domain:read', sortOrder: 15, status: 'ACTIVE' }
-    ]
+    menus.value = flattenMenuTree(res || [])
+  } catch (err: any) {
+    menus.value = []
+    showToast(`加载菜单树失败：${err?.message || '服务请求失败'}`, 'error', 5000)
   } finally {
     loading.value = false
   }
@@ -206,13 +194,18 @@ const loadMenus = async () => {
 const deleteMenu = async (id: string) => {
   try {
     await fetchApi(`/api/v1/system/menus/${id}`, { method: 'DELETE' })
-  } catch (e) {}
-
-  menus.value = menus.value.filter(m => m.id !== id)
-  showToast('菜单已删除', 'success')
+    await loadMenus()
+    showToast('菜单已删除', 'success')
+  } catch (err: any) {
+    showToast(`菜单删除失败：${err?.message || '服务请求失败'}`, 'error', 5000)
+  }
 }
 
 const submitCreateMenu = async () => {
+  if (!createForm.value.title || !createForm.value.path) {
+    showToast('请填写菜单标题与路由路径', 'warning')
+    return
+  }
   const payload = {
     ...createForm.value,
     visible: true,
@@ -220,17 +213,16 @@ const submitCreateMenu = async () => {
   }
 
   try {
-    const res = await fetchApi<any>('/api/v1/system/menus', {
+    await fetchApi<any>('/api/v1/system/menus', {
       method: 'POST',
       body: payload
     })
-    if (res) menus.value.push(res)
-  } catch (e) {
-    menus.value.push(payload)
+    showCreateModal.value = false
+    showToast('菜单节点添加成功！', 'success')
+    await loadMenus()
+  } catch (err: any) {
+    showToast(`菜单保存失败：${err?.message || '服务请求失败'}`, 'error', 5000)
   }
-
-  showCreateModal.value = false
-  showToast('菜单节点添加成功！', 'success')
 }
 
 onMounted(() => {

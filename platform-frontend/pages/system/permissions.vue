@@ -17,6 +17,9 @@
     </div>
 
     <!-- 模块分组网格 -->
+    <div v-if="!loading && Object.keys(filteredModules).length === 0" class="py-16 text-center text-sm text-slate-400">
+      暂无权限数据，请确认后端服务已启动
+    </div>
     <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
       <div
         v-for="(perms, moduleName) in filteredModules"
@@ -57,10 +60,13 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useApi } from '~/composables/useApi'
+import { useToasts } from '~/composables/useNotification'
 
 const { fetchApi } = useApi()
+const { showToast } = useToasts()
 const searchQuery = ref('')
 const modules = ref<Record<string, any[]>>({})
+const loading = ref(false)
 
 const filteredModules = computed(() => {
   if (!searchQuery.value.trim()) return modules.value
@@ -77,31 +83,15 @@ const filteredModules = computed(() => {
 })
 
 const loadPermissions = async () => {
+  loading.value = true
   try {
     const res = await fetchApi<Record<string, any[]>>('/api/v1/system/permissions')
-    modules.value = res
-  } catch (err) {
-    modules.value = {
-      '用户管理': [
-        { code: 'system:user:read', name: '用户查看', type: 'API' },
-        { code: 'system:user:write', name: '用户维护', type: 'BUTTON' }
-      ],
-      '角色管理': [
-        { code: 'system:role:read', name: '角色查看', type: 'API' },
-        { code: 'system:role:write', name: '角色授权', type: 'BUTTON' }
-      ],
-      'Offer计划': [
-        { code: 'offer:read', name: '计划查询', type: 'API' },
-        { code: 'offer:write', name: '计划维护', type: 'BUTTON' }
-      ],
-      '渠道客': [
-        { code: 'affiliate:read', name: '渠道查看', type: 'API' },
-        { code: 'affiliate:write', name: '渠道维护', type: 'BUTTON' }
-      ],
-      '财务结算': [
-        { code: 'finance:settle', name: '账期结算', type: 'BUTTON' }
-      ]
-    }
+    modules.value = res || {}
+  } catch (err: any) {
+    modules.value = {}
+    showToast(`加载权限字典失败：${err?.message || '服务请求失败'}`, 'error', 5000)
+  } finally {
+    loading.value = false
   }
 }
 

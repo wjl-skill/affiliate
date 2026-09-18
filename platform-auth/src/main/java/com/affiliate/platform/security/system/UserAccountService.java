@@ -6,6 +6,7 @@ import com.affiliate.platform.mapper.UserAccountMapper;
 import com.affiliate.platform.mapper.UserRoleMapper;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
@@ -18,13 +19,19 @@ import java.util.stream.Collectors;
  * 用户账号管理服务 (User Account Management Service - MyBatis-Plus)
  * <p>
  * 全面基于 MyBatis-Plus 接入 PostgreSQL 真实持久化存储，操作表 `sys_user_account` 与 `sys_user_role`。
+ * 密码以 BCrypt 哈希存储于 `password_hash` 列。
  */
 @Service
 public class UserAccountService {
 
+    /** 新建用户与历史无密码种子用户的统一初始口令 */
+    public static final String DEFAULT_INITIAL_PASSWORD = "Admin@123";
+
     private final UserAccountMapper userMapper;
     private final UserRoleMapper userRoleMapper;
     private final ConcurrentMap<String, UserAccount> fallbackStore = new ConcurrentHashMap<>();
+    private final ConcurrentMap<String, String> fallbackPasswordHashes = new ConcurrentHashMap<>();
+    private final BCryptPasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
 
     public UserAccountService() {
         this(null, null);
@@ -38,6 +45,7 @@ public class UserAccountService {
         this.userMapper = userMapper;
         this.userRoleMapper = userRoleMapper;
         ensureSeedData();
+        ensureInitialPasswords();
     }
 
     private void ensureSeedData() {
@@ -104,6 +112,15 @@ public class UserAccountService {
 
     public UserAccount saveUser(UserAccount user) {
         if (userMapper != null) {
+            UserAccountEntity existing = userMapper.selectById(user.id());
+            String carriedHash = existing != null ? existing.getPasswordHash() : null;
+            if (carriedHash == null) {
+                carriedHash = findPasswordHash(user.username());
+            }
+            if (carriedHash == null) {
+                carriedHash = passwordEncoder.encode(DEFAULT_INITIAL_PASSWORD);
+            }
+
             UserAccountEntity entity = new UserAccountEntity(
                     user.id(),
                     user.tenantId(),
@@ -112,14 +129,14 @@ public class UserAccountService {
                     user.email(),
                     user.phone(),
                     user.avatar(),
-                    null,
+                    carriedHash,
                     user.status().name(),
                     user.lastLoginAt(),
                     user.createdAt() != null ? user.createdAt() : Instant.now(),
                     Instant.now()
             );
 
-            if (userMapper.selectById(user.id()) != null) {
+            if (existing != null) {
                 userMapper.updateById(entity);
             } else {
                 userMapper.insert(entity);
@@ -132,6 +149,7 @@ public class UserAccountService {
         }
 
         fallbackStore.put(user.id(), user);
+        fallbackPasswordHashes.putIfAbsent(user.username().toLowerCase(), passwordEncoder.encode(DEFAULT_INITIAL_PASSWORD));
         return user;
     }
 
@@ -222,6 +240,92 @@ public class UserAccountService {
             throw new IllegalArgumentException("系统超级管理员不可删除！");
         }
         return fallbackStore.remove(id) != null;
+    }
+
+    /**
+     * 查询指定用户名的 BCrypt 密码哈希 (登录校验用)
+     */
+    public String findPasswordHash(String username) {
+        if (username == null || username.isBlank()) return null;
+        if (userMapper != null) {
+            try {
+                QueryWrapper<UserAccountEntity> qw = new QueryWrapper<>();
+                qw.eq("username", username).last("LIMIT 1");
+                UserAccountEntity entity = userMapper.selectOne(qw);
+                return entity != null ? entity.getPasswordHash() : null;
+            } catch (Exception e) {
+                return null;
+            }
+        }
+        return fallbackPasswordHashes.get(username.toLowerCase());
+    }
+
+    /**
+     * 重置指定用户名口令
+     */
+    public boolean setPassword(String username, String rawPassword) {
+        String hash = passwordEncoder.encode(rawPassword);
+        if (userMapper != null) {
+            QueryWrapper<UserAccountEntity> qw = new QueryWrapper<>();
+            qw.eq("username", username).last("LIMIT 1");
+            UserAccountEntity entity = userMapper.selectOne(qw);
+            if (entity == null) return false;
+            entity.setPasswordHash(hash);
+            entity.setUpdatedAt(Instant.now());
+            userMapper.updateById(entity);
+            return true;
+        }
+        fallbackPasswordHashes.put(username.toLowerCase(), hash);
+        return fallbackStore.values().stream().anyMatch(u -> u.username().equalsIgnoreCase(username));
+    }
+
+    public boolean matchesPassword(String username, String rawPassword) {
+        String hash = findPasswordHash(username);
+        return hash != null && rawPassword != null && passwordEncoder.matches(rawPassword, hash);
+    }
+
+    /**
+     * 登录成功后刷新最近登录时间
+     */
+    public void recordLogin(String userId) {
+        Instant now = Instant.now();
+        if (userMapper != null) {
+            UserAccountEntity entity = userMapper.selectById(userId);
+            if (entity != null) {
+                entity.setLastLoginAt(now);
+                entity.setUpdatedAt(now);
+                userMapper.updateById(entity);
+            }
+            return;
+        }
+        UserAccount user = fallbackStore.get(userId);
+        if (user != null) {
+            fallbackStore.put(userId, user.withLastLogin(now));
+        }
+    }
+
+    /**
+     * 历史种子数据升级兼容：为所有 password_hash 为空的账号写入初始口令
+     */
+    private void ensureInitialPasswords() {
+        try {
+            for (UserAccount user : listUsers()) {
+                if (findPasswordHash(user.username()) == null) {
+                    if (userMapper != null) {
+                        QueryWrapper<UserAccountEntity> qw = new QueryWrapper<>();
+                        qw.eq("username", user.username()).last("LIMIT 1");
+                        UserAccountEntity entity = userMapper.selectOne(qw);
+                        if (entity != null) {
+                            entity.setPasswordHash(passwordEncoder.encode(DEFAULT_INITIAL_PASSWORD));
+                            userMapper.updateById(entity);
+                        }
+                    } else {
+                        fallbackPasswordHashes.put(user.username().toLowerCase(),
+                                passwordEncoder.encode(DEFAULT_INITIAL_PASSWORD));
+                    }
+                }
+            }
+        } catch (Exception ignored) {}
     }
 
     private UserAccount toDomain(UserAccountEntity entity) {
