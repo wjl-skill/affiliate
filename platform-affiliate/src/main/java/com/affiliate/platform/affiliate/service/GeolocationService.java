@@ -56,9 +56,14 @@ public class GeolocationService {
     }
 
     private void initializeDatacenterRanges() {
-        // TODO: 从外部数据源加载已知数据中心 IP 范围
-        datacenterIpRanges.add("192.0.2.0/24");  // TEST-NET-1
+        // 内置主流云厂商与数据中心高风险 CIDR 网段 (AWS, GCP, Cloudflare, RFC5737 测试段)
+        datacenterIpRanges.add("192.0.2.0/24");    // TEST-NET-1
         datacenterIpRanges.add("198.51.100.0/24"); // TEST-NET-2
+        datacenterIpRanges.add("203.0.113.0/24");  // TEST-NET-3
+        datacenterIpRanges.add("3.0.0.0/9");       // AWS EC2 US
+        datacenterIpRanges.add("34.64.0.0/11");    // Google Cloud
+        datacenterIpRanges.add("104.16.0.0/13");   // Cloudflare Proxy
+        datacenterIpRanges.add("185.220.100.0/22");// Tor Exit Nodes
     }
 
     /**
@@ -459,57 +464,123 @@ public class GeolocationService {
     }
 
     private IpGeolocation simulateGeoLookup(String ipAddress) {
-        // 简化实现：基于 IP 前缀模拟
-        if (ipAddress.startsWith("192.168.") || ipAddress.startsWith("10.") || ipAddress.startsWith("172.")) {
+        if (ipAddress == null || ipAddress.isBlank()) {
+            ipAddress = "127.0.0.1";
+        }
+
+        // 1. 本地/私有 IP 识别 (RFC 1918 & Loopback)
+        if (ipAddress.startsWith("192.168.") || ipAddress.startsWith("10.") ||
+                ipAddress.startsWith("172.") || ipAddress.startsWith("127.") || ipAddress.equals("::1")) {
             return new IpGeolocation(
-                    ipAddress,
-                    "ZZ",
-                    "Unknown",
-                    "Private Network",
-                    "Private Network",
-                    0.0,
-                    0.0,
-                    "UTC",
-                    "Local ISP",
-                    "AS0",
-                    false,
-                    false,
-                    false,
-                    false
+                    ipAddress, "ZZ", "Unknown", "Private Network", "Private Network",
+                    0.0, 0.0, "UTC", "Local ISP", "AS0",
+                    false, false, false, false
             );
         }
 
-        // 模拟美国 IP
+        // 2. 中国 (CN) 常见网段特征
+        if (ipAddress.startsWith("114.114.") || ipAddress.startsWith("223.5.") ||
+                ipAddress.startsWith("119.") || ipAddress.startsWith("180.")) {
+            return new IpGeolocation(
+                    ipAddress, "CN", "China", "Beijing", "Beijing",
+                    39.9042, 116.4074, "Asia/Shanghai", "China Telecom", "AS4134",
+                    false, false, false, false
+            );
+        }
+
+        // 3. 英国 (GB) 常见网段特征
+        if (ipAddress.startsWith("51.") || ipAddress.startsWith("82.")) {
+            return new IpGeolocation(
+                    ipAddress, "GB", "United Kingdom", "London", "England",
+                    51.5074, -0.1278, "Europe/London", "British Telecom", "AS2856",
+                    false, false, false, false
+            );
+        }
+
+        // 4. 日本 (JP) 常见网段特征
+        if (ipAddress.startsWith("133.") || ipAddress.startsWith("210.")) {
+            return new IpGeolocation(
+                    ipAddress, "JP", "Japan", "Tokyo", "Tokyo",
+                    35.6762, 139.6503, "Asia/Tokyo", "NTT Communications", "AS2914",
+                    false, false, false, false
+            );
+        }
+
+        // 5. 德国 (DE) 常见网段特征
+        if (ipAddress.startsWith("141.") || ipAddress.startsWith("85.")) {
+            return new IpGeolocation(
+                    ipAddress, "DE", "Germany", "Frankfurt", "Hesse",
+                    50.1109, 8.6821, "Europe/Berlin", "Deutsche Telekom", "AS3320",
+                    false, false, false, false
+            );
+        }
+
+        // 6. 默认美国 (US) 常见解析
         return new IpGeolocation(
-                ipAddress,
-                "US",
-                "United States",
-                "New York",
-                "New York",
-                40.7128,
-                -74.0060,
-                "America/New_York",
-                "Example ISP",
-                "AS15169",
-                false,
-                false,
-                false,
-                false
+                ipAddress, "US", "United States", "New York", "New York",
+                40.7128, -74.0060, "America/New_York", "Verizon Internet", "AS15169",
+                false, false, false, false
         );
     }
 
     private boolean ipInRange(String ip, String cidr) {
-        // 简化实现
-        // TODO: 实际 CIDR 匹配算法
-        return false;
+        if (ip == null || cidr == null || !cidr.contains("/")) {
+            return false;
+        }
+        try {
+            String[] parts = cidr.split("/");
+            String baseIp = parts[0].trim();
+            int prefixLength = Integer.parseInt(parts[1].trim());
+
+            if (ip.contains(":") || baseIp.contains(":")) {
+                return ipv6InRange(ip, baseIp, prefixLength);
+            } else {
+                return ipv4InRange(ip, baseIp, prefixLength);
+            }
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private boolean ipv4InRange(String ip, String baseIp, int prefixLength) {
+        if (prefixLength < 0 || prefixLength > 32) return false;
+        long ipNum = ipv4ToLong(ip);
+        long baseNum = ipv4ToLong(baseIp);
+        long mask = prefixLength == 0 ? 0L : (-1L << (32 - prefixLength)) & 0xFFFFFFFFL;
+        return (ipNum & mask) == (baseNum & mask);
+    }
+
+    private long ipv4ToLong(String ip) {
+        String[] octets = ip.split("\\.");
+        if (octets.length != 4) throw new IllegalArgumentException("Invalid IPv4: " + ip);
+        long result = 0;
+        for (int i = 0; i < 4; i++) {
+            result = (result << 8) | (Integer.parseInt(octets[i]) & 0xFF);
+        }
+        return result;
+    }
+
+    private boolean ipv6InRange(String ip, String baseIp, int prefixLength) throws Exception {
+        byte[] ipBytes = java.net.InetAddress.getByName(ip).getAddress();
+        byte[] baseBytes = java.net.InetAddress.getByName(baseIp).getAddress();
+        if (ipBytes.length != baseBytes.length) return false;
+
+        int fullBytes = prefixLength / 8;
+        for (int i = 0; i < fullBytes && i < ipBytes.length; i++) {
+            if (ipBytes[i] != baseBytes[i]) return false;
+        }
+        int remainderBits = prefixLength % 8;
+        if (remainderBits > 0 && fullBytes < ipBytes.length) {
+            int mask = (-1 << (8 - remainderBits)) & 0xFF;
+            return (ipBytes[fullBytes] & mask) == (baseBytes[fullBytes] & mask);
+        }
+        return true;
     }
 
     private boolean isHighRiskCountry(String countryCode) {
-        // 根据业务需求配置高风险国家列表
-        Set<String> highRiskCountries = Set.of(
-                // 示例，实际应从配置读取
-        );
-        return highRiskCountries.contains(countryCode);
+        // 全球公认制裁/高拒付欺诈风险国家代码列表
+        Set<String> highRiskCountries = Set.of("KP", "IR", "SY", "CU", "RU", "MM");
+        return countryCode != null && highRiskCountries.contains(countryCode.toUpperCase());
     }
 
     private RiskLevel getRiskLevel(int score) {

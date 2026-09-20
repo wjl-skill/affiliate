@@ -101,30 +101,55 @@ public class GoogleOAuthClient {
      * @param code 授权码
      * @return Google 返回的原始 Token 响应
      */
+    /**
+     * 使用授权码换取 Token 响应
+     *
+     * @param code 授权码
+     * @return Google 返回的 Token 响应
+     */
     public TokenResponse exchangeCode(String code) {
-        try {
-            // 组装 application/x-www-form-urlencoded 请求体
-            String body = "code=" + enc(code) +
-                    "&client_id=" + enc(id) +
-                    "&client_secret=" + enc(secret) +
-                    "&redirect_uri=" + enc(redirect) +
-                    "&grant_type=authorization_code";
+        String body = "code=" + enc(code) +
+                "&client_id=" + enc(id) +
+                "&client_secret=" + enc(secret) +
+                "&redirect_uri=" + enc(redirect) +
+                "&grant_type=authorization_code";
+        return executeTokenRequest(body);
+    }
 
+    /**
+     * 使用长期 Refresh Token 向 Google 重新申请有效 Access Token
+     *
+     * @param refreshToken 刷新凭据
+     * @return 最新的 Token 响应载荷
+     */
+    public TokenResponse refreshToken(String refreshToken) {
+        if (refreshToken == null || refreshToken.isBlank()) {
+            throw new IllegalArgumentException("Refresh token must not be null or blank");
+        }
+        String body = "refresh_token=" + enc(refreshToken) +
+                "&client_id=" + enc(id) +
+                "&client_secret=" + enc(secret) +
+                "&grant_type=refresh_token";
+        return executeTokenRequest(body);
+    }
+
+    private TokenResponse executeTokenRequest(String formBody) {
+        try {
             HttpRequest request = HttpRequest.newBuilder(URI.create("https://oauth2.googleapis.com/token"))
                     .header("Content-Type", "application/x-www-form-urlencoded")
-                    .POST(HttpRequest.BodyPublishers.ofString(body))
+                    .POST(HttpRequest.BodyPublishers.ofString(formBody))
                     .build();
 
             HttpResponse<String> response = HttpClient.newHttpClient()
                     .send(request, HttpResponse.BodyHandlers.ofString());
 
             if (response.statusCode() >= 400) {
-                throw new IllegalStateException("Google OAuth failed with HTTP status: " + response.statusCode());
+                throw new IllegalStateException("Google OAuth request failed with HTTP status " + response.statusCode() + ": " + response.body());
             }
 
-            return new TokenResponse(response.body(), Instant.now());
+            return TokenResponse.of(response.body(), Instant.now());
         } catch (Exception e) {
-            throw new IllegalStateException("Google OAuth exchange failed", e);
+            throw new IllegalStateException("Google OAuth token request failed", e);
         }
     }
 
@@ -138,7 +163,44 @@ public class GoogleOAuthClient {
     public record AuthorizationRequest(URI url, String state, Instant expiresAt) {}
 
     /**
-     * Token 换取响应体
+     * Token 响应体（支持原始 JSON 与结构化字段读取）
      */
-    public record TokenResponse(String rawJson, Instant receivedAt) {}
+    public record TokenResponse(
+            String rawJson,
+            Instant receivedAt,
+            String accessToken,
+            String refreshToken,
+            long expiresIn,
+            String tokenType,
+            String scope
+    ) {
+        public TokenResponse(String rawJson, Instant receivedAt) {
+            this(rawJson, receivedAt, null, null, 3600, "Bearer", null);
+        }
+
+        public boolean isExpired() {
+            return receivedAt.plusSeconds(expiresIn).isBefore(Instant.now().plusSeconds(60));
+        }
+
+        public static TokenResponse of(String rawJson, Instant receivedAt) {
+            String access = extractJsonString(rawJson, "access_token");
+            String refresh = extractJsonString(rawJson, "refresh_token");
+            long expires = extractJsonLong(rawJson, "expires_in", 3600);
+            String type = extractJsonString(rawJson, "token_type");
+            String scope = extractJsonString(rawJson, "scope");
+            return new TokenResponse(rawJson, receivedAt, access, refresh, expires, type != null ? type : "Bearer", scope);
+        }
+
+        private static String extractJsonString(String json, String key) {
+            String pattern = "\"" + key + "\"\\s*:\\s*\"([^\"]+)\"";
+            java.util.regex.Matcher m = java.util.regex.Pattern.compile(pattern).matcher(json);
+            return m.find() ? m.group(1) : null;
+        }
+
+        private static long extractJsonLong(String json, String key, long defaultValue) {
+            String pattern = "\"" + key + "\"\\s*:\\s*(\\d+)";
+            java.util.regex.Matcher m = java.util.regex.Pattern.compile(pattern).matcher(json);
+            return m.find() ? Long.parseLong(m.group(1)) : defaultValue;
+        }
+    }
 }

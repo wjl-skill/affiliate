@@ -1,5 +1,6 @@
 package com.affiliate.platform.security.auth;
 
+import com.affiliate.platform.tenant.TenantContext;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -39,6 +40,11 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                 UsernamePasswordAuthenticationToken auth =
                         new UsernamePasswordAuthenticationToken(principal, null, authorities);
                 SecurityContextHolder.getContext().setAuthentication(auth);
+
+                // 权威数字签名验签成功：从 JWT Claim 中提取真实租户 ID 重新绑定 TenantContext，覆盖客户端请求头伪造租户
+                if (principal.tenantId() != null && !principal.tenantId().isBlank()) {
+                    TenantContext.set(principal.tenantId().trim());
+                }
             });
         }
         chain.doFilter(request, response);

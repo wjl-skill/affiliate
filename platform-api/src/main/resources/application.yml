@@ -28,7 +28,7 @@ spring:
     driver-class-name: org.postgresql.Driver
     url: ${DB_URL:jdbc:postgresql://127.0.0.1:5432/postgres?currentSchema=public&reWriteBatchedInserts=true&stringtype=unspecified}
     username: ${DB_USERNAME:postgres}
-    password: ${DB_PASSWORD:199010}
+    password: ${DB_PASSWORD:postgres}
     hikari:
       pool-name: AffiliateHikariCP
       maximum-pool-size: ${DB_MAX_POOL_SIZE:50}
@@ -44,7 +44,7 @@ spring:
     redis:
       host: ${REDIS_HOST:127.0.0.1}
       port: ${REDIS_PORT:6379}
-      password: ${REDIS_PASSWORD:123456}
+      password: ${REDIS_PASSWORD:}
       database: ${REDIS_DB:0}
       timeout: ${REDIS_TIMEOUT:3000ms}
       client-type: lettuce

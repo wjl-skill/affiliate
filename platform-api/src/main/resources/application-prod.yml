@@ -20,7 +20,7 @@ spring:
     driver-class-name: org.postgresql.Driver
     url: ${DB_URL:jdbc:postgresql://127.0.0.1:5432/postgres?currentSchema=public&reWriteBatchedInserts=true&stringtype=unspecified}
     username: ${DB_USERNAME:postgres}
-    password: ${DB_PASSWORD:199010}
+    password: ${DB_PASSWORD:}
     hikari:
       # HikariCP 高性能连接池调优
       maximum-pool-size: ${DB_MAX_POOL_SIZE:50}
@@ -79,6 +79,7 @@ app:
   security:
     # 生产模式强制开启 JWT 鉴权与租户上下文防篡改校验
     enabled: true
+    jwt-secret: ${APP_JWT_SECRET:${app.security.jwt-secret:affiliate-platform-dev-jwt-secret-change-me-in-prod-0518}}
   infrastructure:
     # 启用真实 PostgreSQL 持久化仓储
     database-enabled: true
