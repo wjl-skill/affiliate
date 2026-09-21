@@ -9,3 +9,8 @@ node_modules/
 .nuxt/
 /doc/
 .output
+.claude/
+.settings/
+.classpath
+.project
+.lithe

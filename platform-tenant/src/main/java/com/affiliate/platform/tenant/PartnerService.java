@@ -1,8 +1,9 @@
-package com.affiliate.platform.service;
+package com.affiliate.platform.tenant;
 
 import com.affiliate.platform.domain.Enums.ConnectionStatus;
 import com.affiliate.platform.domain.PartnerConnection;
 import com.affiliate.platform.repository.Repository;
+import com.affiliate.platform.service.NotFoundException;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;

@@ -3,7 +3,7 @@ package com.affiliate.platform.web;
 import com.affiliate.platform.domain.Enums.ConnectionStatus;
 import com.affiliate.platform.domain.PartnerConnection;
 import com.affiliate.platform.integration.AdPlatformConnector;
-import com.affiliate.platform.service.PartnerService;
+import com.affiliate.platform.tenant.PartnerService;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
