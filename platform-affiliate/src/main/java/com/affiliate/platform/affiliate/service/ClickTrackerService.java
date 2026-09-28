@@ -30,6 +30,12 @@ public class ClickTrackerService {
     private final ClickSessionMapper clickSessionMapper;
     private final ProbabilisticAttributionEngine probabilisticEngine;
 
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(ClickTrackerService.class);
+    private final java.util.concurrent.ExecutorService asyncDbWriter = java.util.concurrent.Executors.newFixedThreadPool(
+            Math.min(Runtime.getRuntime().availableProcessors() * 2, 16),
+            Thread.ofVirtual().name("click-db-writer-", 0).factory()
+    );
+
     // 内存降级存储容器
     private final ConcurrentMap<String, ClickSession> sessionStore = new ConcurrentHashMap<>();
 
@@ -95,17 +101,45 @@ public class ClickTrackerService {
                 now, expiresAt
         );
 
-        // 3. 沉淀会话存根至本地高可用内存容器与指纹池（纳秒级即时对齐后续高并发微秒级 Postback）
+        // 3. 沉淀会话存根至本地高可用内存容器与指纹池
         sessionStore.put(clickId, session);
         if (probabilisticEngine != null) {
             try {
                 probabilisticEngine.registerClickFingerprint(session);
-            } catch (Exception ignored) {}
+            } catch (Exception ignored) {
+            }
         }
 
-        // 使用 Java 21 虚拟线程将数据库和 Redis I/O 异步化，主线程极速完成并返回 302 重定向
-        Thread.ofVirtual().name("click-async-writer-" + clickId).start(() -> {
-            if (clickSessionMapper != null) {
+        // 4. Redis 分布式会话同步 (支持多节点微秒级 Postback 定位)
+        if (redisTemplate != null) {
+            try {
+                String sessionData = String.join("||",
+                        clickId,
+                        offer.tenantId() != null ? offer.tenantId() : "public",
+                        offer.id(),
+                        affiliateId != null ? affiliateId : "",
+                        sub1 != null ? sub1 : "",
+                        sub2 != null ? sub2 : "",
+                        sub3 != null ? sub3 : "",
+                        sub4 != null ? sub4 : "",
+                        sub5 != null ? sub5 : "",
+                        ip != null ? ip : "",
+                        userAgent != null ? userAgent : "",
+                        country != null ? country : "",
+                        String.valueOf(deviceType),
+                        String.valueOf(now.toEpochMilli()),
+                        String.valueOf(expiresAt.toEpochMilli())
+                );
+                redisTemplate.opsForValue().set("aff:click:sess:" + clickId, sessionData, Duration.ofDays(30));
+                redisTemplate.opsForValue().set("aff:click:" + clickId, offer.id() + ":" + affiliateId, Duration.ofDays(30));
+            } catch (Exception ex) {
+                log.warn("Redis write failed for click session {}: {}", clickId, ex.getMessage());
+            }
+        }
+
+        // 5. 异步落盘 PostgreSQL，使用受控池避免高并发压垮数据库连接池
+        if (clickSessionMapper != null) {
+            asyncDbWriter.submit(() -> {
                 try {
                     ClickSessionEntity entity = new ClickSessionEntity(
                             clickId,
@@ -117,34 +151,70 @@ public class ClickTrackerService {
                             now, expiresAt
                     );
                     clickSessionMapper.insert(entity);
-                } catch (Exception ignored) {}
-            }
+                } catch (Exception ex) {
+                    log.warn("Async DB persistence failed for click {}: {}", clickId, ex.getMessage());
+                }
+            });
+        }
 
-            if (redisTemplate != null) {
-                try {
-                    // 缓存 30 天
-                    redisTemplate.opsForValue().set("aff:click:" + clickId, offer.id() + ":" + affiliateId, Duration.ofDays(30));
-                } catch (Exception ignored) {}
-            }
-        });
-
-        // 4. 落地页链接宏变量替换
-        String redirectUrl = buildRedirectUrl(offer.landingPageUrl(), clickId, sub1, sub2, sub3, sub4, sub5);
+        // 6. 落地页链接宏变量替换
+        String redirectUrl = buildRedirectUrl(
+                offer.landingPageUrl(), clickId, offer.id(), affiliateId,
+                sub1, sub2, sub3, sub4, sub5, ip, country, deviceType
+        );
 
         return new ClickTrackingResult(clickId, redirectUrl, session);
     }
 
     /**
-     * 根据 click_id 取回点击会话
+     * 根据 click_id 取回点击会话 (本地 -> Redis 分布式 -> PostgreSQL 兜底)
      */
     public ClickSession findSession(String clickId) {
         if (clickId == null) return null;
 
+        // 1. 本地内存命中 (微秒级)
+        ClickSession local = sessionStore.get(clickId);
+        if (local != null) return local;
+
+        // 2. Redis 分布式会话读取 (支持多节点 Pod 共享)
+        if (redisTemplate != null) {
+            try {
+                String cached = redisTemplate.opsForValue().get("aff:click:sess:" + clickId);
+                if (cached != null && !cached.isBlank()) {
+                    String[] parts = cached.split("\\|\\|", -1);
+                    if (parts.length >= 15) {
+                        ClickSession session = new ClickSession(
+                                parts[0],
+                                parts[1],
+                                parts[2],
+                                parts[3],
+                                parts[4],
+                                parts[5],
+                                parts[6],
+                                parts[7],
+                                parts[8],
+                                parts[9],
+                                parts[10],
+                                parts[11],
+                                Integer.parseInt(parts[12]),
+                                Instant.ofEpochMilli(Long.parseLong(parts[13])),
+                                Instant.ofEpochMilli(Long.parseLong(parts[14]))
+                        );
+                        sessionStore.put(clickId, session);
+                        return session;
+                    }
+                }
+            } catch (Exception ex) {
+                log.warn("Redis read failed for click session {}: {}", clickId, ex.getMessage());
+            }
+        }
+
+        // 3. PostgreSQL 回源兜底查询
         if (clickSessionMapper != null) {
             try {
                 ClickSessionEntity entity = clickSessionMapper.selectById(clickId);
                 if (entity != null) {
-                    return new ClickSession(
+                    ClickSession session = new ClickSession(
                             entity.getClickId(),
                             entity.getTenantId(),
                             entity.getOfferId(),
@@ -161,29 +231,48 @@ public class ClickTrackerService {
                             entity.getCreatedAt(),
                             entity.getExpiresAt()
                     );
+                    sessionStore.put(clickId, session);
+                    return session;
                 }
-            } catch (Exception ignored) {}
+            } catch (Exception ex) {
+                log.warn("DB read failed for click session {}: {}", clickId, ex.getMessage());
+            }
         }
 
-        return sessionStore.get(clickId);
+        return null;
     }
 
     /**
-     * 替换落地页 URL 中的宏变量
+     * 替换落地页 URL 中的宏变量（标准参数）
      */
     public String buildRedirectUrl(String template, String clickId, String s1, String s2, String s3, String s4, String s5) {
+        return buildRedirectUrl(template, clickId, null, null, s1, s2, s3, s4, s5, null, null, 0);
+    }
+
+    /**
+     * 替换落地页 URL 中的全量宏变量 (支持 click_id, offer_id, aff_id, sub1~sub5, ip, country, device_type)
+     */
+    public String buildRedirectUrl(String template, String clickId, String offerId, String affId,
+                                   String s1, String s2, String s3, String s4, String s5,
+                                   String ip, String country, int deviceType) {
         if (template == null || template.isBlank()) {
             return "";
         }
         String url = template;
         url = url.replace("{click_id}", clickId != null ? clickId : "");
+        url = url.replace("{offer_id}", offerId != null ? offerId : "");
+        url = url.replace("{aff_id}", affId != null ? affId : "");
         url = url.replace("{sub1}", s1 != null ? s1 : "");
         url = url.replace("{sub2}", s2 != null ? s2 : "");
         url = url.replace("{sub3}", s3 != null ? s3 : "");
         url = url.replace("{sub4}", s4 != null ? s4 : "");
         url = url.replace("{sub5}", s5 != null ? s5 : "");
+        url = url.replace("{ip}", ip != null ? ip : "");
+        url = url.replace("{country}", country != null ? country : "");
+        url = url.replace("{device_type}", String.valueOf(deviceType));
         return url;
     }
 
-    public record ClickTrackingResult(String clickId, String redirectUrl, ClickSession session) {}
+    public record ClickTrackingResult(String clickId, String redirectUrl, ClickSession session) {
+    }
 }

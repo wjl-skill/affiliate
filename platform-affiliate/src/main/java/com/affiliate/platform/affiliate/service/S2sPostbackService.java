@@ -129,6 +129,28 @@ public class S2sPostbackService {
      * @param now              转化上报时间
      * @return 归因对齐与风控核验后的最终转化记录
      */
+    private final Set<String> inFlightTxIds = ConcurrentHashMap.newKeySet();
+
+    /**
+     * 根据广告主唯一交易订单流水号查找已有转化记录（幂等排重）
+     */
+    public Optional<Conversion> findByTxId(String txId) {
+        if (txId == null || txId.isBlank()) return Optional.empty();
+        if (conversionMapper != null) {
+            try {
+                QueryWrapper<ConversionEntity> qw = new QueryWrapper<>();
+                qw.eq("transaction_id", txId).last("LIMIT 1");
+                ConversionEntity entity = conversionMapper.selectOne(qw);
+                if (entity != null) {
+                    return Optional.of(toConversionDomain(entity));
+                }
+            } catch (Exception ignored) {}
+        }
+        return fallbackConversions.values().stream()
+                .filter(c -> txId.equalsIgnoreCase(c.txId()))
+                .findFirst();
+    }
+
     public Conversion processPostback(
             String clickId,
             String txId,
@@ -144,40 +166,48 @@ public class S2sPostbackService {
             throw new IllegalArgumentException("txId must not be blank");
         }
 
-        Instant current = now == null ? Instant.now() : now;
-
-        // 1. 提取点击会话存根 (支持精准 click_id 检索与概率性设备指纹兜底)
-        ClickSession session = null;
-        if (clickId != null && !clickId.isBlank()) {
-            session = clickTracker.findSession(clickId);
+        // 并发防穿透锁
+        boolean acquired = inFlightTxIds.add(txId);
+        if (!acquired) {
+            try { Thread.sleep(50); } catch (InterruptedException ignored) {}
         }
 
-        // 若 click_id 缺失或未命中，且启用了概率性指纹引擎，则尝试基于 IP + UA 模糊匹配
-        if (session == null && probabilisticEngine != null && offerIdFallback != null && ip != null) {
-            ProbabilisticAttributionEngine.ProbabilisticMatchResult match =
-                    probabilisticEngine.matchAttribution(offerIdFallback, ip, userAgent, "US", deviceType);
-            if (match.matched()) {
-                session = match.matchedSession();
+        try {
+            Instant current = now == null ? Instant.now() : now;
+
+            // 1. 提取点击会话存根 (支持精准 click_id 检索与概率性设备指纹兜底)
+            ClickSession session = null;
+            if (clickId != null && !clickId.isBlank()) {
+                session = clickTracker.findSession(clickId);
             }
-        }
 
-        if (session == null) {
-            String convId = "conv_" + UUID.randomUUID().toString().replace("-", "");
-            Conversion rejected = new Conversion(convId, "default", clickId != null ? clickId : "unmatched", txId,
-                    offerIdFallback != null ? offerIdFallback : "unknown", "unknown",
-                    BigDecimal.ZERO, BigDecimal.ZERO, saleAmount, 0,
-                    Conversion.Status.REJECTED, "CLICK_SESSION_NOT_FOUND", null,
-                    Conversion.PostbackStatus.PENDING, current);
-            saveConversion(rejected);
-            return rejected;
-        }
+            // 若 click_id 缺失或未命中，且启用了概率性指纹引擎，则尝试基于 IP + UA 模糊匹配
+            if (session == null && probabilisticEngine != null && offerIdFallback != null && ip != null) {
+                ProbabilisticAttributionEngine.ProbabilisticMatchResult match =
+                        probabilisticEngine.matchAttribution(offerIdFallback, ip, userAgent, "US", deviceType);
+                if (match.matched()) {
+                    session = match.matchedSession();
+                }
+            }
 
-        // 2. 反欺诈与 CTIT 质检 (使用商业级多维评分)
-        AffiliateAntiFraudEngine.FraudInspectionResult fraudRes = antiFraudEngine.inspectConversion(session, txId, current);
-        long ctit = Duration.between(session.createdAt(), current).toSeconds();
+            if (session == null) {
+                String convId = "conv_" + UUID.randomUUID().toString().replace("-", "");
+                String tenant = com.affiliate.platform.tenant.TenantContext.get() != null ? com.affiliate.platform.tenant.TenantContext.get() : "public";
+                Conversion rejected = new Conversion(convId, tenant, clickId != null ? clickId : "unmatched", txId,
+                        offerIdFallback != null ? offerIdFallback : "unknown", "unknown",
+                        BigDecimal.ZERO, BigDecimal.ZERO, saleAmount, 0,
+                        Conversion.Status.REJECTED, "CLICK_SESSION_NOT_FOUND", null,
+                        Conversion.PostbackStatus.PENDING, current);
+                saveConversion(rejected);
+                return rejected;
+            }
 
-        // 3. 读取 Offer 与渠道出价 (优先匹配多事件 OfferGoal)
-        Offer offer = offerService.find(session.offerId()).orElse(null);
+            // 2. 反欺诈与 CTIT 质检 (使用商业级多维评分)
+            AffiliateAntiFraudEngine.FraudInspectionResult fraudRes = antiFraudEngine.inspectConversion(session, txId, current);
+            long ctit = Duration.between(session.createdAt(), current).toSeconds();
+
+            // 3. 读取 Offer 与渠道出价 (优先匹配多事件 OfferGoal)
+            Offer offer = offerService.find(session.offerId()).orElse(null);
         AffiliatePartner partner = findPartner(session.affiliateId()).orElse(null);
 
         BigDecimal payout = BigDecimal.ZERO;
@@ -245,7 +275,10 @@ public class S2sPostbackService {
         }
 
         return result;
+    } finally {
+        inFlightTxIds.remove(txId);
     }
+}
 
     private void saveConversion(Conversion conv) {
         if (conversionMapper != null) {

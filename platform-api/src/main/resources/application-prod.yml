@@ -90,3 +90,10 @@ app:
   google:
     # 启用 Google 连接器
     enabled: true
+  ip2location:
+    # 生产模式启用 IP2Location 二进制数据库解析
+    enabled: ${IP2LOCATION_ENABLED:true}
+    # 生产物理挂载路径 (支持通过环境变量注入或宿主机挂载)
+    bin-path: ${IP2LOCATION_BIN_PATH:/opt/data/geo/IP2LOCATION-LITE-DB5.IPV6.BIN}
+    cache-mode: ${IP2LOCATION_CACHE_MODE:MEMORY_MAPPED}
+

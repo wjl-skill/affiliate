@@ -130,3 +130,11 @@ app:
     default-timeout-ms: 20
     # 默认广告位保底价格（USD）
     default-floor-price: 0.10
+  ip2location:
+    # 是否启用 IP2Location 二进制数据库解析 (若禁用或无文件则自动降级为规则引擎)
+    enabled: ${IP2LOCATION_ENABLED:true}
+    # 二进制库物理文件绝对路径 (预留配置项，如: /opt/data/geo/IP2LOCATION-LITE-DB5.IPV6.BIN，留空走自动降级)
+    bin-path: ${IP2LOCATION_BIN_PATH:}
+    # 内存访问模式: MEMORY_MAPPED (操作系统内存映射，微秒级延迟)
+    cache-mode: ${IP2LOCATION_CACHE_MODE:MEMORY_MAPPED}
+

@@ -120,6 +120,9 @@ public class AffiliateAntiFraudEngine {
 
         // 1. 交易订单号幂等去重检查 (严重作弊/重复刷单 -> 100分瞬时拒绝)
         String txKey = session.offerId() + ":" + txId;
+        if (processedTxIds.size() > 50000) {
+            processedTxIds.clear();
+        }
         if (!processedTxIds.add(txKey)) {
             riskScore = 100;
             riskReasons.add("DUPLICATE_TRANSACTION_ID");
@@ -221,6 +224,20 @@ public class AffiliateAntiFraudEngine {
         }
         long epochMinute = Instant.now().getEpochSecond() / 60;
         String key = ip + ":" + epochMinute;
+
+        // 自动清理过期分钟的计数器，防止内存无限泄漏
+        if (ipMinuteClickCounters.size() > 5000) {
+            ipMinuteClickCounters.keySet().removeIf(k -> {
+                int idx = k.lastIndexOf(':');
+                if (idx > 0) {
+                    try {
+                        long m = Long.parseLong(k.substring(idx + 1));
+                        return m < epochMinute - 2;
+                    } catch (Exception ignored) {}
+                }
+                return false;
+            });
+        }
 
         AtomicInteger counter = ipMinuteClickCounters.computeIfAbsent(key, k -> new AtomicInteger(0));
         return counter.incrementAndGet() <= maxPerMin;

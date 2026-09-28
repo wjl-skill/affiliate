@@ -26,7 +26,9 @@ import java.util.concurrent.atomic.AtomicLong;
 @Service
 public class SubIdAnalyticsService {
 
-    /** 当前请求线程绑定的租户；离线/测试场景无上下文时归入 public 空间 */
+    /**
+     * 当前请求线程绑定的租户；离线/测试场景无上下文时归入 public 空间
+     */
     private static String currentTenant() {
         String tenant = TenantContext.get();
         return tenant != null && !tenant.isBlank() ? tenant : "public";
@@ -49,19 +51,33 @@ public class SubIdAnalyticsService {
         String s1 = sub1 != null ? sub1 : "default";
 
         if (statsMapper != null) {
-            QueryWrapper<SubIdStatsEntity> qw = new QueryWrapper<>();
-            qw.eq("tenant_id", currentTenant()).eq("affiliate_id", affId).eq("sub1", s1);
-            SubIdStatsEntity entity = statsMapper.selectOne(qw);
+            try {
+                QueryWrapper<SubIdStatsEntity> qw = new QueryWrapper<>();
+                qw.eq("affiliate_id", affId).eq("sub1", s1);
+                SubIdStatsEntity entity = statsMapper.selectOne(qw);
 
-            if (entity == null) {
-                entity = new SubIdStatsEntity(currentTenant(), affId, s1, 1L, 0L, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, Instant.now());
-                statsMapper.insert(entity);
-            } else {
-                entity.setClicks(entity.getClicks() + 1);
-                recomputeMetrics(entity);
-                statsMapper.update(entity, qw);
+                if (entity == null) {
+                    entity = new SubIdStatsEntity(currentTenant(), affId, s1, 1L, 0L, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, Instant.now());
+                    try {
+                        statsMapper.insert(entity);
+                    } catch (Exception duplicateEx) {
+                        // 并发插入冲突时转为更新
+                        SubIdStatsEntity existing = statsMapper.selectOne(qw);
+                        if (existing != null) {
+                            existing.setClicks(existing.getClicks() + 1);
+                            recomputeMetrics(existing);
+                            statsMapper.update(existing, qw);
+                        }
+                    }
+                } else {
+                    entity.setClicks(entity.getClicks() + 1);
+                    recomputeMetrics(entity);
+                    statsMapper.update(entity, qw);
+                }
+                return;
+            } catch (Exception ex) {
+                // 数据库出现网络或连接异常时，优雅降级至内存累加器
             }
-            return;
         }
 
         String key = key(affId, s1);
@@ -75,22 +91,37 @@ public class SubIdAnalyticsService {
         BigDecimal r = revenue != null ? revenue : BigDecimal.ZERO;
 
         if (statsMapper != null) {
-            QueryWrapper<SubIdStatsEntity> qw = new QueryWrapper<>();
-            qw.eq("tenant_id", currentTenant()).eq("affiliate_id", affId).eq("sub1", s1);
-            SubIdStatsEntity entity = statsMapper.selectOne(qw);
+            try {
+                QueryWrapper<SubIdStatsEntity> qw = new QueryWrapper<>();
+                qw.eq("affiliate_id", affId).eq("sub1", s1);
+                SubIdStatsEntity entity = statsMapper.selectOne(qw);
 
-            if (entity == null) {
-                entity = new SubIdStatsEntity(currentTenant(), affId, s1, 1L, 1L, p, r, BigDecimal.ZERO, BigDecimal.ZERO, Instant.now());
-                recomputeMetrics(entity);
-                statsMapper.insert(entity);
-            } else {
-                entity.setConversions(entity.getConversions() + 1);
-                entity.setTotalPayout(entity.getTotalPayout().add(p));
-                entity.setTotalRevenue(entity.getTotalRevenue().add(r));
-                recomputeMetrics(entity);
-                statsMapper.update(entity, qw);
+                if (entity == null) {
+                    entity = new SubIdStatsEntity(currentTenant(), affId, s1, 1L, 1L, p, r, BigDecimal.ZERO, BigDecimal.ZERO, Instant.now());
+                    recomputeMetrics(entity);
+                    try {
+                        statsMapper.insert(entity);
+                    } catch (Exception duplicateEx) {
+                        SubIdStatsEntity existing = statsMapper.selectOne(qw);
+                        if (existing != null) {
+                            existing.setConversions(existing.getConversions() + 1);
+                            existing.setTotalPayout(existing.getTotalPayout().add(p));
+                            existing.setTotalRevenue(existing.getTotalRevenue().add(r));
+                            recomputeMetrics(existing);
+                            statsMapper.update(existing, qw);
+                        }
+                    }
+                } else {
+                    entity.setConversions(entity.getConversions() + 1);
+                    entity.setTotalPayout(entity.getTotalPayout().add(p));
+                    entity.setTotalRevenue(entity.getTotalRevenue().add(r));
+                    recomputeMetrics(entity);
+                    statsMapper.update(entity, qw);
+                }
+                return;
+            } catch (Exception ex) {
+                // 降级处理
             }
-            return;
         }
 
         String key = key(affId, s1);
@@ -237,7 +268,8 @@ public class SubIdAnalyticsService {
             double crPercent,
             BigDecimal rpc,
             BigDecimal margin
-    ) {}
+    ) {
+    }
 
     private static class SubIdMetricBucket {
         final AtomicLong clicks = new AtomicLong(0);
@@ -245,9 +277,20 @@ public class SubIdAnalyticsService {
         private BigDecimal payout = BigDecimal.ZERO;
         private BigDecimal revenue = BigDecimal.ZERO;
 
-        synchronized void addPayout(BigDecimal p) { payout = payout.add(p); }
-        synchronized void addRevenue(BigDecimal r) { revenue = revenue.add(r); }
-        synchronized BigDecimal getPayout() { return payout; }
-        synchronized BigDecimal getRevenue() { return revenue; }
+        synchronized void addPayout(BigDecimal p) {
+            payout = payout.add(p);
+        }
+
+        synchronized void addRevenue(BigDecimal r) {
+            revenue = revenue.add(r);
+        }
+
+        synchronized BigDecimal getPayout() {
+            return payout;
+        }
+
+        synchronized BigDecimal getRevenue() {
+            return revenue;
+        }
     }
 }

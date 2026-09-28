@@ -116,7 +116,11 @@ public class S3StorageConfigService {
             if (s3Mapper.selectById(config.id()) != null) {
                 s3Mapper.updateById(entity);
             } else {
-                s3Mapper.insert(entity);
+                try {
+                    s3Mapper.insert(entity);
+                } catch (Exception duplicateEx) {
+                    s3Mapper.updateById(entity);
+                }
             }
             return config;
         }

@@ -2,6 +2,7 @@ package com.affiliate.platform.affiliate.service;
 
 import com.affiliate.platform.affiliate.domain.Offer;
 import com.affiliate.platform.affiliate.domain.SmartLink;
+import com.affiliate.platform.geo.IpLocationResolver;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
@@ -32,6 +33,28 @@ public class TdsRouter {
         if (offerId != null && epc != null) {
             offerEpcCache.put(offerId, epc);
         }
+    }
+
+    /**
+     * 执行 SmartLink 智能路由决断 (结合 Client IP 自动解析物理国家)
+     *
+     * @param smartLink  智能分流链接配置
+     * @param clientIp   访客客户端 IP
+     * @param country    访客显式传入国家代码 (为空或默认时从 IP 自动解析)
+     * @param deviceType 访客设备类型
+     * @param dateKey    当前日期标识
+     * @return 最终选取的最佳有效 Offer
+     */
+    public Offer route(SmartLink smartLink, String clientIp, String country, int deviceType, String dateKey) {
+        String effectiveCountry = country;
+        if ((effectiveCountry == null || effectiveCountry.isBlank() || "US".equalsIgnoreCase(effectiveCountry))
+                && clientIp != null && !clientIp.isBlank()) {
+            String detected = IpLocationResolver.getCountryCode(clientIp);
+            if (detected != null && !detected.isBlank() && !"ZZ".equalsIgnoreCase(detected)) {
+                effectiveCountry = detected;
+            }
+        }
+        return route(smartLink, effectiveCountry, deviceType, dateKey);
     }
 
     /**

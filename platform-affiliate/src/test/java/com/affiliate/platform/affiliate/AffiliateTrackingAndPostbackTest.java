@@ -148,4 +148,46 @@ class AffiliateTrackingAndPostbackTest {
         Offer chosen2 = offerService.resolveActiveOfferWithFallback("off-primary", today);
         assertEquals("off-fallback", chosen2.id());
     }
+
+    @Test
+    void testIpLocationResolutionAndCountryRouting() {
+        // 创建分别面向中国和英国的 Offer
+        Offer cnOffer = new Offer("off-cn", "tenant-1", "adv-cn", "CN Shopping",
+                "https://taobao.com/land?click_id={click_id}&country={country}", Offer.PayoutType.CPA,
+                new BigDecimal("6.00"), new BigDecimal("10.00"), Offer.Status.ACTIVE,
+                100, null, null, Set.of("CN"), Set.of(1), null, Instant.now());
+        Offer gbOffer = new Offer("off-gb", "tenant-1", "adv-gb", "UK London Store",
+                "https://ukstore.co.uk/land?click_id={click_id}&country={country}", Offer.PayoutType.CPA,
+                new BigDecimal("8.00"), new BigDecimal("12.00"), Offer.Status.ACTIVE,
+                100, null, null, Set.of("GB"), Set.of(1), null, Instant.now());
+        offerService.save(cnOffer);
+        offerService.save(gbOffer);
+
+        TdsRouter tdsRouter = new TdsRouter(offerService);
+        com.affiliate.platform.affiliate.domain.SmartLink smartLink = new com.affiliate.platform.affiliate.domain.SmartLink(
+                "sl-global", "tenant-1", "Global Campaign", "ECOM",
+                List.of("off-cn", "off-gb"),
+                com.affiliate.platform.affiliate.domain.SmartLink.RoutingStrategy.HIGHEST_EPC,
+                null, Instant.now()
+        );
+
+        String today = "2026-09-28";
+
+        // 1. 中国客户端 IP -> 智能路由至 off-cn
+        Offer routedCn = tdsRouter.route(smartLink, "114.114.114.114", null, 1, today);
+        assertNotNull(routedCn);
+        assertEquals("off-cn", routedCn.id());
+
+        // 2. 英国客户端 IP -> 智能路由至 off-gb
+        Offer routedGb = tdsRouter.route(smartLink, "81.2.69.142", null, 1, today);
+        assertNotNull(routedGb);
+        assertEquals("off-gb", routedGb.id());
+
+        // 3. 点击追踪并验证落地页宏替换精准注入解析出的国家
+        ClickTrackerService.ClickTrackingResult cnClick = clickTracker.trackClick(
+                routedCn, "aff-100", "sub_a", null, null, null, null,
+                "114.114.114.114", "Mozilla/5.0", com.affiliate.platform.geo.IpLocationResolver.getCountryCode("114.114.114.114"), 1
+        );
+        assertTrue(cnClick.redirectUrl().contains("country=CN"));
+    }
 }

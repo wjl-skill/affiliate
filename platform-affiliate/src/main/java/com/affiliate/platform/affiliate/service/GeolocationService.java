@@ -4,6 +4,8 @@ import com.affiliate.platform.affiliate.cache.CacheKeyGenerator;
 import com.affiliate.platform.affiliate.cache.MultiLevelCacheManager;
 import com.affiliate.platform.affiliate.domain.IpGeolocationCacheEntity;
 import com.affiliate.platform.affiliate.repository.IpGeolocationRepository;
+import com.affiliate.platform.geo.IpLocationInfo;
+import com.affiliate.platform.geo.IpLocationResolver;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -415,8 +417,30 @@ public class GeolocationService {
     }
 
     private IpGeolocation fetchFromExternalApi(String ipAddress) {
-        // TODO: 调用 MaxMind GeoIP2 API
-        // 当前使用模拟实现
+        if (ipAddress == null || ipAddress.isBlank()) {
+            ipAddress = "127.0.0.1";
+        }
+        IpLocationInfo info = IpLocationResolver.resolve(ipAddress);
+        if (info != null && !info.isUnknown()) {
+            boolean isDc = datacenterIpRanges.stream().anyMatch(range -> ipInRange(info.ip(), range));
+            boolean isTor = isDc && (info.ip().startsWith("185.220.") || info.ip().startsWith("185.220.100."));
+            return new IpGeolocation(
+                    info.ip(),
+                    info.countryCode(),
+                    info.countryName(),
+                    info.city(),
+                    info.region(),
+                    info.latitude(),
+                    info.longitude(),
+                    info.timezone(),
+                    info.isPrivateNetwork() ? "Local ISP" : "Standard ISP",
+                    "AS0",
+                    false,
+                    false,
+                    isTor,
+                    isDc
+            );
+        }
         return simulateGeoLookup(ipAddress);
     }
 

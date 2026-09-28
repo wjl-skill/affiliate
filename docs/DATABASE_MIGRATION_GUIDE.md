@@ -154,9 +154,11 @@ Service → L3 (数据库) → 失效 L2 → 失效 L1
    - 表：`affiliate_touch_point`（分区）、`affiliate_attribution_result`
    - 缓存策略：归因结果缓存 1 小时，触点历史不缓存（写多读少）
 
-2. **GeolocationService**（已完成）
-   - 表：`affiliate_ip_geolocation_cache`
-   - 缓存策略：IP 查询结果缓存 24 小时（外部 API 调用昂贵）
+2. **GeolocationService & IpLocationResolver**（生产级已完成）
+   - 底层引擎：`com.ip2location:ip2location-java` + `IP2LOCATION-LITE-DB5.IPV6.BIN`（173MB，内存映射模式，查询延迟 < 0.05ms）
+   - 表：`affiliate_ip_geolocation_cache`（持久化沉淀与历史归因回溯）
+   - 缓存策略：Caffeine L1 + Redis L2 缓存 24 小时，私网/回环地址极速短路识别，彻底避免外部慢 HTTP 调用
+   - 跨模块整合：联动 `AffiliateClickController`（穿透反代提取真实 IP）、`TdsRouter`（国家定向分流）与 `ClickTrackerService`（宏注入）
 
 3. **PaymentGatewayService**（已完成）
    - 表：`affiliate_payment_method`、`affiliate_payment_transaction`

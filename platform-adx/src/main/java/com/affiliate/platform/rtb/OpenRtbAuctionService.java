@@ -189,8 +189,8 @@ public class OpenRtbAuctionService {
                         decision.creative().id()
                 ));
 
-                // 阶段 9：异步或内存落盘本次竞价出价记录
-                auctions.save(new Auction(
+                // 阶段 9：异步落盘本次竞价出价记录，彻底避免关系数据库 I/O 阻塞 20ms 竞价硬超时时限
+                Auction auctionRecord = new Auction(
                         auctionId,
                         request.id(),
                         slot.id(),
@@ -199,7 +199,15 @@ public class OpenRtbAuctionService {
                         "USD",
                         decision.advertiser(),
                         Instant.now()
-                ));
+                );
+                Thread.ofVirtual().name("rtb-auction-async-writer").start(() -> {
+                    try {
+                        auctions.save(auctionRecord);
+                    } catch (Exception ex) {
+                        org.slf4j.LoggerFactory.getLogger(OpenRtbAuctionService.class)
+                                .warn("Async auction save failed for {}: {}", auctionId, ex.getMessage());
+                    }
+                });
             });
         }
 

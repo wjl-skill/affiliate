@@ -75,100 +75,127 @@ public class WalletService {
         ));
     }
 
+    private final com.google.common.util.concurrent.Striped<java.util.concurrent.locks.Lock> locks =
+            com.google.common.util.concurrent.Striped.lazyWeakLock(256);
+
     /**
      * 账户资金充值 (Recharge)
      */
-    public synchronized WalletAccount recharge(String accountId, BigDecimal amount) {
+    public WalletAccount recharge(String accountId, BigDecimal amount) {
         if (amount == null || amount.signum() <= 0) {
             throw new IllegalArgumentException("recharge amount must be positive");
         }
-        WalletAccount curr = findDomain(accountId);
-        if (curr == null) {
-            curr = new WalletAccount(accountId, "public", BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, "USD", Instant.now());
+        java.util.concurrent.locks.Lock lock = locks.get(accountId);
+        lock.lock();
+        try {
+            WalletAccount curr = findDomain(accountId);
+            if (curr == null) {
+                curr = new WalletAccount(accountId, "public", BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, "USD", Instant.now());
+            }
+            WalletAccount next = new WalletAccount(
+                    curr.accountId(),
+                    curr.tenantId(),
+                    curr.cashBalance().add(amount),
+                    curr.creditLimit(),
+                    curr.frozenAmount(),
+                    curr.currency(),
+                    Instant.now()
+            );
+            saveDomain(next);
+            return next;
+        } finally {
+            lock.unlock();
         }
-        WalletAccount next = new WalletAccount(
-                curr.accountId(),
-                curr.tenantId(),
-                curr.cashBalance().add(amount),
-                curr.creditLimit(),
-                curr.frozenAmount(),
-                curr.currency(),
-                Instant.now()
-        );
-        saveDomain(next);
-        return next;
     }
 
     /**
      * 竞价前原子预占冻结 (Pre-Auth Hold)
      */
-    public synchronized boolean preAuthHold(String accountId, BigDecimal amount) {
-        WalletAccount curr = findDomain(accountId);
-        if (curr == null || !curr.canHold(amount)) {
-            return false;
-        }
+    public boolean preAuthHold(String accountId, BigDecimal amount) {
+        java.util.concurrent.locks.Lock lock = locks.get(accountId);
+        lock.lock();
+        try {
+            WalletAccount curr = findDomain(accountId);
+            if (curr == null || !curr.canHold(amount)) {
+                return false;
+            }
 
-        WalletAccount next = new WalletAccount(
-                curr.accountId(),
-                curr.tenantId(),
-                curr.cashBalance(),
-                curr.creditLimit(),
-                curr.frozenAmount().add(amount),
-                curr.currency(),
-                Instant.now()
-        );
-        saveDomain(next);
-        return true;
+            WalletAccount next = new WalletAccount(
+                    curr.accountId(),
+                    curr.tenantId(),
+                    curr.cashBalance(),
+                    curr.creditLimit(),
+                    curr.frozenAmount().add(amount),
+                    curr.currency(),
+                    Instant.now()
+            );
+            saveDomain(next);
+            return true;
+        } finally {
+            lock.unlock();
+        }
     }
 
     /**
      * 竞价胜出确认真实扣减 (Capture / Settlement)
      */
-    public synchronized WalletAccount capture(String accountId, BigDecimal amount) {
-        WalletAccount curr = findDomain(accountId);
-        if (curr == null) {
-            throw new IllegalStateException("account not found: " + accountId);
+    public WalletAccount capture(String accountId, BigDecimal amount) {
+        java.util.concurrent.locks.Lock lock = locks.get(accountId);
+        lock.lock();
+        try {
+            WalletAccount curr = findDomain(accountId);
+            if (curr == null) {
+                throw new IllegalStateException("account not found: " + accountId);
+            }
+
+            BigDecimal newFrozen = curr.frozenAmount().subtract(amount);
+            if (newFrozen.signum() < 0) newFrozen = BigDecimal.ZERO;
+
+            BigDecimal newCash = curr.cashBalance().subtract(amount);
+
+            WalletAccount next = new WalletAccount(
+                    curr.accountId(),
+                    curr.tenantId(),
+                    newCash,
+                    curr.creditLimit(),
+                    newFrozen,
+                    curr.currency(),
+                    Instant.now()
+            );
+            saveDomain(next);
+            return next;
+        } finally {
+            lock.unlock();
         }
-
-        BigDecimal newFrozen = curr.frozenAmount().subtract(amount);
-        if (newFrozen.signum() < 0) newFrozen = BigDecimal.ZERO;
-
-        BigDecimal newCash = curr.cashBalance().subtract(amount);
-
-        WalletAccount next = new WalletAccount(
-                curr.accountId(),
-                curr.tenantId(),
-                newCash,
-                curr.creditLimit(),
-                newFrozen,
-                curr.currency(),
-                Instant.now()
-        );
-        saveDomain(next);
-        return next;
     }
 
     /**
      * 竞价未胜出释放预占解冻 (Release Hold)
      */
-    public synchronized WalletAccount releaseHold(String accountId, BigDecimal amount) {
-        WalletAccount curr = findDomain(accountId);
-        if (curr == null) return null;
+    public WalletAccount releaseHold(String accountId, BigDecimal amount) {
+        java.util.concurrent.locks.Lock lock = locks.get(accountId);
+        lock.lock();
+        try {
+            WalletAccount curr = findDomain(accountId);
+            if (curr == null) return null;
 
-        BigDecimal newFrozen = curr.frozenAmount().subtract(amount);
-        if (newFrozen.signum() < 0) newFrozen = BigDecimal.ZERO;
+            BigDecimal newFrozen = curr.frozenAmount().subtract(amount);
+            if (newFrozen.signum() < 0) newFrozen = BigDecimal.ZERO;
 
-        WalletAccount next = new WalletAccount(
-                curr.accountId(),
-                curr.tenantId(),
-                curr.cashBalance(),
-                curr.creditLimit(),
-                newFrozen,
-                curr.currency(),
-                Instant.now()
-        );
-        saveDomain(next);
-        return next;
+            WalletAccount next = new WalletAccount(
+                    curr.accountId(),
+                    curr.tenantId(),
+                    curr.cashBalance(),
+                    curr.creditLimit(),
+                    newFrozen,
+                    curr.currency(),
+                    Instant.now()
+            );
+            saveDomain(next);
+            return next;
+        } finally {
+            lock.unlock();
+        }
     }
 
     private WalletAccount findDomain(String accountId) {

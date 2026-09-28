@@ -106,10 +106,18 @@ public class AffiliateSettlementService {
                     null
             );
             invoiceMapper.insert(entity);
+            // 锁定参与出账的转化状态为 INVOICED，杜绝跨账期重复出账
+            for (Conversion c : approvedList) {
+                postbackService.updateConversion(c.withStatus(Conversion.Status.INVOICED));
+            }
             return Optional.of(invoice);
         }
 
         fallbackInvoices.put(invoiceId, invoice);
+        // 内存模式同步闭环状态
+        for (Conversion c : approvedList) {
+            postbackService.updateConversion(c.withStatus(Conversion.Status.INVOICED));
+        }
         return Optional.of(invoice);
     }
 

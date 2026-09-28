@@ -8,6 +8,7 @@ import com.affiliate.platform.affiliate.service.OfferService;
 import com.affiliate.platform.affiliate.service.SubIdAnalyticsService;
 import com.affiliate.platform.affiliate.service.TdsRouter;
 import com.affiliate.platform.entity.SmartLinkEntity;
+import com.affiliate.platform.geo.IpLocationResolver;
 import com.affiliate.platform.mapper.SmartLinkMapper;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -80,7 +81,7 @@ public class AffiliateClickController {
             return ResponseEntity.badRequest().build();
         }
 
-        String clientIp = request != null ? request.getRemoteAddr() : "127.0.0.1";
+        String clientIp = resolveClientIp(request);
         String userAgent = request != null ? request.getHeader("User-Agent") : "Mozilla/5.0";
 
         // 1. 单 IP 高频点击防刷质检 (单 IP 每分钟上限 60 次)
@@ -88,7 +89,18 @@ public class AffiliateClickController {
             return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS).build();
         }
 
-        // 2. 解析可用 Offer（SmartLink 走 TDS 智能路由；直链超限自动解析 Fallback）
+        // 2. 基于 IP2Location 二进制数据库解析访客真实物理归属国
+        String resolvedCountry = country;
+        if (resolvedCountry == null || resolvedCountry.isBlank() || "US".equalsIgnoreCase(resolvedCountry)) {
+            String detectedCountry = IpLocationResolver.getCountryCode(clientIp);
+            if (detectedCountry != null && !detectedCountry.isBlank() && !"ZZ".equalsIgnoreCase(detectedCountry)) {
+                resolvedCountry = detectedCountry;
+            } else if (resolvedCountry == null || resolvedCountry.isBlank()) {
+                resolvedCountry = "US";
+            }
+        }
+
+        // 3. 解析可用 Offer（SmartLink 走 TDS 智能路由；直链超限自动解析 Fallback）
         String todayKey = LocalDate.now().toString();
         Offer targetOffer;
         if (hasSmartLink) {
@@ -96,7 +108,7 @@ public class AffiliateClickController {
             if (link == null) {
                 return ResponseEntity.status(HttpStatus.NOT_FOUND).build();
             }
-            targetOffer = tdsRouter.route(link, country, deviceType, todayKey);
+            targetOffer = tdsRouter.route(link, resolvedCountry, deviceType, todayKey);
         } else {
             targetOffer = offerService.resolveActiveOfferWithFallback(offerId, todayKey);
         }
@@ -104,16 +116,16 @@ public class AffiliateClickController {
             return ResponseEntity.status(HttpStatus.NOT_FOUND).build();
         }
 
-        // 3. 点击追踪与落地页宏替换
+        // 4. 点击追踪与落地页宏替换
         ClickTrackerService.ClickTrackingResult trackingResult = clickTracker.trackClick(
                 targetOffer, affiliateId, sub1, sub2, sub3, sub4, sub5,
-                clientIp, userAgent, country, deviceType
+                clientIp, userAgent, resolvedCountry, deviceType
         );
 
-        // 4. 异步累加 Sub-ID 流式报表点击数
+        // 5. 异步累加 Sub-ID 流式报表点击数
         analyticsService.recordClick(affiliateId, sub1);
 
-        // 5. 执行 HTTP 302 重定向
+        // 6. 执行 HTTP 302 重定向
         HttpHeaders headers = new HttpHeaders();
         headers.setLocation(URI.create(trackingResult.redirectUrl()));
         return new ResponseEntity<>(headers, HttpStatus.FOUND);
@@ -139,5 +151,30 @@ public class AffiliateClickController {
                 entity.getFallbackOfferId(),
                 entity.getCreatedAt()
         );
+    }
+
+    private String resolveClientIp(HttpServletRequest request) {
+        if (request == null) {
+            return "127.0.0.1";
+        }
+        String[] headers = {
+                "CF-Connecting-IP",
+                "X-Forwarded-For",
+                "X-Real-IP",
+                "Proxy-Client-IP",
+                "WL-Proxy-Client-IP",
+                "HTTP_CLIENT_IP",
+                "HTTP_X_FORWARDED_FOR"
+        };
+        for (String header : headers) {
+            String ip = request.getHeader(header);
+            if (ip != null && !ip.isBlank() && !"unknown".equalsIgnoreCase(ip.trim())) {
+                if (ip.contains(",")) {
+                    ip = ip.split(",")[0].trim();
+                }
+                return ip;
+            }
+        }
+        return request.getRemoteAddr() != null ? request.getRemoteAddr() : "127.0.0.1";
     }
 }

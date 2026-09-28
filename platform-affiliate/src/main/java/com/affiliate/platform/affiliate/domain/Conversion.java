@@ -45,7 +45,9 @@ public record Conversion(
         /** 审核驳回（退款退货或核销失败） */
         REJECTED,
         /** 疑似欺诈（CTIT 异常或黑名单命中） */
-        FRAUD_SUSPECTED
+        FRAUD_SUSPECTED,
+        /** 已结算出账（已关联结算发票，防止二次出账） */
+        INVOICED
     }
 
     public enum PostbackStatus {
@@ -69,6 +71,13 @@ public record Conversion(
      */
     public Conversion reject(String reason) {
         return new Conversion(id, tenantId, clickId, txId, offerId, affiliateId, payout, revenue, saleAmount, ctitSeconds, Status.REJECTED, reason, sub1, postbackStatus, createdAt);
+    }
+
+    /**
+     * 变更业务状态
+     */
+    public Conversion withStatus(Status newStatus) {
+        return new Conversion(id, tenantId, clickId, txId, offerId, affiliateId, payout, revenue, saleAmount, ctitSeconds, newStatus, rejectionReason, sub1, postbackStatus, createdAt);
     }
 
     /**

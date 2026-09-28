@@ -99,7 +99,7 @@ class Phase2EnhancementsTest {
         assertEquals("China", cnGeo.countryName());
 
         // 3. 英国 IP
-        GeolocationService.IpGeolocation gbGeo = geolocationService.lookup("51.100.20.30");
+        GeolocationService.IpGeolocation gbGeo = geolocationService.lookup("81.2.69.142");
         assertNotNull(gbGeo);
         assertEquals("GB", gbGeo.countryCode());
 
