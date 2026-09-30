@@ -26,9 +26,18 @@ public class CampaignService {
     // 领域事件发布器
     private final EventPublisher events;
 
+    // 无锁倒排索引
+    private final CampaignInvertedIndex invertedIndex;
+
     public CampaignService(Repository<Campaign> repository, EventPublisher events) {
+        this(repository, events, new CampaignInvertedIndex());
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public CampaignService(Repository<Campaign> repository, EventPublisher events, CampaignInvertedIndex invertedIndex) {
         this.repository = repository;
         this.events = events;
+        this.invertedIndex = invertedIndex != null ? invertedIndex : new CampaignInvertedIndex();
     }
 
     /**
@@ -88,6 +97,7 @@ public class CampaignService {
     public Campaign setActive(String id, boolean active) {
         Campaign next = get(id).activate(active);
         repository.save(next);
+        invertedIndex.upsert(next);
         events.publish(DomainEvent.create("campaign.status_changed.v1", tenant(), id, next.status()));
         return next;
     }
@@ -105,15 +115,37 @@ public class CampaignService {
     }
 
     /**
-     * 全维度定向匹配引擎：根据综合流量上下文（含地理、设备、时段、域名等）筛选可用活动
+     * 全维度定向匹配引擎：基于无锁多维倒排索引极速召回可用活动
      *
      * @param ctx 综合流量环境上下文
      * @return 符合全部定向条件的可用活动列表
      */
     public List<Campaign> match(TrafficContext ctx) {
-        return repository.findAll().stream()
-                .filter(c -> c.matches(ctx))
-                .toList();
+        if (ctx == null) {
+            return List.of();
+        }
+        // 冷启动自愈自适应校验：若倒排索引为空但仓储有数据，执行一次平滑预热重构
+        if (invertedIndex.activeCampaignCount() == 0) {
+            List<Campaign> all = repository.findAll();
+            boolean hasActive = all.stream().anyMatch(c -> c.status() == Campaign.Status.ACTIVE);
+            if (hasActive) {
+                invertedIndex.rebuild(all);
+            } else {
+                return List.of();
+            }
+        }
+        return invertedIndex.match(ctx);
+    }
+
+    /**
+     * 手动触发全量重新构建倒排索引
+     */
+    public void rebuildInvertedIndex() {
+        invertedIndex.rebuild(repository.findAll());
+    }
+
+    public CampaignInvertedIndex getInvertedIndex() {
+        return invertedIndex;
     }
 
     private static String tenant() {

@@ -9,6 +9,8 @@
 ## 文档入口
 
 ### 核心架构与生产指南
+- [生产级别 ADX 与 CDP 核心优化实施报告 PRODUCTION_ADX_CDP_OPTIMIZATION_REPORT.md](docs/PRODUCTION_ADX_CDP_OPTIMIZATION_REPORT.md)：PMP 私有交易撮合、多席位并发清算、Disruptor 异步环形账本、并查集图谱防桥接、实时受众进出差分与 GDPR 墓碑擦除。
+- [生产级别 SSP 与 DSP 核心链路优化报告 PRODUCTION_SSP_DSP_OPTIMIZATION_REPORT.md](docs/PRODUCTION_SSP_DSP_OPTIMIZATION_REPORT.md)：无锁倒排索引、连续胜率 Bid Shading、多维阻尼调优、自适应软硬底价、Top-K 熔断与 4 层统一竞价仲裁流水线。
 - [生产部署与运维操作指南 PRODUCTION_DEPLOYMENT_AND_OPERATIONS_GUIDE.md](docs/PRODUCTION_DEPLOYMENT_AND_OPERATIONS_GUIDE.md)：Kubernetes 生产编排、数据面/控制面物理分离、Prometheus 监控与零停机滚动发布规范。
 - [端到端性能压测与基准评估报告 PERFORMANCE_BENCHMARK_REPORT.md](docs/PERFORMANCE_BENCHMARK_REPORT.md)：万级/十万级 QPS 压测方法、k6 脚本与实测 152k QPS / P99 2.67ms 基准指标。
 - [多触点归因算法与商业级反欺诈指南 ATTRIBUTION_AND_ANTI_FRAUD_GUIDE.md](docs/ATTRIBUTION_AND_ANTI_FRAUD_GUIDE.md)：Data-Driven MTA、6 大归因模型横向比对、超音速跨国漂移与多维风控算法。

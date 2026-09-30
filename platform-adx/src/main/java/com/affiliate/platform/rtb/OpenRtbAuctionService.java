@@ -62,6 +62,12 @@ public class OpenRtbAuctionService {
     // 生产级 RTB 指标集
     private final RtbMetrics metrics;
 
+    // 高吞吐异步环形缓冲账本
+    private final AuctionDisruptorLedger disruptorLedger;
+
+    // 自适应负载过载保护器
+    private final RtbAdaptiveLoadShedder loadShedder;
+
     /**
      * 完整依赖注入构造器
      */
@@ -76,7 +82,24 @@ public class OpenRtbAuctionService {
             LocalBudgetSliceService localBudgetService,
             CreativeInvertedIndex creativeIndex
     ) {
-        this(slots, creatives, strategy, auctions, budgetService, freqCapService, hmacService, localBudgetService, creativeIndex, null);
+        this(slots, creatives, strategy, auctions, budgetService, freqCapService, hmacService,
+                localBudgetService, creativeIndex, null);
+    }
+
+    public OpenRtbAuctionService(
+            AdSlotService slots,
+            CreativeService creatives,
+            BidStrategy strategy,
+            Repository<Auction> auctions,
+            BudgetService budgetService,
+            FrequencyCapService freqCapService,
+            HmacTokenService hmacService,
+            LocalBudgetSliceService localBudgetService,
+            CreativeInvertedIndex creativeIndex,
+            RtbMetrics metrics
+    ) {
+        this(slots, creatives, strategy, auctions, budgetService, freqCapService, hmacService,
+                localBudgetService, creativeIndex, metrics, null, null);
     }
 
     @Autowired
@@ -90,7 +113,9 @@ public class OpenRtbAuctionService {
             HmacTokenService hmacService,
             LocalBudgetSliceService localBudgetService,
             CreativeInvertedIndex creativeIndex,
-            @Autowired(required = false) RtbMetrics metrics
+            @Autowired(required = false) RtbMetrics metrics,
+            @Autowired(required = false) AuctionDisruptorLedger disruptorLedger,
+            @Autowired(required = false) RtbAdaptiveLoadShedder loadShedder
     ) {
         this.slots = slots;
         this.creatives = creatives;
@@ -102,6 +127,8 @@ public class OpenRtbAuctionService {
         this.localBudgetService = localBudgetService;
         this.creativeIndex = creativeIndex;
         this.metrics = metrics != null ? metrics : new RtbMetrics();
+        this.disruptorLedger = disruptorLedger;
+        this.loadShedder = loadShedder;
     }
 
     /**
@@ -127,6 +154,12 @@ public class OpenRtbAuctionService {
      * @return 符合 OpenRTB 规范的竞价响应对象 (BidResponse)
      */
     public OpenRtb.BidResponse bid(OpenRtb.BidRequest request) {
+        // 自适应过载保护拦截（优先保障高价值 PMP，削减长尾请求）
+        if (loadShedder != null && loadShedder.shouldShed(request)) {
+            metrics.recordNoBid(0);
+            return new OpenRtb.BidResponse(request.id(), List.of(), "USD");
+        }
+
         // 记录竞价开始的纳秒时间戳，用于严控 20ms 超时预算
         long startNanos = System.nanoTime();
         int tmax = (request.tmax() != null && request.tmax() > 0) ? request.tmax() : 20;
@@ -211,7 +244,7 @@ public class OpenRtbAuctionService {
                         decision.creative().id()
                 ));
 
-                // 阶段 9：异步落盘本次竞价出价记录，彻底避免关系数据库 I/O 阻塞 20ms 竞价硬超时时限
+                // 阶段 9：异步落盘本次竞价出价记录，优先通过 Disruptor 环形批处理微批通道
                 Auction auctionRecord = new Auction(
                         auctionId,
                         request.id(),
@@ -222,14 +255,18 @@ public class OpenRtbAuctionService {
                         decision.advertiser(),
                         Instant.now()
                 );
-                Thread.ofVirtual().name("rtb-auction-async-writer").start(() -> {
-                    try {
-                        auctions.save(auctionRecord);
-                    } catch (Exception ex) {
-                        org.slf4j.LoggerFactory.getLogger(OpenRtbAuctionService.class)
-                                .warn("Async auction save failed for {}: {}", auctionId, ex.getMessage());
-                    }
-                });
+                if (disruptorLedger != null) {
+                    disruptorLedger.recordAsync(auctionRecord);
+                } else {
+                    Thread.ofVirtual().name("rtb-auction-async-writer").start(() -> {
+                        try {
+                            auctions.save(auctionRecord);
+                        } catch (Exception ex) {
+                            org.slf4j.LoggerFactory.getLogger(OpenRtbAuctionService.class)
+                                    .warn("Async auction save failed for {}: {}", auctionId, ex.getMessage());
+                        }
+                    });
+                }
             });
         }
 

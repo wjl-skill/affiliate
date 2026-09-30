@@ -4,11 +4,12 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 
 import java.util.List;
+import java.util.Set;
 
 /**
  * OpenRTB 2.5 工业界标准数据模型协议定义 (OpenRTB 2.5 Protocol Definitions)
  * <p>
- * 遵循 IAB OpenRTB 2.5 协议规范，定义实时竞价请求、曝光位、网站、设备、用户及出价响应。
+ * 遵循 IAB OpenRTB 2.5 协议规范，定义实时竞价请求、曝光位、网站、设备、用户、PMP 私有交易及出价响应。
  */
 public final class OpenRtb {
     private OpenRtb() {}
@@ -47,78 +48,99 @@ public final class OpenRtb {
      * @param video       视频广告规格
      * @param bidfloor    媒体设置的最低出价底价
      * @param bidfloorcur 底价结算货币代码（如 "USD"）
+     * @param pmp         私有交易市场 (PMP) 协议配置
      */
-    public record Imp(@NotBlank String id, Banner banner, Video video, double bidfloor, String bidfloorcur) {}
+    public record Imp(
+            @NotBlank String id,
+            Banner banner,
+            Video video,
+            double bidfloor,
+            String bidfloorcur,
+            Pmp pmp
+    ) {
+        // 向后兼容构造器
+        public Imp(String id, Banner banner, Video video, double bidfloor, String bidfloorcur) {
+            this(id, banner, video, bidfloor, bidfloorcur, null);
+        }
+    }
+
+    /**
+     * 私有交易市场协议 (Private Marketplace)
+     *
+     * @param private_auction 1 为仅限私有竞价，0 为允许公开竞价
+     * @param deals           私有交易 Deal 列表
+     */
+    public record Pmp(Integer private_auction, List<Deal> deals) {
+        public Pmp {
+            deals = deals == null ? List.of() : List.copyOf(deals);
+        }
+    }
+
+    /**
+     * 私有交易单个协议条款 (PMP Deal)
+     *
+     * @param id          Deal 全局唯一标识
+     * @param bidfloor    Deal 专属保留底价
+     * @param bidfloorcur 底价货币
+     * @param wseat       允许参与的 DSP 席位白名单
+     * @param at          拍卖类型（1 为第一价，2 为第二价，3 为固定价）
+     */
+    public record Deal(String id, double bidfloor, String bidfloorcur, List<String> wseat, Integer at) {
+        public Deal {
+            wseat = wseat == null ? List.of() : List.copyOf(wseat);
+        }
+    }
 
     /**
      * 横幅广告物料要求
-     *
-     * @param w   期望宽度像素
-     * @param h   期望高度像素
-     * @param api 支持的交互式 API 框架列表（如 VPAID, MRAID）
      */
     public record Banner(int w, int h, List<Integer> api) {}
 
     /**
      * 视频广告播放要求
-     *
-     * @param w           视频宽度像素
-     * @param h           视频高度像素
-     * @param minduration 视频最短播放时长（秒）
-     * @param maxduration 视频最长播放时长（秒）
-     * @param mimes       支持的视频多媒体格式编码
      */
     public record Video(int w, int h, int minduration, int maxduration, List<Integer> mimes) {}
 
     /**
      * 媒体站点上下文
-     *
-     * @param domain  站点顶级域名
-     * @param page    当前展示广告的具体页面 URL
-     * @param content 页面包含的内容元数据
      */
     public record Site(String domain, String page, Content content) {}
 
     /**
      * 页面内容特征元数据
-     *
-     * @param language 页面语言代码（如 "zh", "en"）
-     * @param keywords 页面关键词标签列表
      */
     public record Content(String language, List<String> keywords) {}
 
     /**
      * 客户端硬件与网络设备上下文
-     *
-     * @param ua         客户端浏览器 User-Agent 字符串
-     * @param ip         客户端公网 IPv4 或 IPv6 地址
-     * @param devicetype 设备形态类型编码（1-手机, 2-PC, 4-平板, 5-智能电视）
-     * @param geo        地理位置编码（国家/省市代码）
      */
     public record Device(String ua, String ip, int devicetype, String geo) {}
 
     /**
-     * 目标受众用户画像
+     * 目标受众用户画像 (支持 CDP 受众标签注入)
      *
      * @param id       媒体侧用户 ID（Cookie ID）
      * @param buyeruid DSP 侧同步匹配后的买方受众 ID
+     * @param segments CDP/DMP 注入的一方受众分群与标签集合
      */
-    public record User(String id, String buyeruid) {}
+    public record User(String id, String buyeruid, Set<String> segments) {
+        // 向后兼容 2 参数构造器
+        public User(String id, String buyeruid) {
+            this(id, buyeruid, Set.of());
+        }
+
+        public User {
+            segments = segments == null ? Set.of() : Set.copyOf(segments);
+        }
+    }
 
     /**
      * 竞价响应顶级对象 (OpenRTB BidResponse)
-     *
-     * @param id      对应的竞价请求 ID
-     * @param seatbid 买方出价席位列表
-     * @param cur     出价货币代码（通常为 "USD"）
      */
     public record BidResponse(String id, List<SeatBid> seatbid, String cur) {}
 
     /**
      * 买方出价席位实体
-     *
-     * @param bid  席位包含的具体出价列表
-     * @param seat 买方席位或账户 ID
      */
     public record SeatBid(List<Bid> bid, String seat) {}
 
@@ -132,6 +154,21 @@ public final class OpenRtb {
      * @param adomain 广告主的落地页主域名（用于行业排他与合规审查）
      * @param nurl    胜出通知回调 URL (Win Notice URL，携带防篡改 Token)
      * @param crid    投放的素材唯一标识 ID (creative.id)
+     * @param dealid  买方引用的私有交易 Deal ID (可选)
      */
-    public record Bid(String id, String impid, double price, String adm, String adomain, String nurl, String crid) {}
+    public record Bid(
+            String id,
+            String impid,
+            double price,
+            String adm,
+            String adomain,
+            String nurl,
+            String crid,
+            String dealid
+    ) {
+        // 向后兼容 7 参数构造器
+        public Bid(String id, String impid, double price, String adm, String adomain, String nurl, String crid) {
+            this(id, impid, price, adm, adomain, nurl, crid, null);
+        }
+    }
 }

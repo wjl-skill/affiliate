@@ -3,29 +3,48 @@ package com.affiliate.platform.ssp;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
-import java.util.Comparator;
-import java.util.List;
-import java.util.Optional;
+import java.util.*;
 
 /**
- * 供给方聚合分发与竞价仲裁服务 (SSP Mediation & Header Bidding Service)
+ * 供给方聚合分发与统一竞价仲裁流水线服务 (SSP Unified Auction & Mediation Pipeline Service)
  * <p>
- * 支持主流媒体分发模式：
- * 1. Header Bidding（头部竞价并发聚合）：多渠道统一竞价比价；
- * 2. Waterfall（分层瀑布流）：按优先级梯队串行询价；
- * 3. Backfill（底价流拍保底填充）：当全网出价未达硬底价时，平滑切换至自营或保底广告源。
+ * 商业级媒体收益变现（Google Ad Manager / AppLovin MAX / Magnite）核心出清流水线：
+ * 1. Tier 1: Programmatic Guaranteed (PG 保量合约) -> 绝对最高排期优先级，保量直达；
+ * 2. Tier 2: Preferred Deals (PMP 优先交易) -> 固定协商底价，优先比价撮合；
+ * 3. Tier 3: Unified Open Auction + Header Bidding (统一头部竞价) -> 多渠道实时并行，软硬双底价自适应出清；
+ * 4. Tier 4: House Ads / Backfill (底价流拍兜底) -> 无有效商业买家时 100% 填充媒体自营广告，消灭展示留白。
  */
 @Service
 public class MediationService {
 
     /**
+     * 竞价层级枚举
+     */
+    public enum AuctionTier {
+        /** Tier 1: 合约保量 */
+        PROGRAMMATIC_GUARANTEED,
+        /** Tier 2: 私有交易优先洽购 */
+        PREFERRED_DEAL,
+        /** Tier 3: 头部竞价与公开实时竞价 */
+        OPEN_HEADER_BIDDING,
+        /** Tier 4: 媒体自营保底填充 */
+        HOUSE_BACKFILL
+    }
+
+    /**
      * 外部渠道或 DSP 报价分录
-     *
-     * @param bidderId 渠道标识（如 "DSP_A", "Google_AdX"）
-     * @param price    报价金额（CPM USD）
-     * @param adHtml   广告渲染代码或物料链接
      */
     public record BidCandidate(String bidderId, BigDecimal price, String adHtml) {}
+
+    /**
+     * PMP 私有交易分录
+     */
+    public record PreferredDealBid(String dealId, String bidderId, BigDecimal agreedPrice, String adHtml) {}
+
+    /**
+     * 保量合约活动
+     */
+    public record GuaranteedContract(String contractId, String advertiserId, BigDecimal cpmValue, String adHtml) {}
 
     /**
      * 仲裁最终胜出结果
@@ -34,11 +53,121 @@ public class MediationService {
             boolean isBackfill,
             String winnerBidderId,
             BigDecimal winningPrice,
-            String renderContent
-    ) {}
+            String renderContent,
+            AuctionTier winningTier,
+            String dealOrContractId
+    ) {
+        // 向后兼容构造器
+        public MediationResult(boolean isBackfill, String winnerBidderId, BigDecimal winningPrice, String renderContent) {
+            this(isBackfill, winnerBidderId, winningPrice, renderContent,
+                    isBackfill ? AuctionTier.HOUSE_BACKFILL : AuctionTier.OPEN_HEADER_BIDDING, null);
+        }
+    }
 
     /**
-     * 执行头部竞价聚合仲裁
+     * 执行工业级四层统一混合竞价仲裁流水线 (Unified 4-Tier Auction Clearing)
+     *
+     * @param guaranteedContract 候选保量合约（若当前有排期满足则优先执行）
+     * @param preferredDeals     候选 PMP 优先交易报价
+     * @param headerBids         Header Bidding 各渠道汇总竞价
+     * @param floorPriceResult   动态收益引擎计算的有效软硬底价
+     * @param backfillHtml       保底兜底物料
+     * @return 最终清算胜出结果
+     */
+    public MediationResult arbitrateUnifiedAuction(
+            GuaranteedContract guaranteedContract,
+            List<PreferredDealBid> preferredDeals,
+            List<BidCandidate> headerBids,
+            DynamicYieldManager.FloorPriceResult floorPriceResult,
+            String backfillHtml
+    ) {
+        BigDecimal hardFloor = floorPriceResult != null && floorPriceResult.hardFloor() != null
+                ? floorPriceResult.hardFloor()
+                : BigDecimal.ZERO;
+
+        BigDecimal softFloor = floorPriceResult != null && floorPriceResult.softFloor() != null
+                ? floorPriceResult.softFloor()
+                : hardFloor;
+
+        // Tier 1: Programmatic Guaranteed (PG) 优先出清
+        if (guaranteedContract != null && guaranteedContract.adHtml() != null && !guaranteedContract.adHtml().isBlank()) {
+            return new MediationResult(
+                    false,
+                    "Guaranteed_" + guaranteedContract.advertiserId(),
+                    guaranteedContract.cpmValue() != null ? guaranteedContract.cpmValue() : BigDecimal.ZERO,
+                    guaranteedContract.adHtml(),
+                    AuctionTier.PROGRAMMATIC_GUARANTEED,
+                    guaranteedContract.contractId()
+            );
+        }
+
+        // Tier 2: Preferred Deals (PMP) 优先洽购
+        if (preferredDeals != null && !preferredDeals.isEmpty()) {
+            Optional<PreferredDealBid> matchedDeal = preferredDeals.stream()
+                    .filter(d -> d.agreedPrice() != null && d.agreedPrice().compareTo(hardFloor) >= 0)
+                    .max(Comparator.comparing(PreferredDealBid::agreedPrice));
+
+            if (matchedDeal.isPresent()) {
+                PreferredDealBid deal = matchedDeal.get();
+                return new MediationResult(
+                        false,
+                        deal.bidderId(),
+                        deal.agreedPrice(),
+                        deal.adHtml(),
+                        AuctionTier.PREFERRED_DEAL,
+                        deal.dealId()
+                );
+            }
+        }
+
+        // Tier 3: Unified Open Auction + Header Bidding
+        if (headerBids != null && !headerBids.isEmpty()) {
+            // 筛选达硬底价候选集，按出价降序排列
+            List<BidCandidate> eligibleBids = headerBids.stream()
+                    .filter(b -> b.price() != null && b.price().compareTo(hardFloor) >= 0)
+                    .sorted((a, b) -> b.price().compareTo(a.price()))
+                    .toList();
+
+            if (!eligibleBids.isEmpty()) {
+                BidCandidate winner = eligibleBids.get(0);
+                BigDecimal finalClearingPrice;
+
+                // 软硬双底价智能出清：
+                // 若最高出价达到软底价，按第一价格自身结算
+                // 若介于硬底价与软底价之间，按软底价或次高价出清以提升媒体收益
+                if (winner.price().compareTo(softFloor) >= 0) {
+                    finalClearingPrice = winner.price();
+                } else if (eligibleBids.size() > 1) {
+                    BigDecimal secondPrice = eligibleBids.get(1).price();
+                    finalClearingPrice = secondPrice.max(hardFloor);
+                } else {
+                    finalClearingPrice = hardFloor;
+                }
+
+                return new MediationResult(
+                        false,
+                        winner.bidderId(),
+                        finalClearingPrice,
+                        winner.adHtml(),
+                        AuctionTier.OPEN_HEADER_BIDDING,
+                        null
+                );
+            }
+        }
+
+        // Tier 4: 保底兜底 (House Ads Backfill)
+        return new MediationResult(
+                true,
+                "backfill",
+                hardFloor,
+                backfillHtml != null ? backfillHtml : "<div>House Default Ad</div>",
+                AuctionTier.HOUSE_BACKFILL,
+                null
+        );
+    }
+
+    /**
+     * 基础头部竞价聚合仲裁（向后完全兼容）
      *
      * @param bids      各渠道汇总的竞价列表
      * @param hardFloor 动态硬底价门槛
@@ -50,21 +179,7 @@ public class MediationService {
             BigDecimal hardFloor,
             String backfill
     ) {
-        if (bids == null || bids.isEmpty()) {
-            return new MediationResult(true, "backfill", hardFloor, backfill);
-        }
-
-        // 筛选出达到硬底价的最高出价者
-        Optional<BidCandidate> topBid = bids.stream()
-                .filter(b -> b.price() != null && b.price().compareTo(hardFloor) >= 0)
-                .max(Comparator.comparing(BidCandidate::price));
-
-        if (topBid.isPresent()) {
-            BidCandidate winner = topBid.get();
-            return new MediationResult(false, winner.bidderId(), winner.price(), winner.adHtml());
-        }
-
-        // 全网流拍，触发保底兜底
-        return new MediationResult(true, "backfill", hardFloor, backfill);
+        DynamicYieldManager.FloorPriceResult floor = new DynamicYieldManager.FloorPriceResult(hardFloor, hardFloor);
+        return arbitrateUnifiedAuction(null, List.of(), bids, floor, backfill);
     }
 }

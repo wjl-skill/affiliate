@@ -15,10 +15,18 @@ import java.util.concurrent.ConcurrentHashMap;
  * 1. 终端形态倍率 (Device Multiplier)：iOS, Android, CTV, Desktop;
  * 2. 国家地域倍率 (Geo Tier Multiplier)：Tier-1 高价值国家溢价，长尾流量折价;
  * 3. 分时段倍率 (Dayparting Hour Multiplier)：早晚高峰溢价，深夜抑制;
- * 4. 媒体位质量评分倍率 (Placement Quality Multiplier)：优质媒体加权竞胜。
+ * 4. 媒体位质量评分倍率 (Placement Quality Multiplier)：优质媒体加权竞胜;
+ * 5. 几何对数阻尼与复合倍率钳位保护 (Log-Damped Aggregation & Clamping)：抑制多维连乘组合爆炸，避免出价失控。
  */
 @Service
 public class BidModifierEngine {
+
+    // 默认阻尼系数 (0.50 ~ 0.85，0.70 为工业界标准折中，1.0 为纯线性乘积)
+    private static final double DEFAULT_DAMPING_FACTOR = 0.70;
+
+    // 复合倍率下限与上限全局熔断护栏
+    private static final double MIN_COMPOSITE_MULTIPLIER = 0.30;
+    private static final double MAX_COMPOSITE_MULTIPLIER = 2.50;
 
     // 默认设备形态倍率
     private final Map<Integer, BigDecimal> deviceMultipliers = new ConcurrentHashMap<>(Map.of(
@@ -41,6 +49,9 @@ public class BidModifierEngine {
     // 分时段倍率 (0~23 小时)
     private final Map<Integer, BigDecimal> hourMultipliers = new ConcurrentHashMap<>();
 
+    private volatile double dampingFactor = DEFAULT_DAMPING_FACTOR;
+    private volatile boolean dampingEnabled = false;
+
     public BidModifierEngine() {
         // 初始化 24 小时默认起伏曲线：早晨 02:00-06:00 抑价 0.7x，晚间高峰 19:00-22:00 溢价 1.25x
         for (int h = 0; h < 24; h++) {
@@ -55,7 +66,7 @@ public class BidModifierEngine {
     }
 
     /**
-     * 计算多维调优后的实际出价
+     * 计算多维调优后的实际出价（兼容默认模式）
      *
      * @param baseBid          广告组原始基准 CPM 出价
      * @param deviceType       设备形态
@@ -73,6 +84,82 @@ public class BidModifierEngine {
             BigDecimal placementQuality,
             BigDecimal maxBidLimit
     ) {
+        if (dampingEnabled) {
+            return calculateAdjustedBidDamped(
+                    baseBid, deviceType, country, hourOfDay, placementQuality, maxBidLimit,
+                    dampingFactor, MIN_COMPOSITE_MULTIPLIER, MAX_COMPOSITE_MULTIPLIER
+            );
+        } else {
+            return calculateAdjustedBidLinear(
+                    baseBid, deviceType, country, hourOfDay, placementQuality, maxBidLimit
+            );
+        }
+    }
+
+    /**
+     * 工业级对数几何阻尼调价算法 (Log-Damped Geometric Bidding)
+     * <p>
+     * 公式：
+     * Composite = clamp(Product(M_i)^damping, minMultiplier, maxMultiplier)
+     * FinalBid = min(BaseBid * Composite, maxBidLimit)
+     */
+    public BigDecimal calculateAdjustedBidDamped(
+            BigDecimal baseBid,
+            int deviceType,
+            String country,
+            int hourOfDay,
+            BigDecimal placementQuality,
+            BigDecimal maxBidLimit,
+            double damping,
+            double minMultiplier,
+            double maxMultiplier
+    ) {
+        if (baseBid == null || baseBid.signum() <= 0) {
+            return BigDecimal.ZERO;
+        }
+
+        double devMult = deviceMultipliers.getOrDefault(deviceType, BigDecimal.ONE).doubleValue();
+        double geoMult = geoMultipliers.getOrDefault(country != null ? country.toUpperCase() : "", BigDecimal.ONE).doubleValue();
+        double hourMult = hourMultipliers.getOrDefault(hourOfDay % 24, BigDecimal.ONE).doubleValue();
+        double qualityMult = placementQuality != null && placementQuality.signum() > 0 ? placementQuality.doubleValue() : 1.0;
+
+        // 原始连乘倍率
+        double rawComposite = devMult * geoMult * hourMult * qualityMult;
+
+        // 几何加权对数阻尼：Composite = exp(damping * ln(rawComposite)) = rawComposite ^ damping
+        double dampedComposite;
+        if (damping > 0.0 && rawComposite > 0.0) {
+            dampedComposite = Math.pow(rawComposite, damping);
+        } else {
+            dampedComposite = rawComposite;
+        }
+
+        // 全局安全范围钳位 (Clamp)
+        double clampedComposite = Math.max(minMultiplier, Math.min(maxMultiplier, dampedComposite));
+
+        // 计算最终出价
+        BigDecimal adjusted = baseBid.multiply(BigDecimal.valueOf(clampedComposite))
+                .setScale(4, RoundingMode.HALF_UP);
+
+        // 熔断上限保护
+        if (maxBidLimit != null && maxBidLimit.signum() > 0 && adjusted.compareTo(maxBidLimit) > 0) {
+            return maxBidLimit;
+        }
+
+        return adjusted;
+    }
+
+    /**
+     * 无阻尼纯线性连乘出价
+     */
+    public BigDecimal calculateAdjustedBidLinear(
+            BigDecimal baseBid,
+            int deviceType,
+            String country,
+            int hourOfDay,
+            BigDecimal placementQuality,
+            BigDecimal maxBidLimit
+    ) {
         if (baseBid == null || baseBid.signum() <= 0) {
             return BigDecimal.ZERO;
         }
@@ -82,7 +169,6 @@ public class BidModifierEngine {
         BigDecimal hourMult = hourMultipliers.getOrDefault(hourOfDay % 24, BigDecimal.ONE);
         BigDecimal qualityMult = placementQuality != null && placementQuality.signum() > 0 ? placementQuality : BigDecimal.ONE;
 
-        // Final Bid = BaseBid * DevMult * GeoMult * HourMult * QualityMult
         BigDecimal adjusted = baseBid
                 .multiply(devMult)
                 .multiply(geoMult)
@@ -90,12 +176,27 @@ public class BidModifierEngine {
                 .multiply(qualityMult)
                 .setScale(4, RoundingMode.HALF_UP);
 
-        // 熔断上限保护
         if (maxBidLimit != null && maxBidLimit.signum() > 0 && adjusted.compareTo(maxBidLimit) > 0) {
             return maxBidLimit;
         }
 
         return adjusted;
+    }
+
+    public void setDampingFactor(double dampingFactor) {
+        this.dampingFactor = dampingFactor;
+    }
+
+    public double getDampingFactor() {
+        return dampingFactor;
+    }
+
+    public void setDampingEnabled(boolean dampingEnabled) {
+        this.dampingEnabled = dampingEnabled;
+    }
+
+    public boolean isDampingEnabled() {
+        return dampingEnabled;
     }
 
     public void setDeviceMultiplier(int deviceType, BigDecimal multiplier) {
