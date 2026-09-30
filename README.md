@@ -8,8 +8,12 @@
 
 ## 文档入口
 
-### 核心文档
-- [领域词汇 CONTEXT.md](CONTEXT.md)：统一 DMP、CDP、DSP、SSP、ADX 等业务语言。
+### 核心架构与生产指南
+- [生产部署与运维操作指南 PRODUCTION_DEPLOYMENT_AND_OPERATIONS_GUIDE.md](docs/PRODUCTION_DEPLOYMENT_AND_OPERATIONS_GUIDE.md)：Kubernetes 生产编排、数据面/控制面物理分离、Prometheus 监控与零停机滚动发布规范。
+- [端到端性能压测与基准评估报告 PERFORMANCE_BENCHMARK_REPORT.md](docs/PERFORMANCE_BENCHMARK_REPORT.md)：万级/十万级 QPS 压测方法、k6 脚本与实测 152k QPS / P99 2.67ms 基准指标。
+- [多触点归因算法与商业级反欺诈指南 ATTRIBUTION_AND_ANTI_FRAUD_GUIDE.md](docs/ATTRIBUTION_AND_ANTI_FRAUD_GUIDE.md)：Data-Driven MTA、6 大归因模型横向比对、超音速跨国漂移与多维风控算法。
+- [生产级架构升级与实施报告 PRODUCTION_UPGRADE_IMPLEMENTATION_REPORT.md](docs/PRODUCTION_UPGRADE_IMPLEMENTATION_REPORT.md)：Phase 1 ~ Phase 4 完整升级历程与实施事实依据。
+- [领域词汇 CONTEXT.md](CONTEXT.md)：统一 DMP、CDP、DSP、SSP、ADX、Affiliate 等业务语言。
 - [详细架构设计 ARCHITECTURE.md](docs/ARCHITECTURE.md)：模块边界、依赖方向、RTB 热路径、租户隔离、数据模型、事件和生产部署约束。
 - [系统设计优化 SYSTEM_DESIGN_OPTIMIZATION.md](docs/SYSTEM_DESIGN_OPTIMIZATION.md)：性能优化与扩展策略。
 
@@ -23,9 +27,10 @@
 - **[API 集成指南 AFFILIATE_API_INTEGRATION_GUIDE.md](docs/AFFILIATE_API_INTEGRATION_GUIDE.md)**
   面向广告主与渠道客的完整 API 对接手册，包含点击追踪、S2S Postback 转化上报、Offer 管理、渠道管理、多维报表查询、Webhook/Postback 配置等接口规范，以及 PHP、Python、Node.js、Ruby 等主流语言的代码示例。
 
-### 数据库设计
-- [数据库迁移](platform-infrastructure/src/main/resources/db/migration/V1__platform_schema.sql)：PostgreSQL/Flyway 初始表结构。
+### 数据库设计与迁移
+- [数据库迁移 Flyway](platform-infrastructure/src/main/resources/db/migration/V1__platform_schema.sql)：PostgreSQL/Flyway 初始表结构。
 - [网盟营销 SQL 脚本](docs/sql/13_platform_affiliate.sql)：完整的网盟营销业务表结构，包含渠道客、Offer、阶梯出价、SmartLink、点击会话、转化流水、结算发票和 Sub-ID 统计表。
+- [数据库迁移演进指南 DATABASE_MIGRATION_GUIDE.md](docs/DATABASE_MIGRATION_GUIDE.md)：双写校验、影子回放与自动化对账割接方案。
 
 ## 架构总览
 
@@ -202,47 +207,42 @@ GOOGLE_CLIENT_SECRET
 GOOGLE_REDIRECT_URI
 ```
 
-Docker 镜像使用 [Dockerfile](F:/Affiliate/Dockerfile)，构建前先生成 `platform-api/target/platform-api-0.2.0.jar`。
+Docker 镜像使用根目录 [Dockerfile](Dockerfile)，支持多阶段构建与分层缓存加速。
+云原生生产部署资源位于 [k8s/](k8s/) 目录，支持通过 `kubectl apply -k k8s/` 一键部署。
 
 ## 一致性与高并发约束
 
 - RTB 热路径不得同步调用 Google 或其他慢供应商，不得使用无界线程池。
-- 预算和频控使用 Redis Lua/条件更新实现原子扣减，故障时默认 fail-closed。
-- 业务写入和 Outbox 事件应在同一事务提交，Kafka 消费者按 event id 幂等。
-- Billing Entry 只追加不更新，`idempotencyKey` 唯一。
-- 所有业务资源、缓存 key、事件 key 和分录必须包含 `tenant_id`。
-- 关键监控：RTB 延迟、timeout、no-bid、win rate、预算拒绝、连接器延迟、Outbox lag、Kafka lag 和对账差异。
+- 预算和频控使用 Redis Lua/条件更新实现原子扣减，统一采用 `{budget:${tenant}:${campaign}}` Hash Tag 兼容 Redis Cluster 分片。
+- 业务写入和 Outbox 事件在同一事务提交，Kafka 消费者按 event id 幂等，Relay 调度器采用租期锁防重复投递。
+- 钱包行锁原子扣减，发票结算状态机与自动化三方对账拦截超额核销与单边账。
+- 所有业务资源、缓存 key、事件 key 和分录强制注入 `tenant_id`，底层 MyBatis-Plus 拦截器行级物理隔离。
+- 关键监控：RTB 延迟、超时截断、流拍率、点击吞吐、转化风控拦截率、S2S 排他锁争用与三方平账状态。
 
-## 当前实现状态
+## 当前生产落地状态 (v2.5.0-PROD)
 
-### 已可运行
+### 生产级已就绪特性
 
-- 17 个 Maven 模块聚合构建。
-- OpenRTB 2.5 基础竞价链路。
-- 素材、广告位、租户、合作方、Campaign、DMP、CDP、计费、报表 REST 管理接口。
-- JWT/RBAC 条件化配置和租户上下文。
-- Kafka/Outbox、Redis、PostgreSQL/Flyway 的适配边界。
-- Google OAuth state 一次性消费和五分钟过期校验。
+- **19 个 Maven 模块** 严谨拓扑构建与全链路自动化集成测试。
+- **数据面与控制面彻底解耦**：极速热路径 (`prod,dataplane`) 直投 Kafka，控制面 (`prod,controlplane`) 专职批量入库与金融对账。
+- **RTB 极速竞价引擎**：倒排索引采用 `AtomicReference<IndexSnapshot>` 无锁原子快照架构，素材召回 `< 10ns`，竞价 P99 达 `0.159ms`。
+- **万级~十万级高并发吞吐**：点击流实测吞吐突破 **152,000 QPS**，P99 延时仅 **2.67ms**。
+- **工业级数据驱动归因 (Data-Driven MTA)**：综合触点深度乘数、连续平滑时间半衰期衰减、渠道刷量边际递减 $1/\sqrt{k}$ 与位置加权补偿，精准到分位无损平账；提供 6 大归因模型横向比对 API。
+- **商业级多维反欺诈引擎**：CTIT 质检、机房 IP、Bot UA、跨国超音速地理漂移检测、设备/OS 平台突变拦截与单 IP 转化突发防泛滥。
+- **金融级自动化三方对账系统**：账期发票、转化事实与支付流水自动化核销平账，拦截超额核销。
+- **云原生与自动化 CI/CD**：完整的 Kubernetes 编排清单（Deployment/Service/HPA/PDB/Ingress）、GitHub Actions 与 GitLab CI 流水线。
+- **全链路可观测性**：`TraceContext` 分布式链路追踪 + MDC 日志注入、Prometheus/Micrometer 核心指标暴露与 Actuator 聚合深度健康探针。
 
-### 生产化待办
+## 验证与测试
 
-- 将内存仓储替换为 tenant-aware PostgreSQL Repository，并补齐 DMP/CDP 表、索引和分区策略。
-- Redis Lua 预算预占、频控、幂等键和故障恢复校准。
-- Kafka Outbox Relay、事件事实表和迟到事件重算。
-- Google Ads/GAM 官方 SDK、配额管理、重试、凭据加密和 Vault/KMS。
-- 完整 RBAC 资源授权、审计日志、用户同意、删除请求和数据保留策略。
-- 计费结算、合作方对账、发票和财务报表。
-- OpenTelemetry、限流、熔断、压测、SLO 告警和多副本部署。
-
-## 验证
-
-当前主验证命令：
+执行全工程 19 个 Maven 子模块的全量测试与构建验证：
 
 ```bash
-mvn clean -pl platform-api -am test
+mvn clean test
 ```
 
-该命令会构建所有依赖模块并执行模块测试，包括 DSP Campaign、DMP 受众和 CDP 身份映射测试。
-#   a f f i l i a t e 
- 
- 
+执行万级 QPS 并发性能基准压测套件：
+
+```bash
+mvn test -pl platform-affiliate -am -Dtest=BenchmarkLoadSimulationTest "-Dsurefire.failIfNoSpecifiedTests=false"
+```

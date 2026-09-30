@@ -1,0 +1,35 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: affiliate-dataplane-svc
+  namespace: affiliate-prod
+  labels:
+    app.kubernetes.io/name: affiliate-dataplane
+    app.kubernetes.io/component: dataplane
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+      protocol: TCP
+  selector:
+    app.kubernetes.io/name: affiliate-dataplane
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: affiliate-controlplane-svc
+  namespace: affiliate-prod
+  labels:
+    app.kubernetes.io/name: affiliate-controlplane
+    app.kubernetes.io/component: controlplane
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+      protocol: TCP
+  selector:
+    app.kubernetes.io/name: affiliate-controlplane

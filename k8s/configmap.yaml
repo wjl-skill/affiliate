@@ -1,0 +1,26 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: affiliate-config
+  namespace: affiliate-prod
+  labels:
+    app.kubernetes.io/name: affiliate-platform
+    app.kubernetes.io/part-of: affiliate-platform
+data:
+  # 数据库连接
+  DB_URL: "jdbc:postgresql://postgres-cluster.database.svc.cluster.local:5432/affiliate_prod?currentSchema=public&reWriteBatchedInserts=true&stringtype=unspecified&tcpKeepAlive=true"
+  DB_USERNAME: "affiliate_app"
+  
+  # 分布式缓存与 Redis Cluster 配置
+  REDIS_HOST: "redis-cluster.cache.svc.cluster.local"
+  REDIS_PORT: "6379"
+  
+  # 分布式消息队列 Kafka
+  KAFKA_BOOTSTRAP_SERVERS: "kafka-bootstrap.kafka.svc.cluster.local:9092"
+  
+  # 应用基础参数
+  APP_SECURITY_ENABLED: "true"
+  FLYWAY_ENABLED: "false" # 生产环境禁止容器启动时自动执行 DDL，应由管控通道发布
+  
+  # JVM 生产通用内存与垃圾回收参数
+  JAVA_TOOL_OPTIONS: "-XX:+UseG1GC -XX:MaxRAMPercentage=75.0 -XX:+ExitOnOutOfMemoryError -XX:G1ReservePercent=15 -XX:InitiatingHeapOccupancyPercent=45 -Djava.security.egd=file:/dev/./urandom"

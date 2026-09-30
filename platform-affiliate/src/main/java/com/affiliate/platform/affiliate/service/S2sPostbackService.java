@@ -256,8 +256,10 @@ public class S2sPostbackService {
                 return rejected;
             }
 
-            // 2. 反欺诈与 CTIT 质检 (使用商业级多维评分)
-            AffiliateAntiFraudEngine.FraudInspectionResult fraudRes = antiFraudEngine.inspectConversion(session, txId, current);
+            // 2. 反欺诈与 CTIT 质检 (使用商业级多维设备与地理质检评分)
+            AffiliateAntiFraudEngine.FraudInspectionResult fraudRes = antiFraudEngine.inspectConversion(
+                    session, txId, current, ip, userAgent, null, deviceType
+            );
             long ctit = Duration.between(session.createdAt(), current).toSeconds();
 
             // 3. 读取 Offer 与渠道出价 (优先匹配多事件 OfferGoal)

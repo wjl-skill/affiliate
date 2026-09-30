@@ -1,0 +1,55 @@
+# ===================================================================
+# Affiliate Platform 生产级 GitLab CI/CD 流水线定义
+# ===================================================================
+
+stages:
+  - test
+  - quality
+  - build
+  - deploy
+
+variables:
+  MAVEN_OPTS: "-Dhttps.protocols=TLSv1.2 -Dmaven.repo.local=.m2/repository -Dorg.slf4j.simpleLogger.log.org.apache.maven.cli.transfer.Slf4jMavenTransferListener=WARN"
+  DOCKER_DRIVER: overlay2
+  IMAGE_TAG: $CI_REGISTRY_IMAGE:$CI_COMMIT_SHA
+
+cache:
+  paths:
+    - .m2/repository/
+
+# 1. 编译构建与全量单元/集成测试
+test:verify:
+  stage: test
+  image: maven:3.9.9-eclipse-temurin-21
+  script:
+    - mvn clean verify -B --fail-at-end
+  artifacts:
+    when: always
+    reports:
+      junit:
+        - "**/target/surefire-reports/*.xml"
+    paths:
+      - "**/target/surefire-reports/"
+    expire_in: 1 week
+
+# 2. Kubernetes 清单语法合规性检查
+quality:k8s-lint:
+  stage: quality
+  image: line/kubectl-kustomize:latest
+  script:
+    - kustomize build k8s/ > /dev/null
+    - echo "Kubernetes manifests validated successfully."
+  rules:
+    - changes:
+        - k8s/**/*
+
+# 3. 生产容器镜像构建
+build:docker:
+  stage: build
+  image: docker:24.0.5
+  services:
+    - docker:24.0.5-dind
+  script:
+    - docker build -t $IMAGE_TAG -t $CI_REGISTRY_IMAGE:latest .
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH == "master"'

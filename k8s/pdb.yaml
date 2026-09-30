@@ -1,0 +1,21 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: affiliate-dataplane-pdb
+  namespace: affiliate-prod
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: affiliate-dataplane
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: affiliate-controlplane-pdb
+  namespace: affiliate-prod
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: affiliate-controlplane
