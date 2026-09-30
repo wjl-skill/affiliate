@@ -59,10 +59,12 @@ public class OpenRtbAuctionService {
     // 内存多维倒排索引
     private final CreativeInvertedIndex creativeIndex;
 
+    // 生产级 RTB 指标集
+    private final RtbMetrics metrics;
+
     /**
      * 完整依赖注入构造器
      */
-    @Autowired
     public OpenRtbAuctionService(
             AdSlotService slots,
             CreativeService creatives,
@@ -74,6 +76,22 @@ public class OpenRtbAuctionService {
             LocalBudgetSliceService localBudgetService,
             CreativeInvertedIndex creativeIndex
     ) {
+        this(slots, creatives, strategy, auctions, budgetService, freqCapService, hmacService, localBudgetService, creativeIndex, null);
+    }
+
+    @Autowired
+    public OpenRtbAuctionService(
+            AdSlotService slots,
+            CreativeService creatives,
+            BidStrategy strategy,
+            Repository<Auction> auctions,
+            BudgetService budgetService,
+            FrequencyCapService freqCapService,
+            HmacTokenService hmacService,
+            LocalBudgetSliceService localBudgetService,
+            CreativeInvertedIndex creativeIndex,
+            @Autowired(required = false) RtbMetrics metrics
+    ) {
         this.slots = slots;
         this.creatives = creatives;
         this.strategy = strategy;
@@ -83,6 +101,7 @@ public class OpenRtbAuctionService {
         this.hmacService = hmacService;
         this.localBudgetService = localBudgetService;
         this.creativeIndex = creativeIndex;
+        this.metrics = metrics != null ? metrics : new RtbMetrics();
     }
 
     /**
@@ -98,7 +117,7 @@ public class OpenRtbAuctionService {
             HmacTokenService hmacService
     ) {
         this(slots, creatives, strategy, auctions, budgetService, freqCapService, hmacService,
-                new LocalBudgetSliceService(budgetService), new CreativeInvertedIndex());
+                new LocalBudgetSliceService(budgetService), new CreativeInvertedIndex(), null);
     }
 
     /**
@@ -129,6 +148,7 @@ public class OpenRtbAuctionService {
         for (OpenRtb.Imp impression : request.imp()) {
             // 阶段 1：检查是否达到硬超时截断死线，超限则立即中断循环，直接返回已有出价
             if (System.nanoTime() >= deadlineNanos) {
+                metrics.recordTimeoutCutoff();
                 break;
             }
 
@@ -160,6 +180,7 @@ public class OpenRtbAuctionService {
                 // 阶段 5：滑动窗口频控校验（例如限制单用户 1 小时最多 10 次曝光）
                 boolean freqAllowed = freqCapService.checkAndIncrement(tenant, campaignId, userId, 10, Duration.ofHours(1));
                 if (!freqAllowed) {
+                    metrics.recordFreqCapBlocked();
                     return; // 触发频控上限，放弃出价
                 }
 
@@ -168,7 +189,8 @@ public class OpenRtbAuctionService {
                 BudgetService.Reservation reservation;
                 try {
                     reservation = localBudgetService.reserveFast(tenant, campaignId, userId, impCost);
-                } catch (IllegalStateException budgetExhausted) {
+                } catch (IllegalStateException budgetDepleted) {
+                    metrics.recordBudgetExhausted();
                     return; // 预算不足，放弃出价
                 }
 
@@ -212,9 +234,14 @@ public class OpenRtbAuctionService {
         }
 
         // 返回最终的 BidResponse（若无任何候选出价则返回空响应）
-        return bids.isEmpty()
-                ? new OpenRtb.BidResponse(request.id(), List.of(), "USD")
-                : new OpenRtb.BidResponse(request.id(), List.of(new OpenRtb.SeatBid(bids, "default")), "USD");
+        long durationNanos = System.nanoTime() - startNanos;
+        if (bids.isEmpty()) {
+            metrics.recordNoBid(durationNanos);
+            return new OpenRtb.BidResponse(request.id(), List.of(), "USD");
+        } else {
+            metrics.recordBidSubmitted(durationNanos);
+            return new OpenRtb.BidResponse(request.id(), List.of(new OpenRtb.SeatBid(bids, "default")), "USD");
+        }
     }
 
     /**

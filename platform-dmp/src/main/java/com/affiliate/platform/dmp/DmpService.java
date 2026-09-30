@@ -29,6 +29,7 @@ public class DmpService {
     private final TwoTierCache<String, AudienceSegment> segmentCache;
     private final ConcurrentMap<String, AudienceSegment> localSegments = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, Set<String>> localMembers = new ConcurrentHashMap<>();
+    private final ConcurrentMap<String, java.util.BitSet> localBitmaps = new ConcurrentHashMap<>();
 
     @Autowired
     public DmpService(EventPublisher events,
@@ -50,7 +51,11 @@ public class DmpService {
         AudienceSegment value = new AudienceSegment(id, input.name(), input.source(), input.taxonomy(), input.expiresAt(), 0,
                 AudienceSegment.Status.DRAFT, Instant.now());
         if (segmentMapper != null) segmentMapper.insert(toEntity(value));
-        else { localSegments.put(key(id), value); localMembers.put(key(id), ConcurrentHashMap.newKeySet()); }
+        else {
+            localSegments.put(key(id), value);
+            localMembers.put(key(id), ConcurrentHashMap.newKeySet());
+            localBitmaps.put(key(id), new java.util.BitSet());
+        }
         cache(value);
         events.publish(DomainEvent.create("dmp.segment.created.v1", tenant(), id, value));
         return value;
@@ -109,9 +114,31 @@ public class DmpService {
             segmentMapper.updateById(toEntity(new AudienceSegment(current.id(), current.name(), current.source(), current.taxonomy(), current.expiresAt(), newCount, current.status(), current.createdAt())));
         } else {
             Set<String> set = localMembers.computeIfAbsent(key(id), ignored -> ConcurrentHashMap.newKeySet());
-            set.addAll(anonymousIds); newCount = set.size();
+            set.addAll(anonymousIds);
+            newCount = set.size();
         }
-        if (redisTemplate != null) try { redisTemplate.opsForSet().add("dmp:seg:members:" + id, anonymousIds.toArray(new String[0])); } catch (Exception ignored) {}
+
+        // 工业级位图优化：将匿名标识哈希为整数 bit 偏移量，写入 Redis Bitmap 与本地 BitSet
+        java.util.BitSet bs = localBitmaps.computeIfAbsent(key(id), k -> new java.util.BitSet());
+        for (String aid : anonymousIds) {
+            long offset = toBitOffset(aid);
+            synchronized (bs) {
+                bs.set((int) offset);
+            }
+            if (redisTemplate != null) {
+                try {
+                    redisTemplate.opsForValue().setBit("dmp:seg:bitmap:" + id, offset, true);
+                } catch (Exception ignored) {}
+            }
+        }
+
+        // 保持向后兼容性双写
+        if (redisTemplate != null) {
+            try {
+                redisTemplate.opsForSet().add("dmp:seg:members:" + id, anonymousIds.toArray(new String[0]));
+            } catch (Exception ignored) {}
+        }
+
         AudienceSegment updated = new AudienceSegment(current.id(), current.name(), current.source(), current.taxonomy(), current.expiresAt(), newCount, current.status(), current.createdAt());
         if (segmentMapper == null) localSegments.put(key(id), updated);
         cache(updated);
@@ -121,9 +148,48 @@ public class DmpService {
 
     public boolean contains(String id, String anonymousId) {
         if (!get(id).validAt(Instant.now())) return false;
-        if (redisTemplate != null) try { if (Boolean.TRUE.equals(redisTemplate.opsForSet().isMember("dmp:seg:members:" + id, anonymousId))) return true; } catch (Exception ignored) {}
+        long offset = toBitOffset(anonymousId);
+
+        // 1. 优先通过微秒级 Redis Bitmap 命中判断 (单次 O(1) < 0.1ms，内存极度压缩)
+        if (redisTemplate != null) {
+            try {
+                Boolean isBitSet = redisTemplate.opsForValue().getBit("dmp:seg:bitmap:" + id, offset);
+                if (Boolean.TRUE.equals(isBitSet)) {
+                    return true;
+                }
+            } catch (Exception ignored) {}
+        }
+
+        // 2. 本地内存 BitSet 命中 (纳秒级)
+        java.util.BitSet bs = localBitmaps.get(key(id));
+        if (bs != null) {
+            synchronized (bs) {
+                if (bs.get((int) offset)) return true;
+            }
+        }
+
+        // 3. 兼容旧版本 Redis Set
+        if (redisTemplate != null) {
+            try {
+                if (Boolean.TRUE.equals(redisTemplate.opsForSet().isMember("dmp:seg:members:" + id, anonymousId))) return true;
+            } catch (Exception ignored) {}
+        }
+
+        // 4. 数据库持久化兜底与本地内存 Set 兜底
         if (memberMapper != null) return memberMapper.countByMember(id, anonymousId) > 0;
         return localMembers.getOrDefault(key(id), Set.of()).contains(anonymousId);
+    }
+
+    /**
+     * 将匿名字符串标识确定性映射为 0 ~ 99,999,999 内的正整数位偏移量
+     */
+    public static long toBitOffset(String anonymousId) {
+        if (anonymousId == null) return 0L;
+        long h = 1125899906842597L;
+        for (int i = 0; i < anonymousId.length(); i++) {
+            h = 31L * h + anonymousId.charAt(i);
+        }
+        return Math.abs(h % 100_000_000L);
     }
 
     private void cache(AudienceSegment value) { if (segmentCache != null) segmentCache.put(key(value.id()), value); }

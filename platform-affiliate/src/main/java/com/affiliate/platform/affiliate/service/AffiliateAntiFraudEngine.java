@@ -48,11 +48,19 @@ public class AffiliateAntiFraudEngine {
             "bot", "spider", "crawl", "curl", "python-requests", "headlesschrome", "puppeteer", "phantomjs", "selenium"
     );
 
-    // 已处理完成的交易订单去重集合：Key 为 "offerId:txId"
-    private final Set<String> processedTxIds = ConcurrentHashMap.newKeySet();
+    // 已处理完成的交易订单去重缓存：基于 Caffeine LRU 有界淘汰 (最大容量 200,000，保存 7 天)
+    private final com.github.benmanes.caffeine.cache.Cache<String, Boolean> processedTxCache =
+            com.github.benmanes.caffeine.cache.Caffeine.newBuilder()
+                    .maximumSize(200000)
+                    .expireAfterWrite(Duration.ofDays(7))
+                    .build();
 
-    // IP 秒级/分钟级点击计数器：Key 为 "ip:epochMinute"
-    private final ConcurrentHashMap<String, AtomicInteger> ipMinuteClickCounters = new ConcurrentHashMap<>();
+    // IP 秒级/分钟级点击计数器：采用 Caffeine 自动淘汰 (最大容量 50,000，2 分钟过期)
+    private final com.github.benmanes.caffeine.cache.Cache<String, AtomicInteger> ipMinuteClickCounters =
+            com.github.benmanes.caffeine.cache.Caffeine.newBuilder()
+                    .maximumSize(50000)
+                    .expireAfterWrite(Duration.ofMinutes(2))
+                    .build();
 
     // 动态黑名单集合（O(1) 内存极速拦截，< 0.01ms）
     private final Set<String> ipBlacklist = ConcurrentHashMap.newKeySet();
@@ -79,23 +87,36 @@ public class AffiliateAntiFraudEngine {
     ) {
         this.blacklistMapper = blacklistMapper;
         this.auditLogMapper = auditLogMapper;
+        reloadBlacklist();
+    }
 
-        // 预热加载数据库中处于生效期的活跃黑名单
+    /**
+     * 从数据库全量热加载/重载黑名单并剔除过期项
+     */
+    public void reloadBlacklist() {
         if (this.blacklistMapper != null) {
             try {
                 QueryWrapper<AntiFraudBlacklistEntity> qw = new QueryWrapper<>();
                 qw.eq("status", "ACTIVE");
                 List<AntiFraudBlacklistEntity> list = this.blacklistMapper.selectList(qw);
+                Set<String> freshIps = new HashSet<>();
+                Set<String> freshSubs = new HashSet<>();
+                Instant now = Instant.now();
+
                 for (AntiFraudBlacklistEntity item : list) {
-                    if (item.getExpiresAt() != null && item.getExpiresAt().isBefore(Instant.now())) {
+                    if (item.getExpiresAt() != null && item.getExpiresAt().isBefore(now)) {
                         continue;
                     }
                     if ("IP".equalsIgnoreCase(item.getTargetType())) {
-                        ipBlacklist.add(item.getTargetValue());
+                        freshIps.add(item.getTargetValue());
                     } else if ("SUB_ID".equalsIgnoreCase(item.getTargetType())) {
-                        subIdBlacklist.add(item.getTargetValue());
+                        freshSubs.add(item.getTargetValue());
                     }
                 }
+                ipBlacklist.clear();
+                ipBlacklist.addAll(freshIps);
+                subIdBlacklist.clear();
+                subIdBlacklist.addAll(freshSubs);
             } catch (Exception ignored) {}
         }
     }
@@ -120,10 +141,8 @@ public class AffiliateAntiFraudEngine {
 
         // 1. 交易订单号幂等去重检查 (严重作弊/重复刷单 -> 100分瞬时拒绝)
         String txKey = session.offerId() + ":" + txId;
-        if (processedTxIds.size() > 50000) {
-            processedTxIds.clear();
-        }
-        if (!processedTxIds.add(txKey)) {
+        Boolean previous = processedTxCache.asMap().putIfAbsent(txKey, Boolean.TRUE);
+        if (previous != null) {
             riskScore = 100;
             riskReasons.add("DUPLICATE_TRANSACTION_ID");
             totalInspections.incrementAndGet();
@@ -215,31 +234,14 @@ public class AffiliateAntiFraudEngine {
         return new FraudInspectionResult(passed, recommendedStatus, primaryReason, riskScore, riskReasons);
     }
 
-    /**
-     * 校验点击请求是否符合单 IP 速率限制
-     */
     public boolean checkClickFrequency(String ip, int maxPerMin) {
-        if (ip == null || ip.isBlank()) {
+        if (ip == null || ip.isBlank() || maxPerMin <= 0) {
             return true;
         }
         long epochMinute = Instant.now().getEpochSecond() / 60;
         String key = ip + ":" + epochMinute;
 
-        // 自动清理过期分钟的计数器，防止内存无限泄漏
-        if (ipMinuteClickCounters.size() > 5000) {
-            ipMinuteClickCounters.keySet().removeIf(k -> {
-                int idx = k.lastIndexOf(':');
-                if (idx > 0) {
-                    try {
-                        long m = Long.parseLong(k.substring(idx + 1));
-                        return m < epochMinute - 2;
-                    } catch (Exception ignored) {}
-                }
-                return false;
-            });
-        }
-
-        AtomicInteger counter = ipMinuteClickCounters.computeIfAbsent(key, k -> new AtomicInteger(0));
+        AtomicInteger counter = ipMinuteClickCounters.get(key, k -> new AtomicInteger(0));
         return counter.incrementAndGet() <= maxPerMin;
     }
 

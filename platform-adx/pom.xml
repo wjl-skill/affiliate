@@ -22,6 +22,10 @@
             <version>0.2.0</version>
         </dependency>
         <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-core</artifactId>
+        </dependency>
+        <dependency>
             <groupId>com.affiliate</groupId>
             <artifactId>platform-creative</artifactId>
             <version>0.2.0</version>

@@ -61,38 +61,20 @@ public class ReportService {
         String key = tenantId + ":" + date + ":" + campaignId;
 
         if (reportMapper != null) {
+            ReportDailyEntity delta = new ReportDailyEntity(
+                    tenantId, date, campaignId,
+                    impressions, clicks, conversions,
+                    spend, revenue
+            );
+            reportMapper.upsertIncremental(delta);
+
             QueryWrapper<ReportDailyEntity> qw = new QueryWrapper<>();
             qw.eq("tenant_id", tenantId).eq("report_date", date).eq("campaign_id", campaignId);
-            ReportDailyEntity existing = reportMapper.selectOne(qw);
-
-            DailyReport result;
-            if (existing == null) {
-                ReportDailyEntity entity = new ReportDailyEntity(
-                        tenantId, date, campaignId,
-                        impressions, clicks, conversions,
-                        spend, revenue
-                );
-                reportMapper.insert(entity);
-                result = new DailyReport(tenantId, date, campaignId, impressions, clicks, conversions, spend, revenue);
-            } else {
-                long nextImp = existing.getImpressions() + impressions;
-                long nextClk = existing.getClicks() + clicks;
-                long nextConv = existing.getConversions() + conversions;
-                BigDecimal nextSpend = existing.getSpend().add(spend);
-                BigDecimal nextRevenue = existing.getRevenue().add(revenue);
-
-                ReportDailyEntity updateEntity = new ReportDailyEntity(
-                        tenantId, date, campaignId,
-                        nextImp, nextClk, nextConv,
-                        nextSpend, nextRevenue
-                );
-
-                UpdateWrapper<ReportDailyEntity> uw = new UpdateWrapper<>();
-                uw.eq("tenant_id", tenantId).eq("report_date", date).eq("campaign_id", campaignId);
-                reportMapper.update(updateEntity, uw);
-
-                result = new DailyReport(tenantId, date, campaignId, nextImp, nextClk, nextConv, nextSpend, nextRevenue);
-            }
+            ReportDailyEntity current = reportMapper.selectOne(qw);
+            DailyReport result = current != null
+                    ? new DailyReport(tenantId, date, campaignId, current.getImpressions(), current.getClicks(),
+                            current.getConversions(), current.getSpend(), current.getRevenue())
+                    : new DailyReport(tenantId, date, campaignId, impressions, clicks, conversions, spend, revenue);
 
             if (cache != null) {
                 cache.put(key, result);

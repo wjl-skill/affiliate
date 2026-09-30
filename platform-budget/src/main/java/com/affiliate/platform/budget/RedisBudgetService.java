@@ -65,7 +65,7 @@ public class RedisBudgetService implements BudgetService {
         if (amount == null || amount.signum() < 0) {
             throw new IllegalArgumentException("amount must be non-negative");
         }
-        String key = "budget:" + tenantId + ":" + campaignId + ":daily";
+        String key = "{budget:" + tenantId + ":" + campaignId + "}:daily";
         long micros = toMicros(amount);
         // 保存 2 天，便于跨天对账与统计重置
         redis.opsForValue().set(key, String.valueOf(micros), Duration.ofDays(2));
@@ -87,9 +87,10 @@ public class RedisBudgetService implements BudgetService {
             throw new IllegalArgumentException("amount must be non-negative");
         }
 
-        String budgetKey = "budget:" + tenantId + ":" + campaignId + ":daily";
+        // 使用统一 Hash Tag {budget:tenant:campaign} 保证多 Key 严格分配至同一个 Redis Cluster Slot
+        String budgetKey = "{budget:" + tenantId + ":" + campaignId + "}:daily";
         String resId = UUID.randomUUID().toString();
-        String reserveKey = "reservation:" + tenantId + ":" + resId;
+        String reserveKey = "{budget:" + tenantId + ":" + campaignId + "}:res:" + resId;
         long micros = toMicros(amount);
 
         // 调用原子 Lua 脚本，预占 TTL 设为 120 秒
@@ -110,10 +111,11 @@ public class RedisBudgetService implements BudgetService {
      */
     @Override
     public void confirm(Reservation reservation) {
-        String reserveKey = "reservation:" + reservation.tenantId() + ":" + reservation.id();
+        String reserveKey = "{budget:" + reservation.tenantId() + ":" + reservation.campaignId() + "}:res:" + reservation.id();
         redis.delete(reserveKey);
         // 记录已确认流水状态，有效期 2 天用于防重与审计
-        redis.opsForValue().set("confirmed_res:" + reservation.id(), "1", Duration.ofDays(2));
+        String confirmedKey = "{budget:" + reservation.tenantId() + ":" + reservation.campaignId() + "}:confirmed:" + reservation.id();
+        redis.opsForValue().set(confirmedKey, "1", Duration.ofDays(2));
     }
 
     /**
@@ -125,11 +127,11 @@ public class RedisBudgetService implements BudgetService {
      */
     @Override
     public void release(Reservation reservation) {
-        String reserveKey = "reservation:" + reservation.tenantId() + ":" + reservation.id();
+        String reserveKey = "{budget:" + reservation.tenantId() + ":" + reservation.campaignId() + "}:res:" + reservation.id();
         // 仅当预占 Key 存在且成功删除时才返还金额（防重复释放）
         Boolean deleted = redis.delete(reserveKey);
         if (Boolean.TRUE.equals(deleted)) {
-            String budgetKey = "budget:" + reservation.tenantId() + ":" + reservation.campaignId() + ":daily";
+            String budgetKey = "{budget:" + reservation.tenantId() + ":" + reservation.campaignId() + "}:daily";
             redis.opsForValue().increment(budgetKey, toMicros(reservation.amount()));
         }
     }

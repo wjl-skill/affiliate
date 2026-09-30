@@ -31,31 +31,74 @@ public class ClickTrackerService {
     private final ProbabilisticAttributionEngine probabilisticEngine;
 
     private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(ClickTrackerService.class);
-    private final java.util.concurrent.ExecutorService asyncDbWriter = java.util.concurrent.Executors.newFixedThreadPool(
+    // 工业级有界异步落盘线程池 (带 10000 容量有界队列，彻底消除高并发下的 OOM 内存溢出隐患)
+    private final java.util.concurrent.ThreadPoolExecutor asyncDbWriter = new java.util.concurrent.ThreadPoolExecutor(
             Math.min(Runtime.getRuntime().availableProcessors() * 2, 16),
-            Thread.ofVirtual().name("click-db-writer-", 0).factory()
+            Math.min(Runtime.getRuntime().availableProcessors() * 4, 32),
+            60L,
+            java.util.concurrent.TimeUnit.SECONDS,
+            new java.util.concurrent.ArrayBlockingQueue<>(10000),
+            Thread.ofVirtual().name("click-db-writer-", 0).factory(),
+            new java.util.concurrent.ThreadPoolExecutor.DiscardOldestPolicy()
     );
+
+    @jakarta.annotation.PreDestroy
+    public void shutdown() {
+        asyncDbWriter.shutdown();
+        try {
+            if (!asyncDbWriter.awaitTermination(5, java.util.concurrent.TimeUnit.SECONDS)) {
+                asyncDbWriter.shutdownNow();
+            }
+        } catch (InterruptedException e) {
+            asyncDbWriter.shutdownNow();
+            Thread.currentThread().interrupt();
+        }
+    }
 
     // 内存降级存储容器
     private final ConcurrentMap<String, ClickSession> sessionStore = new ConcurrentHashMap<>();
 
+    private final org.springframework.kafka.core.KafkaTemplate<String, Object> kafkaTemplate;
+    private final com.affiliate.platform.affiliate.metrics.AffiliateMetrics metrics;
+
     public ClickTrackerService() {
-        this(null, null, null);
+        this(null, null, null, null, null);
     }
 
     public ClickTrackerService(StringRedisTemplate redisTemplate) {
-        this(redisTemplate, null, null);
+        this(redisTemplate, null, null, null, null);
+    }
+
+    public ClickTrackerService(
+            StringRedisTemplate redisTemplate,
+            ClickSessionMapper clickSessionMapper,
+            ProbabilisticAttributionEngine probabilisticEngine
+    ) {
+        this(redisTemplate, clickSessionMapper, probabilisticEngine, null, null);
+    }
+
+    public ClickTrackerService(
+            StringRedisTemplate redisTemplate,
+            ClickSessionMapper clickSessionMapper,
+            ProbabilisticAttributionEngine probabilisticEngine,
+            org.springframework.kafka.core.KafkaTemplate<String, Object> kafkaTemplate
+    ) {
+        this(redisTemplate, clickSessionMapper, probabilisticEngine, kafkaTemplate, null);
     }
 
     @Autowired
     public ClickTrackerService(
             @Autowired(required = false) StringRedisTemplate redisTemplate,
             @Autowired(required = false) ClickSessionMapper clickSessionMapper,
-            @Autowired(required = false) ProbabilisticAttributionEngine probabilisticEngine
+            @Autowired(required = false) ProbabilisticAttributionEngine probabilisticEngine,
+            @Autowired(required = false) org.springframework.kafka.core.KafkaTemplate<String, Object> kafkaTemplate,
+            @Autowired(required = false) com.affiliate.platform.affiliate.metrics.AffiliateMetrics metrics
     ) {
         this.redisTemplate = redisTemplate;
         this.clickSessionMapper = clickSessionMapper;
         this.probabilisticEngine = probabilisticEngine;
+        this.kafkaTemplate = kafkaTemplate;
+        this.metrics = metrics != null ? metrics : new com.affiliate.platform.affiliate.metrics.AffiliateMetrics();
     }
 
     /**
@@ -83,6 +126,8 @@ public class ClickTrackerService {
         if (offer == null) {
             throw new IllegalArgumentException("offer must not be null");
         }
+
+        long startNanos = System.nanoTime();
 
         // 1. 生成全局唯一 click_id
         String clickId = "c_" + UUID.randomUUID().toString().replace("-", "");
@@ -137,19 +182,30 @@ public class ClickTrackerService {
             }
         }
 
-        // 5. 异步落盘 PostgreSQL，使用受控池避免高并发压垮数据库连接池
-        if (clickSessionMapper != null) {
+        // 5. 极速数据面模式：优先异步直投 Kafka 削峰，解耦关系数据库写锁
+        ClickSessionEntity entity = new ClickSessionEntity(
+                clickId,
+                offer.tenantId(),
+                offer.id(),
+                affiliateId,
+                sub1, sub2, sub3, sub4, sub5,
+                ip, userAgent, country, deviceType,
+                now, expiresAt
+        );
+
+        if (kafkaTemplate != null) {
+            try {
+                kafkaTemplate.send("affiliate.events.click", clickId, entity);
+            } catch (Exception ex) {
+                log.warn("Kafka click dispatch failed for {}, fallback to async db: {}", clickId, ex.getMessage());
+                if (clickSessionMapper != null) {
+                    asyncDbWriter.submit(() -> clickSessionMapper.insert(entity));
+                }
+            }
+        } else if (clickSessionMapper != null) {
+            // 本地无 Kafka 模式：使用有界线程池异步落库
             asyncDbWriter.submit(() -> {
                 try {
-                    ClickSessionEntity entity = new ClickSessionEntity(
-                            clickId,
-                            offer.tenantId(),
-                            offer.id(),
-                            affiliateId,
-                            sub1, sub2, sub3, sub4, sub5,
-                            ip, userAgent, country, deviceType,
-                            now, expiresAt
-                    );
                     clickSessionMapper.insert(entity);
                 } catch (Exception ex) {
                     log.warn("Async DB persistence failed for click {}: {}", clickId, ex.getMessage());
@@ -163,6 +219,7 @@ public class ClickTrackerService {
                 sub1, sub2, sub3, sub4, sub5, ip, country, deviceType
         );
 
+        metrics.recordClickSuccess(System.nanoTime() - startNanos);
         return new ClickTrackingResult(clickId, redirectUrl, session);
     }
 

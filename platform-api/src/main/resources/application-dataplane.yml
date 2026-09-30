@@ -1,0 +1,55 @@
+# ===================================================================
+# Affiliate Platform 极速数据面配置 (Profile: dataplane)
+# 专为 RTB 竞价 (OpenRTB 2.5) 与 网盟点击追踪 (SmartLink/TDS) 极速热路径设计
+# ===================================================================
+
+spring:
+  config:
+    activate:
+      on-profile: dataplane
+
+  # 虚拟线程全量调度支持 (Sub-millisecond Concurrency)
+  threads:
+    virtual:
+      enabled: true
+
+  # 数据面收敛数据库连接池：热路径读本地 Caffeine + Redis，严禁主库长事务阻塞
+  datasource:
+    hikari:
+      pool-name: AffiliateDataPlaneHikari
+      maximum-pool-size: ${DB_DATAPLANE_MAX_POOL_SIZE:10}
+      minimum-idle: 2
+      connection-timeout: 1000
+
+  # 极速 Redis Cluster 缓存与原子频控
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+      lettuce:
+        pool:
+          max-active: ${REDIS_POOL_MAX_ACTIVE:150}
+          max-idle: 30
+          min-idle: 10
+
+  # 启用 Kafka 异步事件削峰通道
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    producer:
+      acks: 1
+      retries: 3
+      batch-size: 16384
+      linger-ms: 5
+
+app:
+  infrastructure:
+    database-enabled: true
+    redis-enabled: true
+    kafka-enabled: true
+  ip2location:
+    enabled: true
+    bin-path: ${IP2LOCATION_BIN_PATH:/opt/data/geo/IP2LOCATION-LITE-DB5.IPV6.BIN}
+    cache-mode: MEMORY_MAPPED
+  auction:
+    default-timeout-ms: 15 # 竞价硬截断死线 15ms

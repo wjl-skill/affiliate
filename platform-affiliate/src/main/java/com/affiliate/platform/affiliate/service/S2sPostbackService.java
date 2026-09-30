@@ -10,6 +10,7 @@ import com.affiliate.platform.mapper.AffiliatePartnerMapper;
 import com.affiliate.platform.mapper.ConversionMapper;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
@@ -36,6 +37,8 @@ public class S2sPostbackService {
     private final ConversionMapper conversionMapper;
     private final AffiliatePartnerMapper partnerMapper;
     private final ProbabilisticAttributionEngine probabilisticEngine;
+    private final StringRedisTemplate redisTemplate;
+    private final com.affiliate.platform.affiliate.metrics.AffiliateMetrics metrics;
 
     private final ConcurrentMap<String, Conversion> fallbackConversions = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, AffiliatePartner> fallbackPartners = new ConcurrentHashMap<>();
@@ -46,7 +49,7 @@ public class S2sPostbackService {
             AffiliateAntiFraudEngine antiFraudEngine,
             PublisherPostbackDispatcher postbackDispatcher
     ) {
-        this(clickTracker, offerService, antiFraudEngine, postbackDispatcher, null, null, null);
+        this(clickTracker, offerService, antiFraudEngine, postbackDispatcher, null, null, null, null, null);
     }
 
     public S2sPostbackService(
@@ -57,7 +60,32 @@ public class S2sPostbackService {
             ConversionMapper conversionMapper,
             AffiliatePartnerMapper partnerMapper
     ) {
-        this(clickTracker, offerService, antiFraudEngine, postbackDispatcher, conversionMapper, partnerMapper, null);
+        this(clickTracker, offerService, antiFraudEngine, postbackDispatcher, conversionMapper, partnerMapper, null, null, null);
+    }
+
+    public S2sPostbackService(
+            ClickTrackerService clickTracker,
+            OfferService offerService,
+            AffiliateAntiFraudEngine antiFraudEngine,
+            PublisherPostbackDispatcher postbackDispatcher,
+            ConversionMapper conversionMapper,
+            AffiliatePartnerMapper partnerMapper,
+            ProbabilisticAttributionEngine probabilisticEngine
+    ) {
+        this(clickTracker, offerService, antiFraudEngine, postbackDispatcher, conversionMapper, partnerMapper, probabilisticEngine, null, null);
+    }
+
+    public S2sPostbackService(
+            ClickTrackerService clickTracker,
+            OfferService offerService,
+            AffiliateAntiFraudEngine antiFraudEngine,
+            PublisherPostbackDispatcher postbackDispatcher,
+            ConversionMapper conversionMapper,
+            AffiliatePartnerMapper partnerMapper,
+            ProbabilisticAttributionEngine probabilisticEngine,
+            StringRedisTemplate redisTemplate
+    ) {
+        this(clickTracker, offerService, antiFraudEngine, postbackDispatcher, conversionMapper, partnerMapper, probabilisticEngine, redisTemplate, null);
     }
 
     @Autowired
@@ -68,7 +96,9 @@ public class S2sPostbackService {
             PublisherPostbackDispatcher postbackDispatcher,
             @Autowired(required = false) ConversionMapper conversionMapper,
             @Autowired(required = false) AffiliatePartnerMapper partnerMapper,
-            @Autowired(required = false) ProbabilisticAttributionEngine probabilisticEngine
+            @Autowired(required = false) ProbabilisticAttributionEngine probabilisticEngine,
+            @Autowired(required = false) StringRedisTemplate redisTemplate,
+            @Autowired(required = false) com.affiliate.platform.affiliate.metrics.AffiliateMetrics metrics
     ) {
         this.clickTracker = clickTracker;
         this.offerService = offerService;
@@ -77,6 +107,8 @@ public class S2sPostbackService {
         this.conversionMapper = conversionMapper;
         this.partnerMapper = partnerMapper;
         this.probabilisticEngine = probabilisticEngine;
+        this.redisTemplate = redisTemplate;
+        this.metrics = metrics != null ? metrics : new com.affiliate.platform.affiliate.metrics.AffiliateMetrics();
     }
 
     public void registerPartner(AffiliatePartner partner) {
@@ -166,10 +198,32 @@ public class S2sPostbackService {
             throw new IllegalArgumentException("txId must not be blank");
         }
 
-        // 并发防穿透锁
-        boolean acquired = inFlightTxIds.add(txId);
+        // 并发防穿透锁 (Redis 分布式锁，降级为本地 Set)
+        String lockKey = "lock:aff:tx:" + txId;
+        boolean acquired = false;
+        boolean redisLocked = false;
+        if (redisTemplate != null) {
+            try {
+                Boolean setSuccess = redisTemplate.opsForValue().setIfAbsent(lockKey, "1", Duration.ofSeconds(30));
+                redisLocked = Boolean.TRUE.equals(setSuccess);
+                acquired = redisLocked;
+            } catch (Exception ex) {
+                acquired = inFlightTxIds.add(txId);
+            }
+        } else {
+            acquired = inFlightTxIds.add(txId);
+        }
+
         if (!acquired) {
-            try { Thread.sleep(50); } catch (InterruptedException ignored) {}
+            metrics.recordPostbackLockContention();
+            metrics.recordConversionRejected();
+            String convId = "conv_" + UUID.randomUUID().toString().replace("-", "");
+            String tenant = com.affiliate.platform.tenant.TenantContext.get() != null ? com.affiliate.platform.tenant.TenantContext.get() : "public";
+            return new Conversion(convId, tenant, clickId != null ? clickId : "unmatched", txId,
+                    offerIdFallback != null ? offerIdFallback : "unknown", "unknown",
+                    BigDecimal.ZERO, BigDecimal.ZERO, saleAmount, 0,
+                    Conversion.Status.REJECTED, "CONCURRENT_TRANSACTION_IN_PROGRESS", null,
+                    Conversion.PostbackStatus.PENDING, now == null ? Instant.now() : now);
         }
 
         try {
@@ -208,79 +262,92 @@ public class S2sPostbackService {
 
             // 3. 读取 Offer 与渠道出价 (优先匹配多事件 OfferGoal)
             Offer offer = offerService.find(session.offerId()).orElse(null);
-        AffiliatePartner partner = findPartner(session.affiliateId()).orElse(null);
+            AffiliatePartner partner = findPartner(session.affiliateId()).orElse(null);
 
-        BigDecimal payout = BigDecimal.ZERO;
-        BigDecimal revenue = BigDecimal.ZERO;
+            BigDecimal payout = BigDecimal.ZERO;
+            BigDecimal revenue = BigDecimal.ZERO;
 
-        if (offer != null) {
-            // 3.1 优先检查是否存在匹配的多事件目标 (OfferGoal)
-            com.affiliate.platform.affiliate.domain.OfferGoal matchedGoal = null;
-            if (goalId != null && !goalId.isBlank()) {
-                matchedGoal = offerService.findGoal(offer.id(), goalId).orElse(null);
+            if (offer != null) {
+                // 3.1 优先检查是否存在匹配的多事件目标 (OfferGoal)
+                com.affiliate.platform.affiliate.domain.OfferGoal matchedGoal = null;
+                if (goalId != null && !goalId.isBlank()) {
+                    matchedGoal = offerService.findGoal(offer.id(), goalId).orElse(null);
+                }
+
+                if (matchedGoal != null) {
+                    payout = matchedGoal.payout();
+                    revenue = matchedGoal.revenue();
+                } else if (offer.payoutType() == Offer.PayoutType.CPS && saleAmount != null && saleAmount.signum() > 0) {
+                    payout = saleAmount.multiply(offer.defaultPayout());
+                    revenue = saleAmount.multiply(offer.defaultRevenue());
+                } else {
+                    OfferService.PayoutResolution resolution = offerService.resolvePayout(offer, partner);
+                    payout = resolution.payout();
+                    revenue = resolution.revenue();
+                }
             }
 
-            if (matchedGoal != null) {
-                payout = matchedGoal.payout();
-                revenue = matchedGoal.revenue();
-            } else if (offer.payoutType() == Offer.PayoutType.CPS && saleAmount != null && saleAmount.signum() > 0) {
-                payout = saleAmount.multiply(offer.defaultPayout());
-                revenue = saleAmount.multiply(offer.defaultRevenue());
-            } else {
-                OfferService.PayoutResolution resolution = offerService.resolvePayout(offer, partner);
-                payout = resolution.payout();
-                revenue = resolution.revenue();
+            // 4. 检查日 Cap
+            String todayKey = LocalDate.now().toString();
+            boolean capAvailable = offerService.incrementAndCheckCap(session.offerId(), todayKey);
+            if (!capAvailable && fraudRes.passed()) {
+                fraudRes = new AffiliateAntiFraudEngine.FraudInspectionResult(false, Conversion.Status.REJECTED, "OFFER_CAP_EXCEEDED");
             }
-        }
 
-        // 4. 检查日 Cap
-        String todayKey = LocalDate.now().toString();
-        boolean capAvailable = offerService.incrementAndCheckCap(session.offerId(), todayKey);
-        if (!capAvailable && fraudRes.passed()) {
-            fraudRes = new AffiliateAntiFraudEngine.FraudInspectionResult(false, Conversion.Status.REJECTED, "OFFER_CAP_EXCEEDED");
-        }
+            // 5. 生成转化实体
+            String convId = "conv_" + UUID.randomUUID().toString().replace("-", "");
+            Conversion conversion = new Conversion(
+                    convId,
+                    session.tenantId(),
+                    session.clickId(),
+                    txId,
+                    session.offerId(),
+                    session.affiliateId(),
+                    payout,
+                    revenue,
+                    saleAmount,
+                    ctit,
+                    fraudRes.recommendedStatus(),
+                    fraudRes.rejectionReason(),
+                    session.sub1(),
+                    Conversion.PostbackStatus.PENDING,
+                    current
+            );
 
-        // 5. 生成转化实体
-        String convId = "conv_" + UUID.randomUUID().toString().replace("-", "");
-        Conversion conversion = new Conversion(
-                convId,
-                session.tenantId(),
-                session.clickId(),
-                txId,
-                session.offerId(),
-                session.affiliateId(),
-                payout,
-                revenue,
-                saleAmount,
-                ctit,
-                fraudRes.recommendedStatus(),
-                fraudRes.rejectionReason(),
-                session.sub1(),
-                Conversion.PostbackStatus.PENDING,
-                current
-        );
+            saveConversion(conversion);
 
-        saveConversion(conversion);
-
-        // 6. 若风控通过，分发下游 Postback 并回写真实回执状态
-        Conversion result = conversion;
-        if (fraudRes.passed() && partner != null) {
-            PublisherPostbackDispatcher.PostbackDeliveryLog log =
-                    postbackDispatcher.dispatch(partner, conversion, session);
-            if (log != null) {
-                result = conversion.withPostbackStatus(
-                        log.success() ? Conversion.PostbackStatus.DELIVERED : Conversion.PostbackStatus.FAILED);
-                saveConversion(result);
+            // 6. 若风控通过，分发下游 Postback 并回写真实回执状态
+            Conversion result = conversion;
+            if (fraudRes.passed() && partner != null) {
+                PublisherPostbackDispatcher.PostbackDeliveryLog log =
+                        postbackDispatcher.dispatch(partner, conversion, session);
+                if (log != null) {
+                    result = conversion.withPostbackStatus(
+                            log.success() ? Conversion.PostbackStatus.DELIVERED : Conversion.PostbackStatus.FAILED);
+                    saveConversion(result);
+                }
             }
-        }
 
-        return result;
-    } finally {
-        inFlightTxIds.remove(txId);
-    }
+            return result;
+        } finally {
+            if (redisLocked && redisTemplate != null) {
+                try {
+                    redisTemplate.delete(lockKey);
+                } catch (Exception ignored) {}
+            }
+            inFlightTxIds.remove(txId);
+        }
 }
 
     private void saveConversion(Conversion conv) {
+        if (conv == null) return;
+        if (metrics != null && conv.status() != null) {
+            switch (conv.status()) {
+                case APPROVED -> metrics.recordConversionApproved();
+                case FRAUD_SUSPECTED -> metrics.recordConversionFraud();
+                case REJECTED -> metrics.recordConversionRejected();
+            }
+        }
         if (conversionMapper != null) {
             ConversionEntity entity = new ConversionEntity(
                     conv.id(),

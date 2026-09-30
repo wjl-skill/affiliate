@@ -88,6 +88,18 @@ public class WalletService {
         java.util.concurrent.locks.Lock lock = locks.get(accountId);
         lock.lock();
         try {
+            if (walletAccountMapper != null) {
+                // 确保账户存在
+                getOrCreate("public", accountId, BigDecimal.ZERO);
+                int updated = walletAccountMapper.atomicRecharge(accountId, amount);
+                if (updated > 0) {
+                    WalletAccount latest = findDomain(accountId);
+                    if (latest != null) {
+                        accounts.put(accountId, latest);
+                        return latest;
+                    }
+                }
+            }
             WalletAccount curr = findDomain(accountId);
             if (curr == null) {
                 curr = new WalletAccount(accountId, "public", BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, "USD", Instant.now());
@@ -115,6 +127,16 @@ public class WalletService {
         java.util.concurrent.locks.Lock lock = locks.get(accountId);
         lock.lock();
         try {
+            if (walletAccountMapper != null) {
+                int updated = walletAccountMapper.atomicPreAuthHold(accountId, amount);
+                if (updated > 0) {
+                    WalletAccount latest = findDomain(accountId);
+                    if (latest != null) accounts.put(accountId, latest);
+                    return true;
+                }
+                return false;
+            }
+
             WalletAccount curr = findDomain(accountId);
             if (curr == null || !curr.canHold(amount)) {
                 return false;
@@ -143,6 +165,17 @@ public class WalletService {
         java.util.concurrent.locks.Lock lock = locks.get(accountId);
         lock.lock();
         try {
+            if (walletAccountMapper != null) {
+                int updated = walletAccountMapper.atomicCapture(accountId, amount);
+                if (updated > 0) {
+                    WalletAccount latest = findDomain(accountId);
+                    if (latest != null) {
+                        accounts.put(accountId, latest);
+                        return latest;
+                    }
+                }
+            }
+
             WalletAccount curr = findDomain(accountId);
             if (curr == null) {
                 throw new IllegalStateException("account not found: " + accountId);
@@ -176,6 +209,17 @@ public class WalletService {
         java.util.concurrent.locks.Lock lock = locks.get(accountId);
         lock.lock();
         try {
+            if (walletAccountMapper != null) {
+                int updated = walletAccountMapper.atomicRelease(accountId, amount);
+                if (updated > 0) {
+                    WalletAccount latest = findDomain(accountId);
+                    if (latest != null) {
+                        accounts.put(accountId, latest);
+                        return latest;
+                    }
+                }
+            }
+
             WalletAccount curr = findDomain(accountId);
             if (curr == null) return null;
 

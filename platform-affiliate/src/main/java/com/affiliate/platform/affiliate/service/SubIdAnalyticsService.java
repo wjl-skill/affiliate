@@ -52,28 +52,11 @@ public class SubIdAnalyticsService {
 
         if (statsMapper != null) {
             try {
-                QueryWrapper<SubIdStatsEntity> qw = new QueryWrapper<>();
-                qw.eq("affiliate_id", affId).eq("sub1", s1);
-                SubIdStatsEntity entity = statsMapper.selectOne(qw);
-
-                if (entity == null) {
-                    entity = new SubIdStatsEntity(currentTenant(), affId, s1, 1L, 0L, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, Instant.now());
-                    try {
-                        statsMapper.insert(entity);
-                    } catch (Exception duplicateEx) {
-                        // 并发插入冲突时转为更新
-                        SubIdStatsEntity existing = statsMapper.selectOne(qw);
-                        if (existing != null) {
-                            existing.setClicks(existing.getClicks() + 1);
-                            recomputeMetrics(existing);
-                            statsMapper.update(existing, qw);
-                        }
-                    }
-                } else {
-                    entity.setClicks(entity.getClicks() + 1);
-                    recomputeMetrics(entity);
-                    statsMapper.update(entity, qw);
-                }
+                SubIdStatsEntity entity = new SubIdStatsEntity(
+                        currentTenant(), affId, s1, 1L, 0L,
+                        BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, Instant.now()
+                );
+                statsMapper.upsertIncremental(entity);
                 return;
             } catch (Exception ex) {
                 // 数据库出现网络或连接异常时，优雅降级至内存累加器
@@ -92,32 +75,11 @@ public class SubIdAnalyticsService {
 
         if (statsMapper != null) {
             try {
-                QueryWrapper<SubIdStatsEntity> qw = new QueryWrapper<>();
-                qw.eq("affiliate_id", affId).eq("sub1", s1);
-                SubIdStatsEntity entity = statsMapper.selectOne(qw);
-
-                if (entity == null) {
-                    entity = new SubIdStatsEntity(currentTenant(), affId, s1, 1L, 1L, p, r, BigDecimal.ZERO, BigDecimal.ZERO, Instant.now());
-                    recomputeMetrics(entity);
-                    try {
-                        statsMapper.insert(entity);
-                    } catch (Exception duplicateEx) {
-                        SubIdStatsEntity existing = statsMapper.selectOne(qw);
-                        if (existing != null) {
-                            existing.setConversions(existing.getConversions() + 1);
-                            existing.setTotalPayout(existing.getTotalPayout().add(p));
-                            existing.setTotalRevenue(existing.getTotalRevenue().add(r));
-                            recomputeMetrics(existing);
-                            statsMapper.update(existing, qw);
-                        }
-                    }
-                } else {
-                    entity.setConversions(entity.getConversions() + 1);
-                    entity.setTotalPayout(entity.getTotalPayout().add(p));
-                    entity.setTotalRevenue(entity.getTotalRevenue().add(r));
-                    recomputeMetrics(entity);
-                    statsMapper.update(entity, qw);
-                }
+                SubIdStatsEntity entity = new SubIdStatsEntity(
+                        currentTenant(), affId, s1, 0L, 1L,
+                        p, r, BigDecimal.ZERO, BigDecimal.ZERO, Instant.now()
+                );
+                statsMapper.upsertIncremental(entity);
                 return;
             } catch (Exception ex) {
                 // 降级处理

@@ -41,6 +41,9 @@ public interface PaymentTransactionRepository extends BaseMapper<PaymentTransact
     default Optional<PaymentTransactionEntity> findByInvoiceId(String invoiceId) {
         return Optional.ofNullable(selectOne(new LambdaQueryWrapper<PaymentTransactionEntity>().eq(PaymentTransactionEntity::getInvoiceId, invoiceId).last("LIMIT 1")));
     }
+    default List<PaymentTransactionEntity> findAllByInvoiceId(String invoiceId) {
+        return selectList(new LambdaQueryWrapper<PaymentTransactionEntity>().eq(PaymentTransactionEntity::getInvoiceId, invoiceId));
+    }
     default Optional<PaymentTransactionEntity> findByExternalPaymentId(String externalPaymentId) {
         return Optional.ofNullable(selectOne(new LambdaQueryWrapper<PaymentTransactionEntity>().eq(PaymentTransactionEntity::getExternalPaymentId, externalPaymentId).last("LIMIT 1")));
     }
