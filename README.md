@@ -8,31 +8,27 @@
 
 ## 文档入口
 
-### 核心架构与生产指南
-- [生产级别 ADX 与 CDP 核心优化实施报告 PRODUCTION_ADX_CDP_OPTIMIZATION_REPORT.md](docs/PRODUCTION_ADX_CDP_OPTIMIZATION_REPORT.md)：PMP 私有交易撮合、多席位并发清算、Disruptor 异步环形账本、并查集图谱防桥接、实时受众进出差分与 GDPR 墓碑擦除。
-- [生产级别 SSP 与 DSP 核心链路优化报告 PRODUCTION_SSP_DSP_OPTIMIZATION_REPORT.md](docs/PRODUCTION_SSP_DSP_OPTIMIZATION_REPORT.md)：无锁倒排索引、连续胜率 Bid Shading、多维阻尼调优、自适应软硬底价、Top-K 熔断与 4 层统一竞价仲裁流水线。
-- [生产部署与运维操作指南 PRODUCTION_DEPLOYMENT_AND_OPERATIONS_GUIDE.md](docs/PRODUCTION_DEPLOYMENT_AND_OPERATIONS_GUIDE.md)：Kubernetes 生产编排、数据面/控制面物理分离、Prometheus 监控与零停机滚动发布规范。
-- [端到端性能压测与基准评估报告 PERFORMANCE_BENCHMARK_REPORT.md](docs/PERFORMANCE_BENCHMARK_REPORT.md)：万级/十万级 QPS 压测方法、k6 脚本与实测 152k QPS / P99 2.67ms 基准指标。
-- [多触点归因算法与商业级反欺诈指南 ATTRIBUTION_AND_ANTI_FRAUD_GUIDE.md](docs/ATTRIBUTION_AND_ANTI_FRAUD_GUIDE.md)：Data-Driven MTA、6 大归因模型横向比对、超音速跨国漂移与多维风控算法。
-- [生产级架构升级与实施报告 PRODUCTION_UPGRADE_IMPLEMENTATION_REPORT.md](docs/PRODUCTION_UPGRADE_IMPLEMENTATION_REPORT.md)：Phase 1 ~ Phase 4 完整升级历程与实施事实依据。
-- [领域词汇 CONTEXT.md](CONTEXT.md)：统一 DMP、CDP、DSP、SSP、ADX、Affiliate 等业务语言。
-- [详细架构设计 ARCHITECTURE.md](docs/ARCHITECTURE.md)：模块边界、依赖方向、RTB 热路径、租户隔离、数据模型、事件和生产部署约束。
-- [系统设计优化 SYSTEM_DESIGN_OPTIMIZATION.md](docs/SYSTEM_DESIGN_OPTIMIZATION.md)：性能优化与扩展策略。
+### 1. 全局架构与生产升级实施
+- **[生产级全链路架构升级与优化实施总报告 PRODUCTION_FULL_STACK_OPTIMIZATION_REPORT.md](docs/PRODUCTION_FULL_STACK_OPTIMIZATION_REPORT.md)**：平台全链路（网盟营销 Phase 1~4、SSP/DSP 倒排与阻尼出价、ADX/CDP 多边撮合与身份图谱闭环）完整实施细节、设计公式与实测质量基准总报告。
+- **[详细系统架构设计 ARCHITECTURE.md](docs/ARCHITECTURE.md)**：模块边界、分层依赖拓扑、RTB 纳秒级热路径、多租户行级物理隔离、可靠事件 Outbox 与生产部署约束。
+- **[领域词汇规范 CONTEXT.md](CONTEXT.md)**：统一 DMP、CDP、DSP、SSP、ADX、Affiliate 广告网络等核心业务概念与领域语言。
 
-### 网盟营销 (Affiliate Network) 专项文档
-- **[商业需求文档 AFFILIATE_BUSINESS_REQUIREMENTS.md](docs/AFFILIATE_BUSINESS_REQUIREMENTS.md)**
-  完整的业务功能规格说明，涵盖渠道管理、Offer 配置、点击追踪、转化归因、SmartLink/TDS 智能分流、反欺诈、Sub-ID 多维分析、账期结算和支付处理等核心业务流程。对标 CJ Affiliate、ShareASale、Rakuten Advertising、Impact、Awin 等商业级网盟平台。
+### 2. 生产运维与性能工程
+- **[生产部署与运维操作指南 PRODUCTION_DEPLOYMENT_AND_OPERATIONS_GUIDE.md](docs/PRODUCTION_DEPLOYMENT_AND_OPERATIONS_GUIDE.md)**：Kubernetes 云原生编排规范、数据面与控制面物理隔离、Prometheus 监控大盘与零停机滚动发布手册。
+- **[端到端性能压测与基准评估报告 PERFORMANCE_BENCHMARK_REPORT.md](docs/PERFORMANCE_BENCHMARK_REPORT.md)**：万级/十万级 QPS 压测方法论、k6 负载脚本与实测 152k QPS / P99 2.67ms 核心基准。
 
-- **[技术设计文档 AFFILIATE_TECHNICAL_DESIGN.md](docs/AFFILIATE_TECHNICAL_DESIGN.md)**
-  详细的技术架构与实现方案，包括高并发点击追踪（P95<50ms）、S2S 转化回传、Redis 预算 Cap 原子控制、Kafka 异步事件流、商业级反欺诈引擎（CTIT、IP/UA 特征、黑名单）、SmartLink EPC 优化路由、Publisher Postback 分发、分布式账期结算作业等核心技术实现。
+### 3. 算法与安全风控
+- **[多触点归因算法与商业级反欺诈指南 ATTRIBUTION_AND_ANTI_FRAUD_GUIDE.md](docs/ATTRIBUTION_AND_ANTI_FRAUD_GUIDE.md)**：Data-Driven MTA 多触点归因、6 大归因模型横向比对、超音速跨国漂移检测与多维反作弊风控引擎。
 
-- **[API 集成指南 AFFILIATE_API_INTEGRATION_GUIDE.md](docs/AFFILIATE_API_INTEGRATION_GUIDE.md)**
-  面向广告主与渠道客的完整 API 对接手册，包含点击追踪、S2S Postback 转化上报、Offer 管理、渠道管理、多维报表查询、Webhook/Postback 配置等接口规范，以及 PHP、Python、Node.js、Ruby 等主流语言的代码示例。
+### 4. 网盟营销 (Affiliate Network) 业务与技术体系
+- **[商业需求文档 AFFILIATE_BUSINESS_REQUIREMENTS.md](docs/AFFILIATE_BUSINESS_REQUIREMENTS.md)**：完整的业务功能规格说明，涵盖渠道分级、Offer 配置、点击追踪、转化归因、SmartLink/TDS 智能分流、反欺诈、Sub-ID 多维分析、账期结算和支付网关等业务闭环。
+- **[技术设计文档 AFFILIATE_TECHNICAL_DESIGN.md](docs/AFFILIATE_TECHNICAL_DESIGN.md)**：详细的技术架构与实现方案，包括高并发点击追踪（P95<50ms）、S2S 转化回传、Redis 预算 Cap 原子控制、Kafka 异步事件流、CTIT 漏斗检测、SmartLink EPC 优化路由、Publisher Postback 分发与分布式账期结算。
+- **[API 集成指南 AFFILIATE_API_INTEGRATION_GUIDE.md](docs/AFFILIATE_API_INTEGRATION_GUIDE.md)**：面向广告主与渠道客的完整 API 对接手册，包含点击追踪、S2S Postback 转化上报、Offer 管理、渠道管理、多维报表查询等接口规范及 PHP、Python、Node.js、Ruby 等多语言对接示例。
 
-### 数据库设计与迁移
-- [数据库迁移 Flyway](platform-infrastructure/src/main/resources/db/migration/V1__platform_schema.sql)：PostgreSQL/Flyway 初始表结构。
-- [网盟营销 SQL 脚本](docs/sql/13_platform_affiliate.sql)：完整的网盟营销业务表结构，包含渠道客、Offer、阶梯出价、SmartLink、点击会话、转化流水、结算发票和 Sub-ID 统计表。
-- [数据库迁移演进指南 DATABASE_MIGRATION_GUIDE.md](docs/DATABASE_MIGRATION_GUIDE.md)：双写校验、影子回放与自动化对账割接方案。
+### 5. 数据库设计与平滑演进
+- **[数据库迁移演进指南 DATABASE_MIGRATION_GUIDE.md](docs/DATABASE_MIGRATION_GUIDE.md)**：灰度双写校验、影子流量回放与自动化对账割接方案。
+- **[Flyway 生产自动迁移脚本](platform-infrastructure/src/main/resources/db/migration/V1__platform_schema.sql)**：PostgreSQL/Flyway 初始结构与版本化增量迁移脚本。
+- **[独立模块 SQL 脚本规范](docs/sql/13_platform_affiliate.sql)**：包含 13 个业务模块独立建表 DDL 及 `all_modules_schema.sql` 一键整合初始化脚本。
 
 ## 架构总览
 
