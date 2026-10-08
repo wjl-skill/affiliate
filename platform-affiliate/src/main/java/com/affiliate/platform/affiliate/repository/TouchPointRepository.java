@@ -24,6 +24,13 @@ public interface TouchPointRepository extends BaseMapper<TouchPointEntity> {
                 .ge(TouchPointEntity::getTimestamp, windowStart).lt(TouchPointEntity::getTimestamp, windowEnd)
                 .orderByAsc(TouchPointEntity::getTimestamp));
     }
+    default List<TouchPointEntity> findTouchPointsInWindowForUsers(Collection<String> userIds, Instant windowStart, Instant windowEnd) {
+        if (userIds == null || userIds.isEmpty()) return List.of();
+        if (userIds.size() == 1) return findTouchPointsInWindow(userIds.iterator().next(), windowStart, windowEnd);
+        return selectList(new LambdaQueryWrapper<TouchPointEntity>().in(TouchPointEntity::getUserId, userIds)
+                .ge(TouchPointEntity::getTimestamp, windowStart).lt(TouchPointEntity::getTimestamp, windowEnd)
+                .orderByAsc(TouchPointEntity::getTimestamp));
+    }
     default List<TouchPointEntity> findRecentTouchPoints(String userId, int limit) {
         return selectList(new LambdaQueryWrapper<TouchPointEntity>().eq(TouchPointEntity::getUserId, userId)
                 .orderByDesc(TouchPointEntity::getTimestamp).last("LIMIT " + Math.max(0, limit)));

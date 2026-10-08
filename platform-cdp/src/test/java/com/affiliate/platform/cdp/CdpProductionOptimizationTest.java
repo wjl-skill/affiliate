@@ -134,4 +134,48 @@ class CdpProductionOptimizationTest {
         assertFalse(consent.isAllowedForTargeting(userId));
         assertTrue(consent.totalPurgedTombstones() >= 3);
     }
+
+    @Test
+    @DisplayName("身份图谱解绑与局部 BFS 连通分量分裂测试 (Unlink & Split via local BFS)")
+    void testIdentityUnlinkAndLocalBfsSplitting() {
+        IdentityGraphEngine engine = new IdentityGraphEngine();
+
+        // 构建拓扑：phone_1 连 cookie_1，phone_1 连 email_1
+        // (email_1 -- phone_1 -- cookie_1)
+        engine.link("email_1", IdentityGraphService.IdentifierType.EMAIL, "phone_1", IdentityGraphService.IdentifierType.PHONE, 1.0);
+        engine.link("phone_1", IdentityGraphService.IdentifierType.PHONE, "cookie_1", IdentityGraphService.IdentifierType.DEVICE_ID, 0.95);
+
+        Set<String> clusterBefore = engine.getCluster("cookie_1");
+        assertEquals(3, clusterBefore.size());
+        assertTrue(clusterBefore.containsAll(List.of("email_1", "phone_1", "cookie_1")));
+
+        // 场景 1: 解绑 cookie_1 与 phone_1 (设备换绑/Cookie 过期解绑)
+        boolean unlinked = engine.unlink("cookie_1", "phone_1");
+        assertTrue(unlinked);
+
+        // 局部 BFS 探测发现无备用路径，图谱发生分裂：
+        // cluster 1: {cookie_1}
+        // cluster 2: {email_1, phone_1}
+        Set<String> clusterCookie = engine.getCluster("cookie_1");
+        assertEquals(1, clusterCookie.size());
+        assertTrue(clusterCookie.contains("cookie_1"));
+
+        Set<String> clusterPhone = engine.getCluster("phone_1");
+        assertEquals(2, clusterPhone.size());
+        assertTrue(clusterPhone.containsAll(List.of("email_1", "phone_1")));
+        assertFalse(clusterPhone.contains("cookie_1"));
+
+        // 场景 2: 环形拓扑冗余路径解绑 (a -- b, b -- c, c -- a)
+        engine.link("node_a", IdentityGraphService.IdentifierType.DEVICE_ID, "node_b", IdentityGraphService.IdentifierType.DEVICE_ID, 1.0);
+        engine.link("node_b", IdentityGraphService.IdentifierType.DEVICE_ID, "node_c", IdentityGraphService.IdentifierType.DEVICE_ID, 1.0);
+        engine.link("node_c", IdentityGraphService.IdentifierType.DEVICE_ID, "node_a", IdentityGraphService.IdentifierType.DEVICE_ID, 1.0);
+
+        assertEquals(3, engine.getCluster("node_a").size());
+
+        // 解除 node_a 与 node_b 的直连边，但因存在 node_a -> node_c -> node_b 备用路径，图谱不分裂
+        engine.unlink("node_a", "node_b");
+        Set<String> clusterRing = engine.getCluster("node_a");
+        assertEquals(3, clusterRing.size(), "存在环路备用路径时解绑单条边不应导致集群分裂");
+        assertTrue(clusterRing.containsAll(List.of("node_a", "node_b", "node_c")));
+    }
 }

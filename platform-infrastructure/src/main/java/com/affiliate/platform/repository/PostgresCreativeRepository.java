@@ -57,6 +57,7 @@ public class PostgresCreativeRepository implements com.affiliate.platform.reposi
         }
 
         Instant createdAt = c.createdAt() == null ? Instant.now() : c.createdAt();
+        String auditStatusStr = c.auditStatus() != null ? c.auditStatus().name() : "PENDING_REVIEW";
         CreativeEntity entity = new CreativeEntity(
                 c.id(),
                 "public",
@@ -68,6 +69,8 @@ public class PostgresCreativeRepository implements com.affiliate.platform.reposi
                 c.height(),
                 categoriesJson,
                 c.active(),
+                auditStatusStr,
+                c.rejectionReason(),
                 createdAt
         );
 
@@ -119,6 +122,14 @@ public class PostgresCreativeRepository implements com.affiliate.platform.reposi
             categories = Collections.emptySet();
         }
 
+        com.affiliate.platform.domain.Enums.AuditStatus auditStatus = com.affiliate.platform.domain.Enums.AuditStatus.PENDING_REVIEW;
+        if (e.getAuditStatus() != null) {
+            try {
+                auditStatus = com.affiliate.platform.domain.Enums.AuditStatus.valueOf(e.getAuditStatus());
+            } catch (Exception ignored) {
+            }
+        }
+
         return new Creative(
                 e.getId(),
                 e.getName(),
@@ -128,7 +139,11 @@ public class PostgresCreativeRepository implements com.affiliate.platform.reposi
                 e.getWidth(),
                 e.getHeight(),
                 categories,
-                e.getActive(),
+                e.getActive() != null ? e.getActive() : false,
+                auditStatus,
+                e.getRejectionReason(),
+                List.of(),
+                List.of(),
                 e.getCreatedAt()
         );
     }

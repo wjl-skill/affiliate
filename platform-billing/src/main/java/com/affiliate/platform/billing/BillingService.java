@@ -21,6 +21,16 @@ public interface BillingService {
     BillingEntry record(BillingEntry entry);
 
     /**
+     * 根据幂等防重键查询已入账历史分录
+     *
+     * @param idempotencyKey 幂等防重键
+     * @return 若已存在返回对应的分录，否则返回空
+     */
+    default java.util.Optional<BillingEntry> findByIdempotencyKey(String idempotencyKey) {
+        return java.util.Optional.empty();
+    }
+
+    /**
      * 按租户查询历史计费分录流水列表
      *
      * @param tenantId 租户标识
@@ -85,7 +95,9 @@ public interface BillingService {
         /** 交易平台服务抽成佣金 */
         PLATFORM_FEE,
         /** 撤销或纠错退款 */
-        REFUND
+        REFUND,
+        /** 账户注资充值 */
+        RECHARGE
     }
 
     /**

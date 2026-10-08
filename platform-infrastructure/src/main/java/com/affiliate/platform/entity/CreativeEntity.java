@@ -37,12 +37,22 @@ public class CreativeEntity {
 
     private Boolean active;
 
+    private String auditStatus;
+
+    private String rejectionReason;
+
     private Instant createdAt;
 
     public CreativeEntity() {}
 
     public CreativeEntity(String id, String tenantId, String name, String type, String assetUrl, String landingUrl,
                           Integer width, Integer height, String categories, Boolean active, Instant createdAt) {
+        this(id, tenantId, name, type, assetUrl, landingUrl, width, height, categories, active, "PENDING_REVIEW", null, createdAt);
+    }
+
+    public CreativeEntity(String id, String tenantId, String name, String type, String assetUrl, String landingUrl,
+                          Integer width, Integer height, String categories, Boolean active,
+                          String auditStatus, String rejectionReason, Instant createdAt) {
         this.id = id;
         this.tenantId = tenantId;
         this.name = name;
@@ -53,6 +63,8 @@ public class CreativeEntity {
         this.height = height;
         this.categories = categories;
         this.active = active;
+        this.auditStatus = auditStatus;
+        this.rejectionReason = rejectionReason;
         this.createdAt = createdAt;
     }
 
@@ -85,6 +97,12 @@ public class CreativeEntity {
 
     public Boolean getActive() { return active; }
     public void setActive(Boolean active) { this.active = active; }
+
+    public String getAuditStatus() { return auditStatus; }
+    public void setAuditStatus(String auditStatus) { this.auditStatus = auditStatus; }
+
+    public String getRejectionReason() { return rejectionReason; }
+    public void setRejectionReason(String rejectionReason) { this.rejectionReason = rejectionReason; }
 
     public Instant getCreatedAt() { return createdAt; }
     public void setCreatedAt(Instant createdAt) { this.createdAt = createdAt; }

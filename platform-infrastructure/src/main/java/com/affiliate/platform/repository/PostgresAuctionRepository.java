@@ -64,6 +64,37 @@ public class PostgresAuctionRepository implements com.affiliate.platform.reposit
     }
 
     @Override
+    @org.springframework.transaction.annotation.Transactional(rollbackFor = Exception.class)
+    public void saveAll(List<Auction> entities) {
+        if (entities == null || entities.isEmpty()) return;
+        List<AuctionEntity> batchEntities = new ArrayList<>(entities.size());
+        for (Auction a : entities) {
+            Instant createdAt = a.createdAt() == null ? Instant.now() : a.createdAt();
+            batchEntities.add(new AuctionEntity(
+                    a.id(),
+                    "public",
+                    a.requestId(),
+                    a.adSlotId(),
+                    a.creativeId(),
+                    a.clearingPrice(),
+                    a.currency(),
+                    a.advertiser(),
+                    createdAt
+            ));
+        }
+        for (AuctionEntity entity : batchEntities) {
+            if (mapper.selectById(entity.getId()) != null) {
+                mapper.updateById(entity);
+            } else {
+                mapper.insert(entity);
+            }
+        }
+        for (Auction a : entities) {
+            cache.put(a.id(), a);
+        }
+    }
+
+    @Override
     public Optional<Auction> find(String id) {
         Auction val = cache.get(id, key -> {
             AuctionEntity e = mapper.selectById(key);

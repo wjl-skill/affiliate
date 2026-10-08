@@ -8,8 +8,10 @@ import com.affiliate.platform.tenant.TenantContext;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
@@ -19,6 +21,10 @@ import java.util.concurrent.ConcurrentMap;
  * 联盟营销财务审核与账期结算服务 (Affiliate Settlement & Invoicing Service - MyBatis-Plus)
  * <p>
  * 基于 MyBatis-Plus 接入 PostgreSQL `affiliate_invoice` 表。
+ * 生产加固：
+ * 1. 采用 @Transactional 确保发票持久化与转化状态锁定 (INVOICED) 在同一个物理事务中，防单边账与重复出账；
+ * 2. 严格按渠道结算账期 (Net-7, Net-15, Net-30) 测算应付到期日 dueDate；
+ * 3. 支持成熟度截止时间 (maturityCutoff)，仅结算已度过账期追溯缓冲期的成熟转化。
  */
 @Service
 public class AffiliateSettlementService {
@@ -56,12 +62,42 @@ public class AffiliateSettlementService {
         return rejected;
     }
 
+    /**
+     * 将渠道结算账期转换为天数
+     */
+    public static int getTermDays(AffiliatePartner.PaymentTerm term) {
+        if (term == null) return 30;
+        return switch (term) {
+            case NET_7 -> 7;
+            case NET_15 -> 15;
+            case NET_30 -> 30;
+        };
+    }
+
+    /**
+     * 生成结算发票（默认包含当前所有已审核的转化）
+     */
+    @Transactional(rollbackFor = Exception.class)
     public Optional<AffiliateInvoice> generateInvoice(String affiliateId, AffiliatePartner partner) {
+        return generateInvoice(affiliateId, partner, null);
+    }
+
+    /**
+     * 生成结算发票（支持指定账期成熟截止时间，排查未过缓冲期的新转化）
+     *
+     * @param affiliateId     渠道商标识
+     * @param partner         渠道实体
+     * @param maturityCutoff  成熟截止时间（只结算发生时间早于或等于该截止线的转化；传 null 则不限制）
+     * @return 结算发票
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public Optional<AffiliateInvoice> generateInvoice(String affiliateId, AffiliatePartner partner, Instant maturityCutoff) {
         if (partner == null) return Optional.empty();
 
         List<Conversion> approvedList = postbackService.listConversions().stream()
                 .filter(c -> c.affiliateId().equalsIgnoreCase(affiliateId) && c.status() == Conversion.Status.APPROVED)
                 .filter(c -> c.tenantId() == null || c.tenantId().equalsIgnoreCase(partner.tenantId()))
+                .filter(c -> maturityCutoff == null || !c.createdAt().isAfter(maturityCutoff))
                 .toList();
 
         if (approvedList.isEmpty()) {
@@ -204,7 +240,11 @@ public class AffiliateSettlementService {
             InvoiceStatus status,
             Instant createdAt,
             Instant paidAt
-    ) {}
+    ) {
+        public Instant dueDate() {
+            return createdAt == null ? null : createdAt.plus(Duration.ofDays(getTermDays(paymentTerm)));
+        }
+    }
 
     public enum InvoiceStatus {
         GENERATED,

@@ -81,10 +81,19 @@ public class InMemoryBudgetService implements BudgetService {
     @Override
     public void release(Reservation reservation) {
         if (activeReservations.remove(reservation.id()) != null) {
-            balances.computeIfAbsent(
-                    reservation.tenantId() + ":" + reservation.campaignId(),
-                    ignored -> new AtomicReference<>(BigDecimal.ZERO)
-            ).updateAndGet(v -> v.add(reservation.amount()));
+            creditBudget(reservation.tenantId(), reservation.campaignId(), reservation.amount());
         }
+    }
+
+    /**
+     * 预算退回/注资：将切片剩余未用额度返还主余额
+     */
+    @Override
+    public void creditBudget(String tenantId, String campaignId, BigDecimal amount) {
+        if (amount == null || amount.signum() <= 0) return;
+        balances.computeIfAbsent(
+                tenantId + ":" + campaignId,
+                ignored -> new AtomicReference<>(BigDecimal.ZERO)
+        ).updateAndGet(v -> v.add(amount));
     }
 }

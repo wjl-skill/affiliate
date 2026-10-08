@@ -9,6 +9,7 @@ import com.affiliate.platform.affiliate.repository.TouchPointRepository;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.google.common.util.concurrent.Striped;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -17,6 +18,7 @@ import java.math.RoundingMode;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.*;
+import java.util.concurrent.locks.Lock;
 import java.util.stream.Collectors;
 
 /**
@@ -30,6 +32,10 @@ public class ConversionAttributionService {
     private final MultiLevelCacheManager cacheManager;
     private final CacheKeyGenerator keyGenerator;
     private final ObjectMapper objectMapper;
+    private final com.affiliate.platform.cdp.IdentityGraphEngine identityGraphEngine;
+
+    // 分布式并发与分段防重锁 (512 槽位)
+    private final Striped<Lock> conversionLocks = Striped.lock(512);
 
     private static final Duration DEFAULT_ATTRIBUTION_WINDOW = Duration.ofDays(30);
     private static final AttributionModel DEFAULT_MODEL = AttributionModel.LAST_CLICK;
@@ -43,11 +49,24 @@ public class ConversionAttributionService {
             CacheKeyGenerator keyGenerator,
             ObjectMapper objectMapper
     ) {
+        this(touchPointRepository, attributionResultRepository, cacheManager, keyGenerator, objectMapper, null);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public ConversionAttributionService(
+            TouchPointRepository touchPointRepository,
+            AttributionResultRepository attributionResultRepository,
+            MultiLevelCacheManager cacheManager,
+            CacheKeyGenerator keyGenerator,
+            ObjectMapper objectMapper,
+            @org.springframework.beans.factory.annotation.Autowired(required = false) com.affiliate.platform.cdp.IdentityGraphEngine identityGraphEngine
+    ) {
         this.touchPointRepository = touchPointRepository;
         this.attributionResultRepository = attributionResultRepository;
         this.cacheManager = cacheManager;
         this.keyGenerator = keyGenerator;
         this.objectMapper = objectMapper;
+        this.identityGraphEngine = identityGraphEngine;
     }
 
     /**
@@ -101,63 +120,104 @@ public class ConversionAttributionService {
             Instant conversionTime,
             AttributionModel model
     ) {
-        // 检查是否已归因
-        if (attributionResultRepository.existsByConversionId(conversionId)) {
-            return attributionResultRepository.findByConversionId(conversionId)
-                    .map(this::toAttributionResult)
-                    .orElseThrow();
+        Lock lock = conversionLocks.get(conversionId != null ? conversionId : "default");
+        lock.lock();
+        try {
+            // 1. 检查数据库是否已归因（强幂等）
+            if (attributionResultRepository.existsByConversionId(conversionId)) {
+                return attributionResultRepository.findByConversionId(conversionId)
+                        .map(this::toAttributionResult)
+                        .orElseThrow();
+            }
+
+            // 2. 跨节点分布式原子抢占防重锁 (SETNX)
+            String distLockKey = "lock:attribution:" + conversionId;
+            boolean acquiredDistLock = cacheManager.setIfAbsent(distLockKey, "LOCKED", Duration.ofMinutes(1));
+            if (!acquiredDistLock) {
+                // 其他实例正在处理，轮询等待其落盘并直接返回已有结果
+                for (int i = 0; i < 5; i++) {
+                    var existing = attributionResultRepository.findByConversionId(conversionId);
+                    if (existing.isPresent()) {
+                        return toAttributionResult(existing.get());
+                    }
+                    try {
+                        Thread.sleep(30);
+                    } catch (InterruptedException ignored) {}
+                }
+            }
+
+            // 3. 跨设备触点联合召回：若接入 CDP 身份图谱，获取当前用户的全部设备关联标识集合
+            Instant windowStart = conversionTime.minus(DEFAULT_ATTRIBUTION_WINDOW);
+            Set<String> searchUserIds = new HashSet<>();
+            searchUserIds.add(userId);
+            if (identityGraphEngine != null) {
+                Set<String> linkedIds = identityGraphEngine.getCluster(userId);
+                if (linkedIds != null && !linkedIds.isEmpty()) {
+                    searchUserIds.addAll(linkedIds);
+                }
+            }
+
+            // 联合查询用户跨设备触点集合
+            List<TouchPointEntity> touchPointEntities = touchPointRepository.findTouchPointsInWindowForUsers(
+                    searchUserIds,
+                    windowStart,
+                    conversionTime
+            );
+
+            if (touchPointEntities.isEmpty()) {
+                // 无触点：直接转化
+                return createDirectConversionResult(userId, conversionId, conversionValue, conversionTime);
+            }
+
+            // 转换为领域对象
+            List<TouchPoint> touchPoints = touchPointEntities.stream()
+                    .map(this::toTouchPoint)
+                    .collect(Collectors.toList());
+
+            // 根据模型分配归因权重
+            List<AttributionCredit> credits = calculateAttributionCredits(
+                    touchPoints,
+                    conversionValue,
+                    model != null ? model : DEFAULT_MODEL
+            );
+
+            // 保存归因结果
+            AttributionResultEntity resultEntity = new AttributionResultEntity(
+                    UUID.randomUUID().toString(),
+                    userId,
+                    conversionId,
+                    conversionValue,
+                    conversionTime,
+                    (model != null ? model : DEFAULT_MODEL).name(),
+                    touchPoints.size(),
+                    serializeCredits(credits),
+                    Instant.now()
+            );
+
+            try {
+                attributionResultRepository.save(resultEntity);
+            } catch (Exception ex) {
+                // 并发插入冲突时优雅回退返回已持久化记录
+                Optional<AttributionResultEntity> existing = attributionResultRepository.findByConversionId(conversionId);
+                if (existing.isPresent()) {
+                    return toAttributionResult(existing.get());
+                }
+                throw ex;
+            }
+
+            AttributionResult result = toAttributionResult(resultEntity);
+
+            // 缓存归因结果
+            cacheManager.put(
+                    keyGenerator.attributionResult(conversionId),
+                    result,
+                    ATTRIBUTION_RESULT_CACHE_TTL
+            );
+
+            return result;
+        } finally {
+            lock.unlock();
         }
-
-        // 获取归因窗口内的所有触点
-        Instant windowStart = conversionTime.minus(DEFAULT_ATTRIBUTION_WINDOW);
-        List<TouchPointEntity> touchPointEntities = touchPointRepository.findTouchPointsInWindow(
-                userId,
-                windowStart,
-                conversionTime
-        );
-
-        if (touchPointEntities.isEmpty()) {
-            // 无触点：直接转化
-            return createDirectConversionResult(userId, conversionId, conversionValue, conversionTime);
-        }
-
-        // 转换为领域对象
-        List<TouchPoint> touchPoints = touchPointEntities.stream()
-                .map(this::toTouchPoint)
-                .collect(Collectors.toList());
-
-        // 根据模型分配归因权重
-        List<AttributionCredit> credits = calculateAttributionCredits(
-                touchPoints,
-                conversionValue,
-                model != null ? model : DEFAULT_MODEL
-        );
-
-        // 保存归因结果
-        AttributionResultEntity resultEntity = new AttributionResultEntity(
-                UUID.randomUUID().toString(),
-                userId,
-                conversionId,
-                conversionValue,
-                conversionTime,
-                (model != null ? model : DEFAULT_MODEL).name(),
-                touchPoints.size(),
-                serializeCredits(credits),
-                Instant.now()
-        );
-
-        attributionResultRepository.save(resultEntity);
-
-        AttributionResult result = toAttributionResult(resultEntity);
-
-        // 缓存归因结果
-        cacheManager.put(
-                keyGenerator.attributionResult(conversionId),
-                result,
-                ATTRIBUTION_RESULT_CACHE_TTL
-        );
-
-        return result;
     }
 
     /**
@@ -252,7 +312,7 @@ public class ConversionAttributionService {
         );
     }
 
-    private List<AttributionCredit> calculateAttributionCredits(
+    public List<AttributionCredit> calculateAttributionCredits(
             List<TouchPoint> touchPoints,
             BigDecimal conversionValue,
             AttributionModel model

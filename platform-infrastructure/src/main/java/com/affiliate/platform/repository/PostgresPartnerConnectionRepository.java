@@ -56,9 +56,14 @@ public class PostgresPartnerConnectionRepository implements com.affiliate.platfo
         }
 
         Instant updatedAt = p.updatedAt() == null ? Instant.now() : p.updatedAt();
+        String currentTenant = com.affiliate.platform.tenant.TenantContext.get();
+        String tenantId = (p.tenantId() != null && !p.tenantId().isBlank() && !"public".equals(p.tenantId()))
+                ? p.tenantId()
+                : (currentTenant != null && !currentTenant.isBlank() ? currentTenant : "public");
+
         PartnerConnectionEntity entity = new PartnerConnectionEntity(
                 p.id(),
-                "public",
+                tenantId,
                 p.name(),
                 p.type().name(),
                 p.endpoint(),
@@ -73,14 +78,25 @@ public class PostgresPartnerConnectionRepository implements com.affiliate.platfo
             mapper.insert(entity);
         }
 
-        cache.put(p.id(), p);
-        return p;
+        PartnerConnection savedDomain = p.withTenant(tenantId);
+        cache.put(tenantId + ":" + p.id(), savedDomain);
+        cache.put(p.id(), savedDomain);
+        return savedDomain;
     }
 
     @Override
     public Optional<PartnerConnection> find(String id) {
-        PartnerConnection val = cache.get(id, key -> {
-            PartnerConnectionEntity e = mapper.selectById(key);
+        String currentTenant = com.affiliate.platform.tenant.TenantContext.get();
+        String tenantId = (currentTenant != null && !currentTenant.isBlank()) ? currentTenant : "public";
+        String cacheKey = tenantId + ":" + id;
+
+        PartnerConnection val = cache.get(cacheKey, key -> {
+            QueryWrapper<PartnerConnectionEntity> qw = new QueryWrapper<>();
+            qw.eq("id", id);
+            if (currentTenant != null && !currentTenant.isBlank()) {
+                qw.and(wrapper -> wrapper.eq("tenant_id", currentTenant).or().eq("tenant_id", "public"));
+            }
+            PartnerConnectionEntity e = mapper.selectOne(qw.last("LIMIT 1"));
             return e != null ? toDomain(e) : null;
         });
         return Optional.ofNullable(val);
@@ -89,12 +105,17 @@ public class PostgresPartnerConnectionRepository implements com.affiliate.platfo
     @Override
     public List<PartnerConnection> findAll() {
         QueryWrapper<PartnerConnectionEntity> qw = new QueryWrapper<>();
+        String currentTenant = com.affiliate.platform.tenant.TenantContext.get();
+        if (currentTenant != null && !currentTenant.isBlank()) {
+            qw.and(wrapper -> wrapper.eq("tenant_id", currentTenant).or().eq("tenant_id", "public"));
+        }
         qw.orderByDesc("updated_at").last("LIMIT 1000");
         List<PartnerConnectionEntity> entities = mapper.selectList(qw);
 
         List<PartnerConnection> list = new ArrayList<>(entities.size());
         for (PartnerConnectionEntity e : entities) {
             PartnerConnection p = toDomain(e);
+            cache.put(p.tenantId() + ":" + p.id(), p);
             cache.put(p.id(), p);
             list.add(p);
         }
@@ -104,6 +125,10 @@ public class PostgresPartnerConnectionRepository implements com.affiliate.platfo
     @Override
     public void delete(String id) {
         mapper.deleteById(id);
+        String currentTenant = com.affiliate.platform.tenant.TenantContext.get();
+        if (currentTenant != null) {
+            cache.evict(currentTenant + ":" + id);
+        }
         cache.evict(id);
     }
 
@@ -115,8 +140,10 @@ public class PostgresPartnerConnectionRepository implements com.affiliate.platfo
             settings = Collections.emptyMap();
         }
 
+        String tenant = e.getTenantId() != null ? e.getTenantId() : "public";
         return new PartnerConnection(
                 e.getId(),
+                tenant,
                 e.getName(),
                 SupplyType.valueOf(e.getType()),
                 e.getEndpoint(),

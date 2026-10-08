@@ -184,4 +184,32 @@ public class AttributionAndAntiFraudDeepeningTest {
 
         assertTrue(result.riskReasons().contains("IP_CONVERSION_BURST_FLOOD"), "第11次同一IP转化应触发频率泛滥拦截");
     }
+
+    @Test
+    @DisplayName("测试 CDP 跨设备打通后的触点联合归因召回")
+    void testCrossDeviceAttributionTouchPointRecall() {
+        com.affiliate.platform.cdp.IdentityGraphEngine cdpEngine = new com.affiliate.platform.cdp.IdentityGraphEngine();
+        // 用户在 PC 端使用的设备标识 (cookie_pc_101) 与手机端 (mobile_app_202) 打通
+        cdpEngine.link("cookie_pc_101", com.affiliate.platform.cdp.IdentityGraphService.IdentifierType.DEVICE_ID,
+                "mobile_app_202", com.affiliate.platform.cdp.IdentityGraphService.IdentifierType.DEVICE_ID, 0.95);
+
+        // 验证图谱中两标识已连通
+        assertTrue(cdpEngine.getCluster("mobile_app_202").contains("cookie_pc_101"));
+
+        // 模拟触点：用户在 PC 端（cookie_pc_101）产生点击
+        Instant now = Instant.now();
+        TouchPoint pcClick = new TouchPoint(
+                "tp_pc_1", "cookie_pc_101", "sess_pc", TouchPointType.CLICK,
+                "aff_channel_1", "offer_88", "c_88", "google", "search", "campaign_tech",
+                now.minus(2, ChronoUnit.HOURS)
+        );
+
+        // 手机端完成转化 (mobile_app_202)，联合触点参与归因
+        List<AttributionCredit> credits = attributionService.calculateAttributionCredits(
+                List.of(pcClick), new BigDecimal("100.00"), AttributionModel.LAST_CLICK
+        );
+        assertEquals(1, credits.size());
+        assertEquals("aff_channel_1", credits.get(0).affiliateId());
+        assertEquals(0, new BigDecimal("100.00").compareTo(credits.get(0).creditedValue()));
+    }
 }

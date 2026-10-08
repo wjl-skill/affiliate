@@ -39,14 +39,22 @@ public class ClickEventBatchConsumer {
 
         int successCount = 0;
         for (ConsumerRecord<String, ClickSessionEntity> record : records) {
+            ClickSessionEntity entity = record.value();
+            if (entity == null) continue;
+
             try {
-                ClickSessionEntity entity = record.value();
-                if (entity != null) {
-                    clickSessionMapper.insert(entity);
-                    successCount++;
-                }
+                clickSessionMapper.insert(entity);
+                successCount++;
             } catch (Exception ex) {
-                log.warn("Failed to persist click record from Kafka (key={}): {}", record.key(), ex.getMessage());
+                String msg = ex.getMessage() != null ? ex.getMessage().toLowerCase() : "";
+                if (msg.contains("duplicate") || msg.contains("unique") || msg.contains("primary") || msg.contains("violates unique")) {
+                    log.debug("Click session {} already exists in DB, treated as idempotent success", record.key());
+                    successCount++;
+                } else {
+                    log.error("Failed to persist click record from Kafka (key={}): {}", record.key(), ex.getMessage(), ex);
+                    // 抛出非幂等异常，阻止提交 offset，触发 Kafka 监听器重试与 DLQ 死信机制
+                    throw new IllegalStateException("Database persistence failure during click ingestion", ex);
+                }
             }
         }
 

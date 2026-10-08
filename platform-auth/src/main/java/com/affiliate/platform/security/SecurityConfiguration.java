@@ -47,7 +47,11 @@ public class SecurityConfiguration {
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers("/actuator/health/**", "/actuator/info").permitAll()
                         .requestMatchers("/api/v1/auth/login").permitAll()
-                        .requestMatchers("/api/v1/tenants").permitAll()
+                        // 租户管理：创建与状态变更仅限平台超级管理员，列表查询要求管理员
+                        .requestMatchers(org.springframework.http.HttpMethod.POST, "/api/v1/tenants/**").hasRole("SUPER_ADMIN")
+                        .requestMatchers(org.springframework.http.HttpMethod.GET, "/api/v1/tenants/**").hasAnyRole("ADMIN", "SUPER_ADMIN")
+                        // 系统权限管理：限制为管理员与平台超级管理员
+                        .requestMatchers("/api/v1/system/**").hasAnyRole("ADMIN", "SUPER_ADMIN")
                         // 广告主 S2S 回传与渠道点击流量为公开入口，自带 click_id/幂等保护
                         .requestMatchers("/affiliate/**").permitAll()
                         .anyRequest().authenticated()

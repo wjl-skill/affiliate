@@ -47,6 +47,15 @@ public interface BudgetService {
     default void setBudget(String tenantId, String campaignId, BigDecimal amount) {}
 
     /**
+     * 预算退回/追加注资：将未消耗或返还的切片额度退回至主预算池
+     *
+     * @param tenantId   租户标识
+     * @param campaignId 活动标识
+     * @param amount     返还金额
+     */
+    default void creditBudget(String tenantId, String campaignId, BigDecimal amount) {}
+
+    /**
      * 预算原子预占临时凭据实体 (Budget Reservation Record)
      *
      * @param id         预占流水唯一主键 ID

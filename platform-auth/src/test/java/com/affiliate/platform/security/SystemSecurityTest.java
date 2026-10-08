@@ -1,5 +1,6 @@
 package com.affiliate.platform.security;
 
+import com.affiliate.platform.security.auth.JwtTokenService;
 import com.affiliate.platform.security.system.*;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -73,5 +74,52 @@ class SystemSecurityTest {
         assertTrue(grouped.containsKey("用户管理"));
         assertTrue(grouped.containsKey("Offer计划"));
         assertTrue(grouped.containsKey("S3配置"));
+    }
+
+    @Test
+    void preventPrivilegeEscalationAndCrossTenantViolation() {
+        // 模拟普通租户管理员 (tenant-A, ROLE_ADMIN)
+        JwtTokenService.TokenPrincipal adminPrincipal = new JwtTokenService.TokenPrincipal(
+                "usr-admin", "admin_a", "Admin A", "tenant-A", List.of("ADMIN"), java.time.Instant.now().plusSeconds(3600)
+        );
+        org.springframework.security.core.context.SecurityContextHolder.getContext().setAuthentication(
+                new org.springframework.security.authentication.UsernamePasswordAuthenticationToken(
+                        adminPrincipal, null, List.of(new org.springframework.security.core.authority.SimpleGrantedAuthority("ROLE_ADMIN"))
+                )
+        );
+
+        // 1. 尝试越权分配 SUPER_ADMIN，应当抛出 403
+        org.springframework.web.server.ResponseStatusException ex1 = assertThrows(
+                org.springframework.web.server.ResponseStatusException.class,
+                () -> controller.createUser(Map.of(
+                        "username", "hacker_user",
+                        "tenantId", "tenant-A",
+                        "roles", List.of("SUPER_ADMIN")
+                ))
+        );
+        assertEquals(org.springframework.http.HttpStatus.FORBIDDEN, ex1.getStatusCode());
+
+        // 2. 尝试跨租户创建账号至 tenant-B，应当抛出 403
+        org.springframework.web.server.ResponseStatusException ex2 = assertThrows(
+                org.springframework.web.server.ResponseStatusException.class,
+                () -> controller.createUser(Map.of(
+                        "username", "cross_tenant_user",
+                        "tenantId", "tenant-B",
+                        "roles", List.of("OPERATOR")
+                ))
+        );
+        assertEquals(org.springframework.http.HttpStatus.FORBIDDEN, ex2.getStatusCode());
+
+        // 3. 在自身租户创建普通角色成功
+        UserAccount validAccount = controller.createUser(Map.of(
+                "username", "valid_operator",
+                "tenantId", "tenant-A",
+                "roles", List.of("OPERATOR")
+        ));
+        assertNotNull(validAccount);
+        assertEquals("tenant-A", validAccount.tenantId());
+
+        // 清理安全上下文
+        org.springframework.security.core.context.SecurityContextHolder.clearContext();
     }
 }

@@ -21,6 +21,18 @@ public interface Repository<T> {
     T save(T entity);
 
     /**
+     * 批量保存或更新实体数据
+     *
+     * @param entities 待保存的实体列表
+     */
+    default void saveAll(List<T> entities) {
+        if (entities == null || entities.isEmpty()) return;
+        for (T entity : entities) {
+            save(entity);
+        }
+    }
+
+    /**
      * 根据主键唯一标识查找实体
      *
      * @param id 实体主键标识

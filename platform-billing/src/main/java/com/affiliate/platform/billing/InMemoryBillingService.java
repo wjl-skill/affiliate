@@ -52,6 +52,14 @@ public class InMemoryBillingService implements BillingService {
         ));
     }
 
+    @Override
+    public java.util.Optional<BillingEntry> findByIdempotencyKey(String idempotencyKey) {
+        if (idempotencyKey == null || idempotencyKey.isBlank()) {
+            return java.util.Optional.empty();
+        }
+        return java.util.Optional.ofNullable(entries.get(idempotencyKey));
+    }
+
     /**
      * 根据租户标识查询计费明细
      *

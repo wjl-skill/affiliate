@@ -76,4 +76,28 @@ class GoogleGamConnectorTest {
         AdPlatformConnector.SyncResult rejectedResult = connector.sync(errorConnection).get();
         assertTrue(rejectedResult.message().contains("Circuit breaker is OPEN"));
     }
+
+    @Test
+    @DisplayName("测试 GAM 连接器在缺少认证凭据时明确拒绝并报错失败")
+    void testGamMissingCredentialsFails() throws Exception {
+        GoogleGamConnector connector = new GoogleGamConnector();
+
+        PartnerConnection unauthenticatedConnection = new PartnerConnection(
+                "conn-gam-no-cred",
+                "Google Ad Manager Supply Without Creds",
+                SupplyType.SSP,
+                "https://admanager.googleapis.com",
+                Map.of(), // 空设置，缺少 networkCode 和 apiToken
+                ConnectionStatus.ACTIVE,
+                Instant.now()
+        );
+
+        CompletableFuture<AdPlatformConnector.SyncResult> future = connector.sync(unauthenticatedConnection);
+        AdPlatformConnector.SyncResult result = future.get();
+
+        assertNotNull(result);
+        assertEquals(0, result.imported(), "缺少认证凭据时不应伪造成功导入数据");
+        assertEquals(1, result.rejected());
+        assertTrue(result.message().contains("Missing required GAM authentication credentials"));
+    }
 }

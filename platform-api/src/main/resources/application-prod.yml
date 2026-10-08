@@ -77,9 +77,9 @@ mybatis-plus:
 
 app:
   security:
-    # 生产模式强制开启 JWT 鉴权与租户上下文防篡改校验
+    # 生产模式强制开启 JWT 鉴权与租户上下文防篡改校验，强制由环境变量注入高强度密钥
     enabled: true
-    jwt-secret: ${APP_JWT_SECRET:${app.security.jwt-secret:affiliate-platform-dev-jwt-secret-change-me-in-prod-0518}}
+    jwt-secret: ${APP_JWT_SECRET}
   infrastructure:
     # 启用真实 PostgreSQL 持久化仓储
     database-enabled: true

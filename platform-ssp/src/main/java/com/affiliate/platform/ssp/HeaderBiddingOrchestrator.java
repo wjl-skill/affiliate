@@ -91,9 +91,19 @@ public class HeaderBiddingOrchestrator {
             futureToAdapter.put(future, adapter);
         }
 
-        // 3. 并发聚合与超时截断
+        // 3. 响应式并行屏障与全局硬超时截断，彻底消除遍历顺序依赖
+        CompletableFuture<Void> allOf = CompletableFuture.allOf(
+                futureToAdapter.keySet().toArray(new CompletableFuture[0])
+        );
+        try {
+            allOf.get(timeoutMs, TimeUnit.MILLISECONDS);
+        } catch (Exception ignored) {
+            // 超时或部分异常截断
+        }
+
+        // 4. 统一结算各买家出价，未在超时内完成的判定为超时并断开
         List<BidOffer> validOffers = new ArrayList<>();
-        int timedOutCount = 0;
+        AtomicInteger timedOutCount = new AtomicInteger(0);
 
         for (Map.Entry<CompletableFuture<BidOffer>, DemandPartnerAdapter> entry : futureToAdapter.entrySet()) {
             CompletableFuture<BidOffer> f = entry.getKey();
@@ -101,23 +111,22 @@ public class HeaderBiddingOrchestrator {
             String partnerId = adapter.partnerId();
             BidderMetrics metrics = getOrCreateMetrics(partnerId);
 
-            try {
-                long elapsed = Duration.between(start, Instant.now()).toMillis();
-                long remaining = Math.max(1, timeoutMs - elapsed);
-
-                BidOffer offer = f.get(remaining, TimeUnit.MILLISECONDS);
-                if (offer != null && offer.cpmPrice() != null && offer.cpmPrice().signum() > 0) {
-                    validOffers.add(offer);
-                    metrics.recordSuccess(offer.cpmPrice().doubleValue());
-                } else {
-                    metrics.recordEmptyResponse();
+            if (f.isDone() && !f.isCompletedExceptionally() && !f.isCancelled()) {
+                try {
+                    BidOffer offer = f.getNow(null);
+                    if (offer != null && offer.cpmPrice() != null && offer.cpmPrice().signum() > 0) {
+                        validOffers.add(offer);
+                        metrics.recordSuccess(offer.cpmPrice().doubleValue());
+                    } else {
+                        metrics.recordEmptyResponse();
+                    }
+                } catch (Exception e) {
+                    metrics.recordFailure(now);
                 }
-            } catch (TimeoutException e) {
-                timedOutCount++;
+            } else {
+                timedOutCount.incrementAndGet();
                 metrics.recordTimeout(now);
                 f.cancel(true);
-            } catch (Exception e) {
-                metrics.recordFailure(now);
             }
         }
 
@@ -132,7 +141,7 @@ public class HeaderBiddingOrchestrator {
         long durationMs = Duration.between(start, Instant.now()).toMillis();
 
         if (eligible.isEmpty()) {
-            return new HeaderBiddingAuctionResult(slotId, false, null, floor, validOffers.size(), timedOutCount, durationMs);
+            return new HeaderBiddingAuctionResult(slotId, false, null, floor, validOffers.size(), timedOutCount.get(), durationMs);
         }
 
         BidOffer winner = eligible.get(0);
@@ -150,7 +159,7 @@ public class HeaderBiddingOrchestrator {
                 winner,
                 clearingPrice,
                 validOffers.size(),
-                timedOutCount,
+                timedOutCount.get(),
                 durationMs
         );
     }

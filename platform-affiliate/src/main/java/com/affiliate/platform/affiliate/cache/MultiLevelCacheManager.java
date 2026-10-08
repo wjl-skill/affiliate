@@ -136,6 +136,23 @@ public class MultiLevelCacheManager {
     }
 
     /**
+     * 分布式原子抢占锁 (SETNX)，结合 Redis 与本地 L1 双重保障跨节点幂等防重
+     */
+    public boolean setIfAbsent(String key, Object value, Duration ttl) {
+        if (redisTemplate != null) {
+            try {
+                Boolean success = redisTemplate.opsForValue().setIfAbsent(key, value, ttl);
+                if (success != null) {
+                    return success;
+                }
+            } catch (Exception ignored) {
+                // Redis 离线时优雅降级
+            }
+        }
+        return l1Cache.asMap().putIfAbsent(key, value) == null;
+    }
+
+    /**
      * 失效缓存（清除 L1 和 L2）
      */
     public void evict(String key) {

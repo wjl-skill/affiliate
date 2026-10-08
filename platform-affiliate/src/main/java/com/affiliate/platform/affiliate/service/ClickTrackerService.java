@@ -39,7 +39,7 @@ public class ClickTrackerService {
             java.util.concurrent.TimeUnit.SECONDS,
             new java.util.concurrent.ArrayBlockingQueue<>(10000),
             Thread.ofVirtual().name("click-db-writer-", 0).factory(),
-            new java.util.concurrent.ThreadPoolExecutor.DiscardOldestPolicy()
+            new java.util.concurrent.ThreadPoolExecutor.CallerRunsPolicy()
     );
 
     @jakarta.annotation.PreDestroy
@@ -195,9 +195,24 @@ public class ClickTrackerService {
 
         if (kafkaTemplate != null) {
             try {
-                kafkaTemplate.send("affiliate.events.click", clickId, entity);
+                java.util.concurrent.CompletableFuture<?> future =
+                        kafkaTemplate.send("affiliate.events.click", clickId, entity);
+                future.whenComplete((result, ex) -> {
+                    if (ex != null) {
+                        log.warn("Kafka click dispatch async failed for {}, fallback to async db: {}", clickId, ex.getMessage());
+                        if (clickSessionMapper != null) {
+                            asyncDbWriter.submit(() -> {
+                                try {
+                                    clickSessionMapper.insert(entity);
+                                } catch (Exception dbEx) {
+                                    log.error("Async DB fallback insertion also failed for {}: {}", clickId, dbEx.getMessage());
+                                }
+                            });
+                        }
+                    }
+                });
             } catch (Exception ex) {
-                log.warn("Kafka click dispatch failed for {}, fallback to async db: {}", clickId, ex.getMessage());
+                log.warn("Kafka click dispatch synchronous failed for {}, fallback to async db: {}", clickId, ex.getMessage());
                 if (clickSessionMapper != null) {
                     asyncDbWriter.submit(() -> clickSessionMapper.insert(entity));
                 }

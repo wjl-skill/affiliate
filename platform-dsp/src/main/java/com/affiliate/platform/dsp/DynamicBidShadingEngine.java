@@ -71,31 +71,45 @@ public class DynamicBidShadingEngine {
             );
         }
 
-        // 基于 Logistic 胜率曲线求解最优出价
-        // 目标函数: f(b) = (v - b) * (1 / (1 + exp(-k * (b - b0))))
+        // 基于连续对数几率胜率曲线与牛顿-拉夫逊法 (Newton-Raphson Method) 解析求解最优出价
+        // 目标函数: f(b) = (v - b) * P(Win | b), 其中 P(Win | b) = 1 / (1 + exp(-k * (b - b0)))
+        // 一阶导数驻点方程: g(b) = k * (v - b) * (1 - P(b)) - 1 = 0
+        // 二阶导数: g'(b) = -k * (1 - P(b)) - k^2 * (v - b) * P(b) * (1 - P(b))
         double b0 = profile.marketMidPrice;
         double k = profile.marketSteepness;
 
-        double bestBid = v * DEFAULT_SHADING_RATIO;
-        double maxSurplus = -1.0;
-        double bestWinRate = 0.5;
-
-        // 在 [max(floor, v * MIN_SHADING_RATIO), min(v, v * MAX_SHADING_RATIO)] 区间内执行高精度快速黄金分割/步进探测
         double low = Math.max(floor, v * MIN_SHADING_RATIO);
         double high = Math.min(v, Math.max(low, v * MAX_SHADING_RATIO));
 
-        int steps = 20;
-        double stepSize = (high - low) / steps;
-
-        for (int i = 0; i <= steps; i++) {
-            double b = low + i * stepSize;
-            double winProb = estimateWinRate(b, b0, k);
-            double surplus = (v - b) * winProb;
-            if (surplus > maxSurplus) {
-                maxSurplus = surplus;
-                bestBid = b;
-                bestWinRate = winProb;
+        double b = Math.max(low, Math.min(high, (v + Math.max(low, b0)) * 0.5));
+        for (int iter = 0; iter < 5; iter++) {
+            double p = estimateWinRate(b, b0, k);
+            double oneMinusP = 1.0 - p;
+            double g = k * (v - b) * oneMinusP - 1.0;
+            double gPrime = -k * oneMinusP - (k * k * (v - b) * p * oneMinusP);
+            if (Math.abs(gPrime) < 1e-9) break;
+            double nextB = b - (g / gPrime);
+            nextB = Math.max(low, Math.min(high, nextB));
+            if (Math.abs(nextB - b) < 1e-4) {
+                b = nextB;
+                break;
             }
+            b = nextB;
+        }
+
+        double bestBid = b;
+        double bestWinRate = estimateWinRate(bestBid, b0, k);
+
+        // 边界保护对比检查
+        double lowSurplus = (v - low) * estimateWinRate(low, b0, k);
+        double highSurplus = (v - high) * estimateWinRate(high, b0, k);
+        double optSurplus = (v - bestBid) * bestWinRate;
+        if (lowSurplus > optSurplus && lowSurplus > highSurplus) {
+            bestBid = low;
+            bestWinRate = estimateWinRate(low, b0, k);
+        } else if (highSurplus > optSurplus) {
+            bestBid = high;
+            bestWinRate = estimateWinRate(high, b0, k);
         }
 
         // 最终安全保障

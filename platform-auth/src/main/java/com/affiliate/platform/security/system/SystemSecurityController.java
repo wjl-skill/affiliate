@@ -1,9 +1,14 @@
 package com.affiliate.platform.security.system;
 
+import com.affiliate.platform.security.auth.JwtTokenService;
+import com.affiliate.platform.tenant.TenantContext;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.time.Instant;
 import java.util.*;
@@ -12,6 +17,7 @@ import java.util.*;
  * 系统安全与权限中心 REST 控制器 (System Security & RBAC Admin Controller)
  * <p>
  * 提供用户管理、角色定义、树形菜单维护及权限字典服务接口。
+ * 具备防提权边界校验与跨租户操作隔离。
  */
 @RestController
 @RequestMapping("/api/v1/system")
@@ -34,6 +40,37 @@ public class SystemSecurityController {
         this.permissionService = permissionService;
     }
 
+    private Optional<JwtTokenService.TokenPrincipal> getAuthenticatedPrincipal() {
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        if (auth != null && auth.getPrincipal() instanceof JwtTokenService.TokenPrincipal principal) {
+            return Optional.of(principal);
+        }
+        return Optional.empty();
+    }
+
+    private void enforceTenantAndRoleGovernance(String targetTenantId, Collection<String> targetRoles) {
+        getAuthenticatedPrincipal().ifPresent(principal -> {
+            boolean isSuperAdmin = principal.roles().contains("SUPER_ADMIN");
+            // 1. 只有超级管理员或管理员可调用
+            if (!isSuperAdmin && !principal.roles().contains("ADMIN")) {
+                throw new ResponseStatusException(HttpStatus.FORBIDDEN, "仅管理员可执行系统安全与授权管理操作");
+            }
+            // 2. 跨租户校验：非超级管理员只能在自身租户下操作
+            if (!isSuperAdmin && targetTenantId != null && !targetTenantId.isBlank()) {
+                String callerTenantId = principal.tenantId() != null ? principal.tenantId() : TenantContext.get();
+                if (callerTenantId != null && !callerTenantId.equalsIgnoreCase(targetTenantId)) {
+                    throw new ResponseStatusException(HttpStatus.FORBIDDEN, "租户管理员无权跨租户操作 (目标租户: " + targetTenantId + ")");
+                }
+            }
+            // 3. 提权防范：非超级管理员禁止分配 SUPER_ADMIN
+            if (!isSuperAdmin && targetRoles != null) {
+                if (targetRoles.contains("SUPER_ADMIN")) {
+                    throw new ResponseStatusException(HttpStatus.FORBIDDEN, "非超级管理员禁止分配 SUPER_ADMIN 权限");
+                }
+            }
+        });
+    }
+
     // ==========================================
     // 1. 用户管理 (User Accounts)
     // ==========================================
@@ -52,6 +89,8 @@ public class SystemSecurityController {
         String phone = (String) body.getOrDefault("phone", "");
         String tenantId = (String) body.getOrDefault("tenantId", "tenant-1");
         List<String> rolesList = (List<String>) body.getOrDefault("roles", List.of("VIEWER"));
+
+        enforceTenantAndRoleGovernance(tenantId, rolesList);
 
         UserAccount account = new UserAccount(
                 id,
@@ -77,16 +116,26 @@ public class SystemSecurityController {
 
     @PostMapping("/users/{id}/status")
     public UserAccount toggleUserStatus(@PathVariable String id, @RequestParam UserAccount.Status status) {
+        UserAccount target = userService.find(id)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "用户不存在: " + id));
+        enforceTenantAndRoleGovernance(target.tenantId(), target.roles());
         return userService.toggleStatus(id, status);
     }
 
     @PostMapping("/users/{id}/roles")
     public UserAccount assignUserRoles(@PathVariable String id, @RequestBody Set<String> roles) {
+        UserAccount target = userService.find(id)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "用户不存在: " + id));
+        enforceTenantAndRoleGovernance(target.tenantId(), roles);
         return userService.assignRoles(id, roles);
     }
 
     @DeleteMapping("/users/{id}")
     public ResponseEntity<Void> deleteUser(@PathVariable String id) {
+        UserAccount target = userService.find(id).orElse(null);
+        if (target != null) {
+            enforceTenantAndRoleGovernance(target.tenantId(), target.roles());
+        }
         boolean deleted = userService.delete(id);
         return deleted ? ResponseEntity.noContent().build() : ResponseEntity.notFound().build();
     }
@@ -107,10 +156,13 @@ public class SystemSecurityController {
         String roleName = (String) body.getOrDefault("roleName", roleCode);
         String description = (String) body.getOrDefault("description", "");
         String dataScopeStr = (String) body.getOrDefault("dataScope", "TENANT_ONLY");
+        String tenantId = (String) body.getOrDefault("tenantId", "tenant-1");
+
+        enforceTenantAndRoleGovernance(tenantId, List.of(roleCode));
 
         RoleDefinition role = new RoleDefinition(
                 id,
-                "tenant-1",
+                tenantId,
                 roleCode,
                 roleName,
                 description,
@@ -126,16 +178,19 @@ public class SystemSecurityController {
 
     @PostMapping("/roles/{id}/permissions")
     public RoleDefinition assignRolePermissions(@PathVariable String id, @RequestBody Set<String> permissions) {
+        enforceTenantAndRoleGovernance(null, null);
         return roleService.assignPermissions(id, permissions);
     }
 
     @PostMapping("/roles/{id}/menus")
     public RoleDefinition assignRoleMenus(@PathVariable String id, @RequestBody Set<String> menuIds) {
+        enforceTenantAndRoleGovernance(null, null);
         return roleService.assignMenus(id, menuIds);
     }
 
     @DeleteMapping("/roles/{id}")
     public ResponseEntity<Void> deleteRole(@PathVariable String id) {
+        enforceTenantAndRoleGovernance(null, null);
         boolean deleted = roleService.delete(id);
         return deleted ? ResponseEntity.noContent().build() : ResponseEntity.notFound().build();
     }

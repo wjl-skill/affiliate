@@ -187,4 +187,48 @@ class CampaignInvertedIndexTest {
         assertTrue(totalMatches.get() > 0, "并发检索应成功召回结果");
         assertTrue(index.activeCampaignCount() >= 100);
     }
+
+    @Test
+    @DisplayName("租户快照写入构建与严格隔离防越权测试")
+    void testTenantSnapshotIsolationAndAntiLeakage() {
+        CampaignInvertedIndex index = new CampaignInvertedIndex();
+
+        // 1. 全局填充一个活动
+        Campaign globalCamp = new Campaign(
+                "c-global", "adv-global", "Global-Camp",
+                LocalDate.now().minusDays(1), LocalDate.now().plusDays(1),
+                new BigDecimal("500"), new BigDecimal("1.0"),
+                Set.of(), Set.of(), Campaign.Status.ACTIVE, null
+        );
+        index.upsert(globalCamp);
+        assertEquals(1, index.activeCampaignCount()); // 全局活动数 1
+
+        // 2. 租户 tenant-A 写入活动
+        Campaign campA = new Campaign(
+                "c-tenant-a", "adv-a", "TenantA-Camp",
+                LocalDate.now().minusDays(1), LocalDate.now().plusDays(1),
+                new BigDecimal("100"), new BigDecimal("2.0"),
+                Set.of("tenant-a.com"), Set.of(), Campaign.Status.ACTIVE, null
+        );
+        index.upsertTenant("tenant-A", campA);
+
+        assertEquals(1, index.activeCampaignCount("tenant-A"));
+        assertEquals(0, index.activeCampaignCount("tenant-B")); // 未注册租户 B 的活动数为 0
+
+        TrafficContext ctxA = TrafficContext.of("tenant-a.com", 1, LocalDate.now());
+
+        // 租户 A 查询：精准召回 c-tenant-a，绝不召回 c-global
+        List<Campaign> resA = index.match("tenant-A", ctxA);
+        assertEquals(1, resA.size());
+        assertEquals("c-tenant-a", resA.get(0).id());
+
+        // 租户 B 查询（不存在快照）：严格返回空列表，绝对不回退全局快照召回 c-global
+        List<Campaign> resB = index.match("tenant-B", ctxA);
+        assertTrue(resB.isEmpty(), "未配置活动的租户 B 绝不越权回退召回全局活动");
+
+        // 全局上下文（tenantId == null）查询：召回全局活动
+        List<Campaign> resGlobal = index.match(null, ctxA);
+        assertEquals(1, resGlobal.size());
+        assertEquals("c-global", resGlobal.get(0).id());
+    }
 }

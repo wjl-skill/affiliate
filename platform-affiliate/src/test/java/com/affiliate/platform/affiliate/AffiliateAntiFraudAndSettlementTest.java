@@ -151,6 +151,27 @@ class AffiliateAntiFraudAndSettlementTest {
         assertEquals(new BigDecimal("120.00"), inv2.get().amount());
         assertEquals(3, inv2.get().conversionCount());
         assertEquals(AffiliatePartner.PaymentTerm.NET_15, inv2.get().paymentTerm());
+        assertNotNull(inv2.get().dueDate());
+        assertTrue(inv2.get().dueDate().isAfter(inv2.get().createdAt()));
+
+        // 验证出账后所有对应转化已标记锁定为 INVOICED，防止二次出账
+        List<Conversion> listAfterInvoice = postbackService.listConversions();
+        assertTrue(listAfterInvoice.stream().allMatch(c -> c.status() == Conversion.Status.INVOICED));
+
+        // 验证成熟度账期过滤 (maturityCutoff)
+        // 模拟一笔刚刚创建的转化并审核通过
+        Conversion recentConv = new Conversion(
+                "c_recent", "tenant-1", "clk_rec", "tx_rec", "off-regular", "aff-good",
+                new BigDecimal("150.00"), new BigDecimal("200.00"), BigDecimal.ZERO,
+                10, Conversion.Status.APPROVED, null, null, Conversion.PostbackStatus.DELIVERED,
+                Instant.now() // 当前发生，尚未成熟
+        );
+        postbackService.updateConversion(recentConv);
+
+        // 如果要求必须是 15 天前创建的成熟转化（Net-15 缓冲期），当前转化不应被出账
+        Instant fifteenDaysAgo = Instant.now().minus(java.time.Duration.ofDays(15));
+        Optional<AffiliateSettlementService.AffiliateInvoice> matureInvoice = settlementService.generateInvoice("aff-good", partner, fifteenDaysAgo);
+        assertTrue(matureInvoice.isEmpty(), "未度过 Net-15 追溯期的近期转化不能提前出账");
     }
 
     @Test

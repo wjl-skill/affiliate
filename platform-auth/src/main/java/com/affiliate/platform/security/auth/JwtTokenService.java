@@ -31,13 +31,27 @@ public class JwtTokenService {
     private final long ttlSeconds;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
+    public static final String DEFAULT_DEV_SECRET = "affiliate-platform-dev-jwt-secret-change-me-in-prod-0518";
+
+    @org.springframework.beans.factory.annotation.Autowired
     public JwtTokenService(
             @Value("${app.security.jwt-secret:affiliate-platform-dev-jwt-secret-change-me-in-prod-0518}") String secret,
-            @Value("${app.security.token-ttl-minutes:720}") long ttlMinutes
+            @Value("${app.security.token-ttl-minutes:720}") long ttlMinutes,
+            @Value("${spring.profiles.active:dev}") String activeProfile
     ) {
+        if (activeProfile != null && (activeProfile.contains("prod") || activeProfile.contains("production"))) {
+            if (secret == null || secret.isBlank() || DEFAULT_DEV_SECRET.equals(secret.trim()) || secret.length() < 32) {
+                throw new IllegalStateException("【生产安全阻断】生产环境必须通过环境变量 APP_JWT_SECRET 提供高强度密钥（长度不得少于32位且严禁使用公开默认值）");
+            }
+        }
         // HS256 要求 256bit 密钥：对任意长度配置口令做 SHA-256 归一化
-        this.signingKey = sha256(secret.getBytes(StandardCharsets.UTF_8));
+        String effectiveSecret = (secret != null && !secret.isBlank()) ? secret : DEFAULT_DEV_SECRET;
+        this.signingKey = sha256(effectiveSecret.getBytes(StandardCharsets.UTF_8));
         this.ttlSeconds = Math.max(1, ttlMinutes) * 60;
+    }
+
+    public JwtTokenService(String secret, long ttlMinutes) {
+        this(secret, ttlMinutes, "dev");
     }
 
     public long getTtlSeconds() {

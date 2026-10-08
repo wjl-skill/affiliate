@@ -23,6 +23,7 @@ import java.util.Map;
  */
 public record PartnerConnection(
         String id,
+        String tenantId,
         @NotBlank String name,
         @NotNull SupplyType type,
         @NotBlank String endpoint,
@@ -31,10 +32,26 @@ public record PartnerConnection(
         Instant updatedAt
 ) {
     /**
-     * 紧凑构造器 - 配置字典防御性不可变拷贝
+     * 紧凑构造器 - 租户缺省保护与配置字典防御性不可变拷贝
      */
     public PartnerConnection {
+        tenantId = (tenantId != null && !tenantId.isBlank()) ? tenantId : "public";
         settings = settings == null ? Map.of() : Map.copyOf(settings);
+    }
+
+    /**
+     * 兼容性构造器（默认 public 租户）
+     */
+    public PartnerConnection(
+            String id,
+            String name,
+            SupplyType type,
+            String endpoint,
+            Map<String, String> settings,
+            ConnectionStatus status,
+            Instant updatedAt
+    ) {
+        this(id, "public", name, type, endpoint, settings, status, updatedAt);
     }
 
     /**
@@ -44,6 +61,14 @@ public record PartnerConnection(
      * @return 状态变更后的实体对象
      */
     public PartnerConnection withStatus(ConnectionStatus next) {
-        return new PartnerConnection(id, name, type, endpoint, settings, next, Instant.now());
+        return new PartnerConnection(id, tenantId, name, type, endpoint, settings, next, Instant.now());
+    }
+
+    public PartnerConnection withTenant(String nextTenant) {
+        return new PartnerConnection(id, nextTenant, name, type, endpoint, settings, status, updatedAt);
+    }
+
+    public PartnerConnection withMaskedSettings(Map<String, String> masked) {
+        return new PartnerConnection(id, tenantId, name, type, endpoint, masked, status, updatedAt);
     }
 }

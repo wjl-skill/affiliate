@@ -97,4 +97,49 @@ class GoogleAdsConnectorTest {
         assertTrue(syncResult.imported() > 0, "Should import campaigns from Google Ads");
         assertEquals(0, syncResult.rejected());
     }
+
+    @Test
+    @DisplayName("测试 GoogleAdsApiClient 真实 SearchStream JSON 响应解析")
+    void testSearchStreamJsonParsing() {
+        GoogleAdsApiClient client = new GoogleAdsApiClient();
+        String json = """
+                [
+                  {
+                    "results": [
+                      {
+                        "campaign": {
+                          "resourceName": "customers/1234567890/campaigns/555123",
+                          "id": "555123",
+                          "name": "Live Search Campaign Q4",
+                          "status": "ENABLED"
+                        },
+                        "metrics": {
+                          "impressions": "25000",
+                          "clicks": "850",
+                          "conversions": 42.0,
+                          "costMicros": "320000000"
+                        },
+                        "segments": {
+                          "date": "2026-10-08"
+                        }
+                      }
+                    ]
+                  }
+                ]
+                """;
+
+        List<GoogleAdsApiClient.CampaignPerformanceRecord> records =
+                client.parsePerformanceRecords(json, "1234567890");
+
+        assertNotNull(records);
+        assertEquals(1, records.size());
+        GoogleAdsApiClient.CampaignPerformanceRecord r = records.get(0);
+        assertEquals("555123", r.campaignId());
+        assertEquals("Live Search Campaign Q4", r.campaignName());
+        assertEquals(25000L, r.impressions());
+        assertEquals(850L, r.clicks());
+        assertEquals(42L, r.conversions());
+        assertEquals(new BigDecimal("320.00"), r.cost());
+        assertEquals("2026-10-08", r.date());
+    }
 }

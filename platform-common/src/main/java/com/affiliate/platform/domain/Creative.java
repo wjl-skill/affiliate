@@ -59,13 +59,13 @@ public record Creative(
         if (landingUrl != null && landingUrl.isBlank()) throw new DomainValidationException("landingUrl", "must not be blank");
 
         categories = categories == null ? Set.of() : Set.copyOf(categories);
-        auditStatus = auditStatus == null ? AuditStatus.APPROVED : auditStatus;
+        auditStatus = auditStatus == null ? AuditStatus.PENDING_REVIEW : auditStatus;
         impressionTrackers = impressionTrackers == null ? List.of() : List.copyOf(impressionTrackers);
         clickTrackers = clickTrackers == null ? List.of() : List.copyOf(clickTrackers);
     }
 
     /**
-     * 兼容性构造器（默认已审核、无驳回原因、无第三方监测代码）
+     * 兼容性构造器（默认待审核 PENDING_REVIEW、无驳回原因、无第三方监测代码）
      */
     public Creative(
             String id,
@@ -79,7 +79,7 @@ public record Creative(
             boolean active,
             Instant createdAt
     ) {
-        this(id, name, type, assetUrl, landingUrl, width, height, categories, active, AuditStatus.APPROVED, null, List.of(), List.of(), createdAt);
+        this(id, name, type, assetUrl, landingUrl, width, height, categories, active, AuditStatus.PENDING_REVIEW, null, List.of(), List.of(), createdAt);
     }
 
     /**

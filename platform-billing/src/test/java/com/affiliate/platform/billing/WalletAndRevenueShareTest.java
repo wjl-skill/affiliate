@@ -111,4 +111,39 @@ class WalletAndRevenueShareTest {
         // 100 - 1.5% = 98.50 * 0.85 = 83.7250
         assertEquals(0, new BigDecimal("83.7250").compareTo(res.netTargetAmount()));
     }
+
+    @Test
+    void walletWithDoubleEntryBillingIntegration() {
+        InMemoryBillingService billingService = new InMemoryBillingService();
+        WalletService walletService = new WalletService(null, billingService);
+
+        // 1. 初始化并充值 1000 元
+        walletService.getOrCreate("tenant_alpha", "acc_corp", BigDecimal.ZERO);
+        walletService.recharge("acc_corp", new BigDecimal("1000.00"), "idem_rec_001");
+
+        List<BillingService.BillingEntry> entries = billingService.list("tenant_alpha");
+        assertEquals(1, entries.size());
+        assertEquals(BillingService.EntryType.RECHARGE, entries.get(0).type());
+        assertEquals(BillingService.EntryDirection.CREDIT, entries.get(0).direction());
+        assertEquals(0, new BigDecimal("1000.00").compareTo(entries.get(0).amount()));
+
+        // 2. 预占 200 并胜出扣减
+        walletService.preAuthHold("acc_corp", new BigDecimal("200.00"));
+        walletService.capture("acc_corp", new BigDecimal("200.00"), "auc_999", "idem_cap_001");
+
+        entries = billingService.list("tenant_alpha");
+        assertEquals(2, entries.size());
+        assertEquals(BillingService.EntryType.ADVERTISER_CHARGE, entries.get(1).type());
+        assertEquals(BillingService.EntryDirection.DEBIT, entries.get(1).direction());
+        assertEquals(0, new BigDecimal("200.00").compareTo(entries.get(1).amount()));
+        assertEquals("auc_999", entries.get(1).auctionId());
+
+        // 3. 幂等重试校验：相同 idem_rec_001 和 idem_cap_001 再次提交，余额绝不发生二次变动
+        WalletAccount retryRec = walletService.recharge("acc_corp", new BigDecimal("1000.00"), "idem_rec_001");
+        assertEquals(0, new BigDecimal("800.00").compareTo(retryRec.cashBalance())); // 仍为 800，未重复充值
+
+        WalletAccount retryCap = walletService.capture("acc_corp", new BigDecimal("200.00"), "auc_999", "idem_cap_001");
+        assertEquals(0, new BigDecimal("800.00").compareTo(retryCap.cashBalance())); // 仍为 800，未重复扣款
+        assertEquals(2, billingService.list("tenant_alpha").size()); // 分录条数依然为 2
+    }
 }

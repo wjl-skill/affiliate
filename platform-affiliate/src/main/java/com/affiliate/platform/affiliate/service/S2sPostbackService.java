@@ -229,6 +229,23 @@ public class S2sPostbackService {
         try {
             Instant current = now == null ? Instant.now() : now;
 
+            // 0. 数据库与缓存流水号幂等排重检查（若已成功转化则直接幂等返回；若重复重试则判定为重复交易拦截）
+            Optional<Conversion> existingConversion = findByTxId(txId);
+            if (existingConversion.isPresent()) {
+                Conversion prev = existingConversion.get();
+                if (prev.status() == Conversion.Status.APPROVED || prev.status() == Conversion.Status.PENDING) {
+                    return prev;
+                }
+                String convId = "conv_" + UUID.randomUUID().toString().replace("-", "");
+                String tenant = prev.tenantId() != null ? prev.tenantId() : "public";
+                return new Conversion(
+                        convId, tenant, clickId != null ? clickId : prev.clickId(), txId,
+                        prev.offerId(), prev.affiliateId(), BigDecimal.ZERO, BigDecimal.ZERO,
+                        saleAmount, 0, Conversion.Status.REJECTED, "DUPLICATE_TRANSACTION_ID",
+                        null, Conversion.PostbackStatus.PENDING, current
+                );
+            }
+
             // 1. 提取点击会话存根 (支持精准 click_id 检索与概率性设备指纹兜底)
             ClickSession session = null;
             if (clickId != null && !clickId.isBlank()) {
@@ -343,6 +360,7 @@ public class S2sPostbackService {
 
     private void saveConversion(Conversion conv) {
         if (conv == null) return;
+        fallbackConversions.put(conv.id(), conv);
         if (metrics != null && conv.status() != null) {
             switch (conv.status()) {
                 case APPROVED -> metrics.recordConversionApproved();

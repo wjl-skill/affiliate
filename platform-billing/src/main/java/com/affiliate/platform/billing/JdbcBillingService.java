@@ -78,6 +78,20 @@ public class JdbcBillingService implements BillingService {
     }
 
     @Override
+    public java.util.Optional<BillingEntry> findByIdempotencyKey(String idempotencyKey) {
+        if (idempotencyKey == null || idempotencyKey.isBlank()) {
+            return java.util.Optional.empty();
+        }
+        QueryWrapper<BillingEntryEntity> qw = new QueryWrapper<>();
+        qw.eq("idempotency_key", idempotencyKey);
+        BillingEntryEntity entity = mapper.selectOne(qw);
+        if (entity == null) {
+            return java.util.Optional.empty();
+        }
+        return java.util.Optional.of(toDomain(entity, EntryType.ADVERTISER_CHARGE, null));
+    }
+
+    @Override
     public List<BillingEntry> list(String tenantId) {
         QueryWrapper<BillingEntryEntity> qw = new QueryWrapper<>();
         qw.eq("tenant_id", tenantId).orderByDesc("created_at").last("LIMIT 500");
