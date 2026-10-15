@@ -273,6 +273,70 @@ public class MassPayoutBatchService {
         return sb.toString();
     }
 
+    /**
+     * 导出 PayPal Payouts v1 REST API 批处理标准 JSON
+     */
+    public String exportPayPalPayoutsJson(PayoutBatchManifest manifest) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("{\n");
+        sb.append("  \"sender_batch_header\": {\n");
+        sb.append(String.format("    \"sender_batch_id\": \"%s\",\n", manifest.batchId()));
+        sb.append("    \"email_subject\": \"You have a payout from Affiliate Network\",\n");
+        sb.append("    \"email_message\": \"Your earnings settlement has been processed successfully.\"\n");
+        sb.append("  },\n");
+        sb.append("  \"items\": [\n");
+
+        List<PayoutItem> paypalItems = manifest.items().stream()
+                .filter(i -> "PAYPAL".equalsIgnoreCase(i.payoutMethod()))
+                .toList();
+
+        for (int i = 0; i < paypalItems.size(); i++) {
+            PayoutItem item = paypalItems.get(i);
+            sb.append("    {\n");
+            sb.append("      \"recipient_type\": \"EMAIL\",\n");
+            sb.append("      \"amount\": {\n");
+            sb.append(String.format("        \"value\": \"%.2f\",\n", item.targetCurrencyAmount()));
+            sb.append(String.format("        \"currency\": \"%s\"\n", item.targetCurrency()));
+            sb.append("      },\n");
+            sb.append(String.format("      \"note\": \"Affiliate payout for %s\",\n", item.accountName()));
+            sb.append(String.format("      \"sender_item_id\": \"%s\",\n", item.affiliateId()));
+            sb.append(String.format("      \"receiver\": \"%s\"\n", item.paymentAccount()));
+            sb.append(i == paypalItems.size() - 1 ? "    }\n" : "    },\n");
+        }
+        sb.append("  ]\n");
+        sb.append("}\n");
+        return sb.toString();
+    }
+
+    /**
+     * 导出 USDT / Web3 加密货币批量转账 JSON
+     */
+    public String exportCryptoBatchJson(PayoutBatchManifest manifest) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("{\n");
+        sb.append(String.format("  \"batchId\": \"%s\",\n", manifest.batchId()));
+        sb.append("  \"defaultChain\": \"TRC20\",\n");
+        sb.append("  \"token\": \"USDT\",\n");
+        sb.append("  \"transfers\": [\n");
+
+        List<PayoutItem> cryptoItems = manifest.items().stream()
+                .filter(i -> "USDT".equalsIgnoreCase(i.payoutMethod()) || "CRYPTOCURRENCY".equalsIgnoreCase(i.payoutMethod()))
+                .toList();
+
+        for (int i = 0; i < cryptoItems.size(); i++) {
+            PayoutItem item = cryptoItems.get(i);
+            sb.append("    {\n");
+            sb.append(String.format("      \"affiliateId\": \"%s\",\n", item.affiliateId()));
+            sb.append(String.format("      \"walletAddress\": \"%s\",\n", item.paymentAccount()));
+            sb.append(String.format("      \"amount\": \"%.2f\",\n", item.targetCurrencyAmount()));
+            sb.append(String.format("      \"currency\": \"%s\"\n", item.targetCurrency()));
+            sb.append(i == cryptoItems.size() - 1 ? "    }\n" : "    },\n");
+        }
+        sb.append("  ]\n");
+        sb.append("}\n");
+        return sb.toString();
+    }
+
     public record PayoutCandidate(
             String affiliateId,
             String accountName,

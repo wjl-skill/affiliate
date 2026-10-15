@@ -25,7 +25,12 @@
 - **[技术设计文档 AFFILIATE_TECHNICAL_DESIGN.md](docs/AFFILIATE_TECHNICAL_DESIGN.md)**：详细的技术架构与实现方案，包括高并发点击追踪（P95<50ms）、S2S 转化回传、Redis 预算 Cap 原子控制、Kafka 异步事件流、CTIT 漏斗检测、SmartLink EPC 优化路由、Publisher Postback 分发与分布式账期结算。
 - **[API 集成指南 AFFILIATE_API_INTEGRATION_GUIDE.md](docs/AFFILIATE_API_INTEGRATION_GUIDE.md)**：面向广告主与渠道客的完整 API 对接手册，包含点击追踪、S2S Postback 转化上报、Offer 管理、渠道管理、多维报表查询等接口规范及 PHP、Python、Node.js、Ruby 等多语言对接示例。
 
-### 5. 数据库设计与平滑演进
+### 5. 素材自动化 (Creative Automation) 生产体系
+- **[素材自动化系统详细设计总纲 CREATIVE_AUTOMATION_SYSTEM_DESIGN.md](docs/CREATIVE_AUTOMATION_SYSTEM_DESIGN.md)**：涵盖全链路架构、多模型 AI 视频生成、7 阶段长视频流水线与 6 管线 Prompt、数字人与 TTS 多模态、剪映草稿微秒级导出、视频画幅自适应拼接、7 日动态大盘质量基准线打标、跨渠道批量建广、算力分账与 DSP/SmartLink 业务联动闭环。
+- **[素材自动化专题设计文档集 (docs/creative-automation/)](docs/creative-automation/README.md)**：分模块专题深入设计，包含多模型引擎（`01`）、长视频工作台（`02`）、智能混剪（`03`）、质量打标与数仓 ETL（`04`）、自动化建广（`05`）、财务算力分账（`06`）。
+- **[素材自动化独立建表脚本](docs/sql/16_platform_creative_automation.sql)**：包含 12 张核心业务表与扩展表（ModelMeta、TaskRecord、BillingLedger、StudioProject/Scene、Benchmark7D、QualityHistory、LearningRule 等）的 PostgreSQL 生产 DDL 与高性能复合索引。
+
+### 6. 数据库设计与平滑演进
 - **[数据库迁移演进指南 DATABASE_MIGRATION_GUIDE.md](docs/DATABASE_MIGRATION_GUIDE.md)**：灰度双写校验、影子流量回放与自动化对账割接方案。
 - **[Flyway 生产自动迁移脚本](platform-infrastructure/src/main/resources/db/migration/V1__platform_schema.sql)**：PostgreSQL/Flyway 初始结构与版本化增量迁移脚本。
 - **[独立模块 SQL 脚本规范](docs/sql/13_platform_affiliate.sql)**：包含 13 个业务模块独立建表 DDL 及 `all_modules_schema.sql` 一键整合初始化脚本。

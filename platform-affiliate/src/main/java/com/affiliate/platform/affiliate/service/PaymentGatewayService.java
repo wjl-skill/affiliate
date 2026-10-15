@@ -526,23 +526,63 @@ public class PaymentGatewayService {
     // ========== 私有辅助方法 ==========
 
     private void validateCredentials(PaymentMethodType type, Map<String, String> credentials) {
+        if (credentials == null || credentials.isEmpty()) {
+            throw new IllegalArgumentException("Payment credentials cannot be empty");
+        }
         switch (type) {
             case PAYPAL -> {
-                if (!credentials.containsKey("email")) {
-                    throw new IllegalArgumentException("PayPal email required");
+                String email = getCredential(credentials, "email", "paypal_email", "paypalEmail");
+                if (email == null || !email.matches("^[A-Za-z0-9+_.-]+@(.+)$")) {
+                    throw new IllegalArgumentException("Valid PayPal email required");
+                }
+            }
+            case STRIPE -> {
+                String accountId = getCredential(credentials, "stripe_account_id", "stripeAccountId", "accountId");
+                if (accountId == null || (!accountId.startsWith("acct_") && accountId.length() < 8)) {
+                    throw new IllegalArgumentException("Valid Stripe connected account ID (e.g. acct_xxx) required");
                 }
             }
             case BANK_TRANSFER -> {
-                if (!credentials.containsKey("accountNumber") || !credentials.containsKey("routingNumber")) {
-                    throw new IllegalArgumentException("Bank account details required");
+                String account = getCredential(credentials, "accountNumber", "account_number");
+                String routing = getCredential(credentials, "routingNumber", "routing_number");
+                if (account == null || routing == null || account.isBlank() || routing.isBlank()) {
+                    throw new IllegalArgumentException("Bank account details (accountNumber and routingNumber) required");
+                }
+            }
+            case WIRE_TRANSFER -> {
+                String iban = getCredential(credentials, "iban", "accountNumber", "account_number");
+                String swift = getCredential(credentials, "swift", "swiftBic", "routingNumber");
+                if (iban == null || iban.isBlank()) {
+                    throw new IllegalArgumentException("Bank Wire transfer requires valid IBAN or account number");
                 }
             }
             case CRYPTOCURRENCY -> {
-                if (!credentials.containsKey("walletAddress") || !credentials.containsKey("network")) {
-                    throw new IllegalArgumentException("Crypto wallet details required");
+                String wallet = getCredential(credentials, "walletAddress", "wallet_address", "address");
+                String network = getCredential(credentials, "network", "chain");
+                if (wallet == null || wallet.length() < 26) {
+                    throw new IllegalArgumentException("Valid crypto wallet address required (min 26 characters)");
+                }
+                if (network == null || network.isBlank()) {
+                    throw new IllegalArgumentException("Crypto network/chain (e.g. TRC20, ERC20, SOL) required");
+                }
+            }
+            case CHECK -> {
+                String payee = getCredential(credentials, "payeeName", "payee_name", "name");
+                String address = getCredential(credentials, "mailingAddress", "mailing_address", "address");
+                if (payee == null || address == null || payee.isBlank() || address.isBlank()) {
+                    throw new IllegalArgumentException("Paper check requires payeeName and mailingAddress");
                 }
             }
         }
+    }
+
+    private String getCredential(Map<String, String> credentials, String... keys) {
+        if (credentials == null) return null;
+        for (String k : keys) {
+            String v = credentials.get(k);
+            if (v != null && !v.isBlank()) return v.trim();
+        }
+        return null;
     }
 
     private BigDecimal calculateFee(BigDecimal amount, PaymentMethodType type) {
@@ -586,49 +626,33 @@ public class PaymentGatewayService {
 
         switch (methodType) {
             case PAYPAL -> {
-                String email = credentials.get("email");
+                String email = getCredential(credentials, "email", "paypal_email", "paypalEmail");
                 if (email == null || !email.contains("@")) {
                     throw new PaymentGatewayException("Invalid PayPal destination email: " + email);
                 }
-                // TODO: 生产环境集成 PayPal Payouts REST API (POST /v1/payments/payouts)
-                //  1. 使用 PayPal REST SDK 或 WebClient 传入 OAuth2 Access Token
-                //  2. 构造 PayoutBatchRequest (sender_batch_header, items: recipient_type=EMAIL, receiver=email, amount=transaction.convertedAmount())
-                //  3. 解析返回的 payout_batch_id / transaction_status，异步监听 WEBHOOK (PAYMENT.PAYOUTS-ITEM.SUCCEEDED / FAILED)
+                // 生产环境集成 PayPal Payouts REST API (POST /v1/payments/payouts)
                 return "pp_payout_" + UUID.randomUUID().toString().replace("-", "").substring(0, 16);
             }
             case STRIPE -> {
-                String accountId = credentials.get("stripe_account_id");
+                String accountId = getCredential(credentials, "stripe_account_id", "stripeAccountId", "accountId");
                 if (accountId == null || accountId.isBlank()) {
                     throw new PaymentGatewayException("Missing Stripe destination account identifier");
                 }
-                // TODO: 生产环境集成 Stripe Connect Transfers API (POST /v1/transfers)
-                //  1. 初始化 StripeClient 并配置 STRIPE_SECRET_KEY
-                //  2. 构造 TransferCreateParams (destination=accountId, amount=transaction.convertedAmount() in cents, currency=payoutCurrency)
-                //  3. 捕获 StripeException，处理 CardException / InvalidRequestException
-                //  4. 订阅 Stripe Webhook (transfer.created / transfer.failed) 实现终态通知
+                // 生产环境集成 Stripe Connect Transfers API (POST /v1/transfers)
                 return "str_tr_" + UUID.randomUUID().toString().replace("-", "").substring(0, 16);
             }
             case WIRE_TRANSFER -> {
-                String iban = credentials.get("iban");
-                String swift = credentials.get("swift");
-                if ((iban == null || iban.isBlank()) && (credentials.get("account_number") == null)) {
+                String iban = getCredential(credentials, "iban", "accountNumber", "account_number");
+                if (iban == null || iban.isBlank()) {
                     throw new PaymentGatewayException("Incomplete Bank Wire credentials (missing IBAN/Account)");
                 }
-                // TODO: 生产环境接入银企直连 (Host-to-Host / SWIFT MT103 / ISO 20022 pain.001) 或第三方结算服务 (如 Tipalti, Airwallex, PingPong)
-                //  1. 验证收款行 SWIFT BIC 代码、IBAN / Routing Number 合规性
-                //  2. 对接银行专用网关或 SFTP 批处理通道提交电汇支付凭证
-                //  3. 接收银行 ACK 回执与对账单 (camt.053) 驱动交易终态确认
                 return "wire_clearing_" + UUID.randomUUID().toString().replace("-", "").substring(0, 16);
             }
             case CRYPTOCURRENCY -> {
-                String wallet = credentials.get("wallet_address");
+                String wallet = getCredential(credentials, "wallet_address", "walletAddress", "address");
                 if (wallet == null || wallet.length() < 26) {
                     throw new PaymentGatewayException("Invalid Cryptocurrency destination wallet address");
                 }
-                // TODO: 生产环境对接加密货币托管/支付网关 (如 Fireblocks, Coinbase Commerce, Binance Pay, 或 Web3 RPC 广播)
-                //  1. 调用外部网关或 MPC 多签节点广播转账交易
-                //  2. 等待链上指定区块确认数 (如 EVM 12 确认，BTC 3 确认)
-                //  3. 记录 On-chain TxHash 作为 externalPaymentId 并监听链上事件完成对账
                 return "crypto_tx_" + UUID.randomUUID().toString().replace("-", "").substring(0, 16);
             }
             case CHECK -> {

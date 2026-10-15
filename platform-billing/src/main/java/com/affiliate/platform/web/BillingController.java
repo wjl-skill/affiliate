@@ -138,6 +138,24 @@ public class BillingController {
     }
 
     /**
+     * 导出 PayPal Payouts 批量打款 JSON
+     * POST /api/v1/billing/payouts/batch/export/paypal
+     */
+    @PostMapping(value = "/payouts/batch/export/paypal", produces = "application/json")
+    public String exportPayPal(@RequestBody MassPayoutBatchService.PayoutBatchManifest manifest) {
+        return payoutService.exportPayPalPayoutsJson(manifest);
+    }
+
+    /**
+     * 导出 USDT / Web3 加密货币批量转账 JSON
+     * POST /api/v1/billing/payouts/batch/export/crypto
+     */
+    @PostMapping(value = "/payouts/batch/export/crypto", produces = "application/json")
+    public String exportCrypto(@RequestBody MassPayoutBatchService.PayoutBatchManifest manifest) {
+        return payoutService.exportCryptoBatchJson(manifest);
+    }
+
+    /**
      * 查询当前租户的所有财务流水明细
      * GET /api/v1/billing/entries
      */

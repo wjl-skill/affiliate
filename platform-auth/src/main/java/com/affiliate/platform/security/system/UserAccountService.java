@@ -183,6 +183,30 @@ public class UserAccountService {
                 .findFirst();
     }
 
+    public Optional<UserAccountEntity> findEntityByUsername(String username, String tenantId) {
+        if (userMapper != null) {
+            QueryWrapper<UserAccountEntity> qw = new QueryWrapper<>();
+            qw.eq("username", username);
+            if (tenantId != null && !tenantId.isBlank()) {
+                qw.eq("tenant_id", tenantId);
+            }
+            qw.last("LIMIT 1");
+            return Optional.ofNullable(userMapper.selectOne(qw));
+        }
+        UserAccount user = fallbackStore.values().stream()
+                .filter(u -> u.username().equalsIgnoreCase(username) && (tenantId == null || tenantId.isBlank() || tenantId.equalsIgnoreCase(u.tenantId())))
+                .findFirst()
+                .orElse(null);
+        if (user == null) {
+            return Optional.empty();
+        }
+        String hash = fallbackPasswordHashes.get(username.toLowerCase());
+        return Optional.of(new UserAccountEntity(
+                user.id(), user.tenantId(), user.username(), user.displayName(), user.email(), user.phone(),
+                user.avatar(), hash, user.status().name(), user.lastLoginAt(), user.createdAt(), user.updatedAt()
+        ));
+    }
+
     public UserAccount toggleStatus(String id, UserAccount.Status status) {
         if (userMapper != null) {
             UserAccountEntity entity = userMapper.selectById(id);

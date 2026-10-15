@@ -5,20 +5,34 @@
         <h3 class="text-lg font-bold text-slate-900">出海跨币种批量打款中心 (Mass Payouts & Global FX Center)</h3>
         <p class="text-xs text-slate-500">支持 Tipalti / Payoneer / PayPal 批量打款文件生成、W-8BEN 跨境预扣税自动计算及多币种实时点差锁汇</p>
       </div>
-      <div class="flex items-center gap-3">
+      <div class="flex flex-wrap items-center gap-3">
         <button
           type="button"
           class="px-3.5 py-1.5 text-xs font-semibold rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 shadow-sm transition-colors flex items-center gap-1.5"
           @click="exportTipaltiCsv"
         >
-          <span>📥 导出 Tipalti CSV</span>
+          <span>📥 Tipalti CSV</span>
         </button>
         <button
           type="button"
           class="px-3.5 py-1.5 text-xs font-semibold rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm transition-colors flex items-center gap-1.5"
           @click="exportPayoneerCsv"
         >
-          <span>📥 导出 Payoneer CSV</span>
+          <span>📥 Payoneer CSV</span>
+        </button>
+        <button
+          type="button"
+          class="px-3.5 py-1.5 text-xs font-semibold rounded-lg bg-sky-600 hover:bg-sky-700 text-white shadow-sm transition-colors flex items-center gap-1.5"
+          @click="exportPayPalJson"
+        >
+          <span>📥 PayPal JSON</span>
+        </button>
+        <button
+          type="button"
+          class="px-3.5 py-1.5 text-xs font-semibold rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm transition-colors flex items-center gap-1.5"
+          @click="exportCryptoJson"
+        >
+          <span>📥 USDT JSON</span>
         </button>
       </div>
     </div>
@@ -272,15 +286,51 @@ const exportPayoneerCsv = async () => {
       body: buildManifest(),
       responseType: 'text'
     } as any)
-    downloadFile(csv, 'payoneer_mass_payout.csv')
+    downloadFile(csv, 'payoneer_mass_payout.csv', 'text/csv;charset=utf-8;')
     showToast('已成功导出 Payoneer 批量付款 CSV', 'success')
   } catch (err: any) {
     showToast(`导出 Payoneer CSV 失败：${err.message || err}`, 'error', 5000)
   }
 }
 
-const downloadFile = (content: string, filename: string) => {
-  const blob = new Blob([content], { type: 'text/csv;charset=utf-8;' })
+const exportPayPalJson = async () => {
+  if (!currentBatch.value) {
+    showToast('请先选择有效批次', 'warning')
+    return
+  }
+  try {
+    const json = await fetchApi<string>('/api/v1/billing/payouts/batch/export/paypal', {
+      method: 'POST',
+      body: buildManifest(),
+      responseType: 'text'
+    } as any)
+    downloadFile(json, 'paypal_payouts_batch.json', 'application/json;charset=utf-8;')
+    showToast('已成功导出 PayPal Payouts 标准批处理 JSON', 'success')
+  } catch (err: any) {
+    showToast(`导出 PayPal JSON 失败：${err.message || err}`, 'error', 5000)
+  }
+}
+
+const exportCryptoJson = async () => {
+  if (!currentBatch.value) {
+    showToast('请先选择有效批次', 'warning')
+    return
+  }
+  try {
+    const json = await fetchApi<string>('/api/v1/billing/payouts/batch/export/crypto', {
+      method: 'POST',
+      body: buildManifest(),
+      responseType: 'text'
+    } as any)
+    downloadFile(json, 'crypto_usdt_payout_batch.json', 'application/json;charset=utf-8;')
+    showToast('已成功导出 USDT / Web3 批次转账 JSON', 'success')
+  } catch (err: any) {
+    showToast(`导出 USDT JSON 失败：${err.message || err}`, 'error', 5000)
+  }
+}
+
+const downloadFile = (content: string, filename: string, mimeType = 'text/csv;charset=utf-8;') => {
+  const blob = new Blob([content], { type: mimeType })
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url

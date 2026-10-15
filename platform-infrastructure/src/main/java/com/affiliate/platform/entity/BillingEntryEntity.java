@@ -17,36 +17,38 @@ public class BillingEntryEntity {
 
     @TableId(type = IdType.INPUT)
     private String id;
-
     private String tenantId;
-
     private String accountId;
-
+    private String auctionId;
+    private String entryType;
     private String direction;
-
     private BigDecimal amount;
-
     private String currency;
-
-    private String reason;
-
+    private String description;
     private String idempotencyKey;
-
-    private Instant createdAt;
+    private Instant occurredAt;
 
     public BillingEntryEntity() {}
 
-    public BillingEntryEntity(String id, String tenantId, String accountId, String direction,
-                              BigDecimal amount, String currency, String reason, String idempotencyKey, Instant createdAt) {
+    public BillingEntryEntity(String id, String tenantId, String accountId, String auctionId,
+                              String entryType, String direction, BigDecimal amount, String currency,
+                              String description, String idempotencyKey, Instant occurredAt) {
         this.id = id;
         this.tenantId = tenantId;
         this.accountId = accountId;
+        this.auctionId = auctionId;
+        this.entryType = entryType;
         this.direction = direction;
         this.amount = amount;
         this.currency = currency;
-        this.reason = reason;
+        this.description = description;
         this.idempotencyKey = idempotencyKey;
-        this.createdAt = createdAt;
+        this.occurredAt = occurredAt;
+    }
+
+    public BillingEntryEntity(String id, String tenantId, String accountId, String direction,
+                              BigDecimal amount, String currency, String reason, String idempotencyKey, Instant createdAt) {
+        this(id, tenantId, accountId, null, "ADVERTISER_CHARGE", direction, amount, currency, reason, idempotencyKey, createdAt);
     }
 
     public String getId() { return id; }
@@ -58,6 +60,12 @@ public class BillingEntryEntity {
     public String getAccountId() { return accountId; }
     public void setAccountId(String accountId) { this.accountId = accountId; }
 
+    public String getAuctionId() { return auctionId; }
+    public void setAuctionId(String auctionId) { this.auctionId = auctionId; }
+
+    public String getEntryType() { return entryType; }
+    public void setEntryType(String entryType) { this.entryType = entryType; }
+
     public String getDirection() { return direction; }
     public void setDirection(String direction) { this.direction = direction; }
 
@@ -67,12 +75,18 @@ public class BillingEntryEntity {
     public String getCurrency() { return currency; }
     public void setCurrency(String currency) { this.currency = currency; }
 
-    public String getReason() { return reason; }
-    public void setReason(String reason) { this.reason = reason; }
+    public String getDescription() { return description; }
+    public void setDescription(String description) { this.description = description; }
+
+    public String getReason() { return description; }
+    public void setReason(String reason) { this.description = reason; }
 
     public String getIdempotencyKey() { return idempotencyKey; }
     public void setIdempotencyKey(String idempotencyKey) { this.idempotencyKey = idempotencyKey; }
 
-    public Instant getCreatedAt() { return createdAt; }
-    public void setCreatedAt(Instant createdAt) { this.createdAt = createdAt; }
+    public Instant getOccurredAt() { return occurredAt; }
+    public void setOccurredAt(Instant occurredAt) { this.occurredAt = occurredAt; }
+
+    public Instant getCreatedAt() { return occurredAt; }
+    public void setCreatedAt(Instant createdAt) { this.occurredAt = createdAt; }
 }

@@ -53,6 +53,8 @@ public class JdbcBillingService implements BillingService {
                 entryId,
                 entry.tenantId(),
                 entry.accountId(),
+                entry.auctionId(),
+                entry.type() != null ? entry.type().name() : EntryType.ADVERTISER_CHARGE.name(),
                 direction,
                 entry.amount(),
                 currency,
@@ -94,7 +96,7 @@ public class JdbcBillingService implements BillingService {
     @Override
     public List<BillingEntry> list(String tenantId) {
         QueryWrapper<BillingEntryEntity> qw = new QueryWrapper<>();
-        qw.eq("tenant_id", tenantId).orderByDesc("created_at").last("LIMIT 500");
+        qw.eq("tenant_id", tenantId).orderByDesc("occurred_at").last("LIMIT 500");
         List<BillingEntryEntity> list = mapper.selectList(qw);
 
         return list.stream()
@@ -102,7 +104,7 @@ public class JdbcBillingService implements BillingService {
                 .toList();
     }
 
-    private BillingEntry toDomain(BillingEntryEntity e, EntryType fallbackType, String auctionId) {
+    private BillingEntry toDomain(BillingEntryEntity e, EntryType fallbackType, String defaultAuctionId) {
         EntryDirection direction = EntryDirection.DEBIT;
         if (e.getDirection() != null) {
             try {
@@ -110,18 +112,27 @@ public class JdbcBillingService implements BillingService {
             } catch (Exception ignored) {}
         }
 
+        EntryType type = fallbackType != null ? fallbackType : EntryType.ADVERTISER_CHARGE;
+        if (e.getEntryType() != null) {
+            try {
+                type = EntryType.valueOf(e.getEntryType());
+            } catch (Exception ignored) {}
+        }
+
+        String auctionId = e.getAuctionId() != null ? e.getAuctionId() : defaultAuctionId;
+
         return new BillingEntry(
                 e.getId(),
                 e.getTenantId(),
                 e.getAccountId(),
                 auctionId,
-                fallbackType != null ? fallbackType : EntryType.ADVERTISER_CHARGE,
+                type,
                 direction,
                 e.getAmount(),
                 e.getCurrency() != null ? e.getCurrency().trim() : "USD",
                 e.getIdempotencyKey(),
-                e.getReason(),
-                e.getCreatedAt()
+                e.getDescription(),
+                e.getOccurredAt()
         );
     }
 }

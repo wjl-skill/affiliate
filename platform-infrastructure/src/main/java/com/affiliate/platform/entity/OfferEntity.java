@@ -1,18 +1,23 @@
 package com.affiliate.platform.entity;
 
+import com.affiliate.platform.handler.PostgresIntegerArrayTypeHandler;
+import com.affiliate.platform.handler.PostgresStringArrayTypeHandler;
 import com.baomidou.mybatisplus.annotation.IdType;
+import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * 网盟推广计划持久化实体 (Offer MyBatis-Plus Entity)
  * <p>
  * 映射数据库表 `affiliate_offer`。
  */
-@TableName("affiliate_offer")
+@TableName(value = "affiliate_offer", autoResultMap = true)
 public class OfferEntity {
 
     @TableId(type = IdType.INPUT)
@@ -28,6 +33,13 @@ public class OfferEntity {
     private Integer dailyConversionCap;
     private BigDecimal dailyRevenueCap;
     private String fallbackOfferId;
+
+    @TableField(value = "allowed_countries", typeHandler = PostgresStringArrayTypeHandler.class)
+    private List<String> allowedCountries = new ArrayList<>();
+
+    @TableField(value = "allowed_devices", typeHandler = PostgresIntegerArrayTypeHandler.class)
+    private List<Integer> allowedDevices = new ArrayList<>();
+
     private Instant expiresAt;
     private Instant createdAt;
 
@@ -36,7 +48,9 @@ public class OfferEntity {
     public OfferEntity(String id, String tenantId, String advertiserId, String title,
                        String landingPageUrl, String payoutType, BigDecimal defaultPayout,
                        BigDecimal defaultRevenue, String status, Integer dailyConversionCap,
-                       BigDecimal dailyRevenueCap, String fallbackOfferId, Instant expiresAt, Instant createdAt) {
+                       BigDecimal dailyRevenueCap, String fallbackOfferId,
+                       List<String> allowedCountries, List<Integer> allowedDevices,
+                       Instant expiresAt, Instant createdAt) {
         this.id = id;
         this.tenantId = tenantId;
         this.advertiserId = advertiserId;
@@ -49,8 +63,19 @@ public class OfferEntity {
         this.dailyConversionCap = dailyConversionCap;
         this.dailyRevenueCap = dailyRevenueCap;
         this.fallbackOfferId = fallbackOfferId;
+        this.allowedCountries = allowedCountries != null ? allowedCountries : new ArrayList<>();
+        this.allowedDevices = allowedDevices != null ? allowedDevices : new ArrayList<>();
         this.expiresAt = expiresAt;
         this.createdAt = createdAt;
+    }
+
+    public OfferEntity(String id, String tenantId, String advertiserId, String title,
+                       String landingPageUrl, String payoutType, BigDecimal defaultPayout,
+                       BigDecimal defaultRevenue, String status, Integer dailyConversionCap,
+                       BigDecimal dailyRevenueCap, String fallbackOfferId, Instant expiresAt, Instant createdAt) {
+        this(id, tenantId, advertiserId, title, landingPageUrl, payoutType, defaultPayout,
+                defaultRevenue, status, dailyConversionCap, dailyRevenueCap, fallbackOfferId,
+                new ArrayList<>(), new ArrayList<>(), expiresAt, createdAt);
     }
 
     public String getId() { return id; }
@@ -88,6 +113,16 @@ public class OfferEntity {
 
     public String getFallbackOfferId() { return fallbackOfferId; }
     public void setFallbackOfferId(String fallbackOfferId) { this.fallbackOfferId = fallbackOfferId; }
+
+    public List<String> getAllowedCountries() { return allowedCountries; }
+    public void setAllowedCountries(List<String> allowedCountries) {
+        this.allowedCountries = allowedCountries != null ? allowedCountries : new ArrayList<>();
+    }
+
+    public List<Integer> getAllowedDevices() { return allowedDevices; }
+    public void setAllowedDevices(List<Integer> allowedDevices) {
+        this.allowedDevices = allowedDevices != null ? allowedDevices : new ArrayList<>();
+    }
 
     public Instant getExpiresAt() { return expiresAt; }
     public void setExpiresAt(Instant expiresAt) { this.expiresAt = expiresAt; }

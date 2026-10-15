@@ -5,8 +5,12 @@ import com.affiliate.platform.affiliate.cache.MultiLevelCacheManager;
 import com.affiliate.platform.affiliate.domain.Conversion;
 import com.affiliate.platform.affiliate.domain.PerformanceReportCacheEntity;
 import com.affiliate.platform.affiliate.repository.PerformanceReportCacheRepository;
+import com.affiliate.platform.entity.ClickSessionEntity;
+import com.affiliate.platform.mapper.ClickSessionMapper;
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -44,11 +48,31 @@ public class PerformanceReportService {
     private final MultiLevelCacheManager cacheManager;
     private final CacheKeyGenerator keyGenerator;
     private final ObjectMapper objectMapper;
+    private final ClickSessionMapper clickSessionMapper;
 
     private static final Duration REPORT_CACHE_TTL = Duration.ofMinutes(30);
     private static final Duration TIMESERIES_CACHE_TTL = Duration.ofMinutes(15);
     private static final Duration COMPARISON_CACHE_TTL = Duration.ofMinutes(10);
     private static final Duration DB_CACHE_EXPIRY = Duration.ofHours(24);
+
+    @Autowired
+    public PerformanceReportService(
+            S2sPostbackService postbackService,
+            SubIdAnalyticsService analyticsService,
+            PerformanceReportCacheRepository reportCacheRepository,
+            MultiLevelCacheManager cacheManager,
+            CacheKeyGenerator keyGenerator,
+            ObjectMapper objectMapper,
+            @Autowired(required = false) ClickSessionMapper clickSessionMapper
+    ) {
+        this.postbackService = postbackService;
+        this.analyticsService = analyticsService;
+        this.reportCacheRepository = reportCacheRepository;
+        this.cacheManager = cacheManager;
+        this.keyGenerator = keyGenerator;
+        this.objectMapper = objectMapper;
+        this.clickSessionMapper = clickSessionMapper;
+    }
 
     public PerformanceReportService(
             S2sPostbackService postbackService,
@@ -58,12 +82,7 @@ public class PerformanceReportService {
             CacheKeyGenerator keyGenerator,
             ObjectMapper objectMapper
     ) {
-        this.postbackService = postbackService;
-        this.analyticsService = analyticsService;
-        this.reportCacheRepository = reportCacheRepository;
-        this.cacheManager = cacheManager;
-        this.keyGenerator = keyGenerator;
-        this.objectMapper = objectMapper;
+        this(postbackService, analyticsService, reportCacheRepository, cacheManager, keyGenerator, objectMapper, null);
     }
 
     /**
@@ -338,12 +357,15 @@ public class PerformanceReportService {
                 .filter(c -> isInDateRange(c.createdAt(), startDate, endDate))
                 .toList();
 
-        // 简化实现：统计不同状态的转化
-        long totalClicks = 10000; // TODO: 从 ClickSession 表查询
         long totalConversions = conversions.size();
         long approvedConversions = conversions.stream()
                 .filter(c -> c.status() == Conversion.Status.APPROVED)
                 .count();
+
+        long totalClicks = queryClicksForOffer(offerId, startDate, endDate);
+        if (totalClicks < totalConversions) {
+            totalClicks = totalConversions;
+        }
 
         List<FunnelStep> steps = List.of(
                 new FunnelStep("Clicks", totalClicks, 100.0),
@@ -544,8 +566,10 @@ public class PerformanceReportService {
                 .map(Conversion::revenue)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
 
-        // TODO: 从 ClickSession 获取真实点击数
-        long totalClicks = totalConversions * 100; // 模拟 1% 转化率
+        long totalClicks = queryClicksForDimension(dimension, dimensionValue);
+        if (totalClicks < totalConversions) {
+            totalClicks = totalConversions;
+        }
 
         double cr = totalClicks > 0 ? (double) totalConversions / totalClicks * 100 : 0.0;
         BigDecimal epc = totalClicks > 0 ?
@@ -579,7 +603,11 @@ public class PerformanceReportService {
                 .map(Conversion::revenue)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
 
-        long totalClicks = totalConversions * 100; // 模拟
+        long totalClicks = queryTotalClicksForConversions(conversions);
+        if (totalClicks < totalConversions) {
+            totalClicks = totalConversions;
+        }
+
         double cr = totalClicks > 0 ? (double) totalConversions / totalClicks * 100 : 0.0;
         BigDecimal epc = totalClicks > 0 ?
                 totalPayout.divide(BigDecimal.valueOf(totalClicks), 4, RoundingMode.HALF_UP) :
@@ -594,6 +622,59 @@ public class PerformanceReportService {
                 totalRevenue,
                 totalPayout
         );
+    }
+
+    private long queryClicksForOffer(String offerId, LocalDate startDate, LocalDate endDate) {
+        if (clickSessionMapper != null) {
+            Instant startInstant = startDate.atStartOfDay(ZoneId.systemDefault()).toInstant();
+            Instant endInstant = endDate.plusDays(1).atStartOfDay(ZoneId.systemDefault()).toInstant();
+            LambdaQueryWrapper<ClickSessionEntity> qw = new LambdaQueryWrapper<>();
+            if (offerId != null && !offerId.isBlank()) {
+                qw.eq(ClickSessionEntity::getOfferId, offerId);
+            }
+            qw.ge(ClickSessionEntity::getCreatedAt, startInstant)
+              .lt(ClickSessionEntity::getCreatedAt, endInstant);
+            return clickSessionMapper.selectCount(qw);
+        }
+        return 0L;
+    }
+
+    private long queryClicksForDimension(GroupByDimension dimension, String dimensionValue) {
+        if (clickSessionMapper != null && dimension != null && dimensionValue != null) {
+            LambdaQueryWrapper<ClickSessionEntity> qw = new LambdaQueryWrapper<>();
+            switch (dimension) {
+                case OFFER -> qw.eq(ClickSessionEntity::getOfferId, dimensionValue);
+                case AFFILIATE -> qw.eq(ClickSessionEntity::getAffiliateId, dimensionValue);
+                case DATE -> {
+                    try {
+                        LocalDate date = LocalDate.parse(dimensionValue);
+                        Instant start = date.atStartOfDay(ZoneId.systemDefault()).toInstant();
+                        Instant end = date.plusDays(1).atStartOfDay(ZoneId.systemDefault()).toInstant();
+                        qw.ge(ClickSessionEntity::getCreatedAt, start).lt(ClickSessionEntity::getCreatedAt, end);
+                    } catch (Exception ignored) {
+                        return 0L;
+                    }
+                }
+                default -> {}
+            }
+            return clickSessionMapper.selectCount(qw);
+        }
+        return 0L;
+    }
+
+    private long queryTotalClicksForConversions(List<Conversion> conversions) {
+        if (clickSessionMapper != null) {
+            Set<String> offerIds = conversions.stream()
+                    .map(Conversion::offerId)
+                    .filter(Objects::nonNull)
+                    .collect(Collectors.toSet());
+            if (!offerIds.isEmpty()) {
+                return clickSessionMapper.selectCount(new LambdaQueryWrapper<ClickSessionEntity>()
+                        .in(ClickSessionEntity::getOfferId, offerIds));
+            }
+            return clickSessionMapper.selectCount(null);
+        }
+        return conversions.size();
     }
 
     private Map<String, Double> calculateGrowthRates(

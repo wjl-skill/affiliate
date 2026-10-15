@@ -152,7 +152,10 @@ const defaultBusinessMenus = [
   { id: 'm-payout', title: '批量打款与结汇', path: '/billing/payouts', icon: '💳' },
   { id: 'm-rep', title: 'Sub-ID 多维报表', path: '/analytics', icon: '📈' },
   { id: 'm-cohort', title: 'Cohort留存与LTV', path: '/analytics/cohort', icon: '🧬' },
-  { id: 'm-macro', title: '宏参数与映射', path: '/affiliate/macros', icon: '🧩' }
+  { id: 'm-macro', title: '宏参数与映射', path: '/affiliate/macros', icon: '🧩' },
+  { id: 'm-adx', title: 'ADX 私有交易 (PMP)', path: '/adx/deals', icon: '🏛️' },
+  { id: 'm-budget', title: 'DSP 预算与控频', path: '/dsp/campaigns', icon: '🎯' },
+  { id: 'm-creative', title: 'AI 创意与智能混剪', path: '/creative/studio', icon: '🎬' }
 ]
 
 const defaultSystemMenus = [

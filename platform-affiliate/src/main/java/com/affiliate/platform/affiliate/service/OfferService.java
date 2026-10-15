@@ -63,7 +63,14 @@ public class OfferService {
         String currentTenant = (offer.tenantId() != null && !offer.tenantId().isBlank()) ? offer.tenantId() : (com.affiliate.platform.tenant.TenantContext.get() != null ? com.affiliate.platform.tenant.TenantContext.get() : "public");
         Offer normalized = new Offer(offer.id(), currentTenant, offer.advertiserId(), offer.title(), offer.landingPageUrl(), offer.payoutType(), offer.defaultPayout(), offer.defaultRevenue(), offer.status(), offer.dailyConversionCap(), offer.dailyRevenueCap(), offer.fallbackOfferId(), offer.allowedCountries(), offer.allowedDevices(), offer.expiresAt(), offer.createdAt() == null ? Instant.now() : offer.createdAt());
         if (offerMapper != null) {
-            OfferEntity entity = new OfferEntity(normalized.id(), normalized.tenantId(), normalized.advertiserId(), normalized.title(), normalized.landingPageUrl(), normalized.payoutType().name(), normalized.defaultPayout(), normalized.defaultRevenue(), normalized.status().name(), normalized.dailyConversionCap(), normalized.dailyRevenueCap(), normalized.fallbackOfferId(), normalized.expiresAt(), normalized.createdAt());
+            OfferEntity entity = new OfferEntity(
+                    normalized.id(), normalized.tenantId(), normalized.advertiserId(),
+                    normalized.title(), normalized.landingPageUrl(), normalized.payoutType().name(),
+                    normalized.defaultPayout(), normalized.defaultRevenue(), normalized.status().name(),
+                    normalized.dailyConversionCap(), normalized.dailyRevenueCap(), normalized.fallbackOfferId(),
+                    normalized.allowedCountries() != null ? new ArrayList<>(normalized.allowedCountries()) : new ArrayList<>(),
+                    normalized.allowedDevices() != null ? new ArrayList<>(normalized.allowedDevices()) : new ArrayList<>(),
+                    normalized.expiresAt(), normalized.createdAt());
             if (offerMapper.selectById(normalized.id()) == null) offerMapper.insert(entity);
             else offerMapper.updateById(entity);
         }
@@ -218,7 +225,12 @@ public class OfferService {
     }
 
     private Offer toDomain(OfferEntity e) {
-        return new Offer(e.getId(), e.getTenantId(), e.getAdvertiserId(), e.getTitle(), e.getLandingPageUrl(), Offer.PayoutType.valueOf(e.getPayoutType()), e.getDefaultPayout(), e.getDefaultRevenue(), Offer.Status.valueOf(e.getStatus()), e.getDailyConversionCap() == null ? 0 : e.getDailyConversionCap(), e.getDailyRevenueCap(), e.getFallbackOfferId(), Set.of(), Set.of(), e.getExpiresAt(), e.getCreatedAt());
+        Set<String> countries = e.getAllowedCountries() == null ? Set.of() : Set.copyOf(e.getAllowedCountries());
+        Set<Integer> devices = e.getAllowedDevices() == null ? Set.of() : Set.copyOf(e.getAllowedDevices());
+        return new Offer(e.getId(), e.getTenantId(), e.getAdvertiserId(), e.getTitle(), e.getLandingPageUrl(),
+                Offer.PayoutType.valueOf(e.getPayoutType()), e.getDefaultPayout(), e.getDefaultRevenue(),
+                Offer.Status.valueOf(e.getStatus()), e.getDailyConversionCap() == null ? 0 : e.getDailyConversionCap(),
+                e.getDailyRevenueCap(), e.getFallbackOfferId(), countries, devices, e.getExpiresAt(), e.getCreatedAt());
     }
 
     private OfferGoal toGoalDomain(OfferGoalEntity e) {

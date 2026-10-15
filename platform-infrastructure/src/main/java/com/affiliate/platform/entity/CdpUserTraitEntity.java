@@ -1,6 +1,7 @@
 package com.affiliate.platform.entity;
 
 import com.baomidou.mybatisplus.annotation.IdType;
+import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
 
@@ -23,6 +24,7 @@ public class CdpUserTraitEntity {
     private Integer purchaseCount;
     private Integer clickCount;
     private Integer pageviewCount;
+    @TableField("events_7d_count")
     private Integer events7dCount;
     private String preferredCategory;
     private String preferredDevice;

@@ -76,6 +76,10 @@ public class PmpDealMatcher {
         return Optional.ofNullable(registeredDeals.get(dealId));
     }
 
+    public Collection<RegisteredDeal> getAllDeals() {
+        return List.copyOf(registeredDeals.values());
+    }
+
     public void removeDeal(String dealId) {
         if (dealId != null) {
             registeredDeals.remove(dealId);
