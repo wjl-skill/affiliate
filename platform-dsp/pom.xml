@@ -9,6 +9,7 @@
     <dependency><groupId>com.affiliate</groupId><artifactId>platform-auth</artifactId><version>0.2.0</version></dependency>
     <dependency><groupId>com.affiliate</groupId><artifactId>platform-event</artifactId><version>0.2.0</version></dependency>
     <dependency><groupId>com.affiliate</groupId><artifactId>platform-infrastructure</artifactId><version>0.2.0</version></dependency>
+    <dependency><groupId>com.affiliate</groupId><artifactId>platform-ai</artifactId><version>0.2.0</version></dependency>
     <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-test</artifactId><scope>test</scope></dependency>
   </dependencies>
 </project>

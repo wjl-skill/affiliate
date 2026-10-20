@@ -12,6 +12,8 @@ import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.math.BigDecimal;
 import java.time.Duration;
@@ -28,6 +30,14 @@ import java.util.concurrent.ConcurrentMap;
  */
 @Service
 public class S2sPostbackService {
+
+    private static final Logger log = LoggerFactory.getLogger(S2sPostbackService.class);
+
+    @Autowired(required = false)
+    private TdsRouter tdsRouter;
+
+    public void setTdsRouter(TdsRouter tdsRouter) { this.tdsRouter = tdsRouter; }
+    public TdsRouter getTdsRouter() { return this.tdsRouter; }
 
     private final ClickTrackerService clickTracker;
     private final OfferService offerService;
@@ -334,6 +344,24 @@ public class S2sPostbackService {
             );
 
             saveConversion(conversion);
+
+            // 在线更新 LinUCB 多臂老虎机学习反馈
+            if (tdsRouter != null && session != null && conversion.status() == Conversion.Status.APPROVED) {
+                try {
+                    int hour = session.createdAt().atZone(java.time.ZoneOffset.UTC).getHour();
+                    LinUcbBanditEngine.BanditContext bCtx = LinUcbBanditEngine.BanditContext.of(
+                            session.country(),
+                            session.deviceType(),
+                            hour,
+                            session.sub1(),
+                            BigDecimal.ZERO
+                    );
+                    double reward = conversion.payout() != null ? conversion.payout().doubleValue() : 1.0;
+                    tdsRouter.recordBanditFeedback(session.tenantId(), "smartlink", session.offerId(), bCtx, reward);
+                } catch (Exception ex) {
+                    log.warn("[S2sPostback] Non-blocking bandit feedback update failed: {}", ex.getMessage());
+                }
+            }
 
             // 6. 若风控通过，分发下游 Postback 并回写真实回执状态
             Conversion result = conversion;

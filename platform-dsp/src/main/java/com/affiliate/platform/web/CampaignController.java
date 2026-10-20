@@ -7,7 +7,11 @@ import jakarta.validation.constraints.NotNull;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
 
+import java.math.BigDecimal;
 import java.time.LocalDate;
+import com.affiliate.platform.dsp.AiCampaignAdvisoryService;
+import com.affiliate.platform.dsp.DeepBiddingOptimizer;
+import com.affiliate.platform.dsp.TrafficContext;
 import java.util.List;
 
 /**
@@ -79,5 +83,31 @@ public class CampaignController {
     /**
      * 活动启停请求载荷 DTO
      */
+    /**
+     * 深度学习 pCTR/pCVR 驱动的最优出价测算接口
+     * POST /api/v1/campaigns/{id}/optimal-bid
+     */
+    @PostMapping("/{id}/optimal-bid")
+    public DeepBiddingOptimizer.DeepBiddingDecision optimalBid(
+            @PathVariable String id,
+            @RequestParam(required = false, defaultValue = "1.00") BigDecimal floorPrice,
+            @RequestBody(required = false) TrafficContext context
+    ) {
+        TrafficContext ctx = context != null ? context : TrafficContext.of("example.com", 1, LocalDate.now());
+        return service.evaluateOptimalBid(id, ctx, floorPrice);
+    }
+
+    /**
+     * 获取 AI 智能出价与投产比优化建议
+     */
+    @GetMapping("/{id}/ai-advisory")
+    public AiCampaignAdvisoryService.CampaignAdvisoryResult getAiAdvisory(
+            @PathVariable String id,
+            @RequestParam(required = false, defaultValue = "1.00") BigDecimal floorPrice
+    ) {
+        TrafficContext ctx = TrafficContext.of("premium-slot.com", 1, LocalDate.now());
+        return service.getAiAdvisory(id, ctx, floorPrice);
+    }
+
     public record ActiveRequest(@NotNull Boolean active) {}
 }

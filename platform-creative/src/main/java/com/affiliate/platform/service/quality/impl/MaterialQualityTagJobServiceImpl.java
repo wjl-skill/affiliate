@@ -3,11 +3,13 @@ package com.affiliate.platform.service.quality.impl;
 import com.affiliate.platform.domain.quality.MaterialPerformance7D;
 import com.affiliate.platform.domain.quality.MaterialQualityLevel;
 import com.affiliate.platform.domain.quality.MaterialQualityResult;
+import com.affiliate.platform.service.agent.CreativeAutonomousAgentService;
 import com.affiliate.platform.service.quality.MaterialQualityService;
 import com.affiliate.platform.service.quality.MaterialQualityTagJobService;
 import com.affiliate.platform.tenant.TenantContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
@@ -17,6 +19,8 @@ import java.util.List;
 
 /**
  * 素材质量自动评估作业服务实现
+ * <p>
+ * 联动 AI 营销创意自治 Agent：当评估结果为 BLACKHOLE 或 RISK 时，自动派发自治诊断与剧本 Self-Refine。
  */
 @Service
 public class MaterialQualityTagJobServiceImpl implements MaterialQualityTagJobService {
@@ -24,9 +28,19 @@ public class MaterialQualityTagJobServiceImpl implements MaterialQualityTagJobSe
     private static final Logger log = LoggerFactory.getLogger(MaterialQualityTagJobServiceImpl.class);
 
     private final MaterialQualityService qualityService;
+    private final CreativeAutonomousAgentService agentService;
 
     public MaterialQualityTagJobServiceImpl(MaterialQualityService qualityService) {
+        this(qualityService, null);
+    }
+
+    @Autowired
+    public MaterialQualityTagJobServiceImpl(
+            MaterialQualityService qualityService,
+            @Autowired(required = false) CreativeAutonomousAgentService agentService
+    ) {
         this.qualityService = qualityService;
+        this.agentService = agentService;
     }
 
     @Override
@@ -44,7 +58,12 @@ public class MaterialQualityTagJobServiceImpl implements MaterialQualityTagJobSe
         String previousTenant = TenantContext.get();
         try {
             TenantContext.set(effectiveTenant);
-            return qualityService.evaluateAndRecord(perf);
+            MaterialQualityResult res = qualityService.evaluateAndRecord(perf);
+
+            // 联动自治 Agent
+            triggerAgentIfDegraded(effectiveTenant, perf, res);
+
+            return res;
         } finally {
             if (previousTenant != null) {
                 TenantContext.set(previousTenant);
@@ -76,6 +95,9 @@ public class MaterialQualityTagJobServiceImpl implements MaterialQualityTagJobSe
                     else if (res.qualityLevel() == MaterialQualityLevel.RISK) risk++;
                     else if (res.qualityLevel() == MaterialQualityLevel.BLACKHOLE) bh++;
                     else unrated++;
+
+                    // 联动自治 Agent
+                    triggerAgentIfDegraded(effectiveTenant, p, res);
                 }
             } finally {
                 if (previousTenant != null) {
@@ -90,7 +112,9 @@ public class MaterialQualityTagJobServiceImpl implements MaterialQualityTagJobSe
         log.info("[QualityJob] Batch refresh completed for tenant={}: total={}, star={}, pot={}, elapsed={}ms",
                 effectiveTenant, total, star, pot, elapsed);
 
-        return new JobRefreshSummary(effectiveTenant, date, total, star, pot, core, risk, bh, unrated, elapsed);
+        return new JobRefreshSummary(
+                effectiveTenant, date, total, star, pot, core, risk, bh, unrated, elapsed
+        );
     }
 
     @Override
@@ -109,5 +133,28 @@ public class MaterialQualityTagJobServiceImpl implements MaterialQualityTagJobSe
         ));
 
         return batchRefresh(effectiveTenant, today, sampleBatch);
+    }
+
+    private void triggerAgentIfDegraded(String tenantId, MaterialPerformance7D p, MaterialQualityResult res) {
+        if (agentService != null && res != null &&
+                (res.qualityLevel() == MaterialQualityLevel.BLACKHOLE || res.qualityLevel() == MaterialQualityLevel.RISK)) {
+            try {
+                double dropOff = 0.70;
+                double ctr = p.impressions() > 0 ? (double) p.clicks() / p.impressions() : 0.01;
+                double cvr = p.clicks() > 0 ? (double) p.installNum() / p.clicks() : 0.005;
+                agentService.triggerAutonomousOptimization(
+                        tenantId,
+                        p.materialId(),
+                        res.qualityLevel(),
+                        dropOff,
+                        ctr,
+                        cvr,
+                        p.roas(),
+                        "Standard promo script for " + p.materialName()
+                );
+            } catch (Exception e) {
+                log.warn("[QualityJob] Non-blocking autonomous agent dispatch failed for {}: {}", p.materialId(), e.getMessage());
+            }
+        }
     }
 }

@@ -6,6 +6,7 @@ import com.affiliate.platform.entity.ReportDailyEntity;
 import com.affiliate.platform.mapper.ReportDailyMapper;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
+import com.affiliate.platform.reporting.olap.OlapReportingEngine;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
@@ -28,6 +29,8 @@ public class ReportService {
 
     private final ReportDailyMapper reportMapper;
     private final TwoTierCache<String, DailyReport> cache;
+    @Autowired(required = false)
+    private OlapReportingEngine olapEngine;
 
     // 内存降级容器（在未装配数据库时供本地单机模式使用）
     private final Map<String, DailyReport> localReports = new ConcurrentHashMap<>();
@@ -78,6 +81,9 @@ public class ReportService {
 
             if (cache != null) {
                 cache.put(key, result);
+            }
+            if (olapEngine != null) {
+                olapEngine.ingestFact(tenantId, date, campaignId, "all", "", "", "", clicks, conversions, spend, revenue);
             }
             return result;
         }

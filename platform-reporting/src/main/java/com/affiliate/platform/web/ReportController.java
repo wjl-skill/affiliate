@@ -3,6 +3,7 @@ package com.affiliate.platform.web;
 import com.affiliate.platform.reporting.CohortAnalysisService;
 import com.affiliate.platform.reporting.PivotAggregationEngine;
 import com.affiliate.platform.reporting.ReportService;
+import com.affiliate.platform.reporting.olap.OlapReportingEngine;
 import com.affiliate.platform.tenant.TenantContext;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
@@ -24,16 +25,22 @@ public class ReportController {
     private final ReportService service;
     private final PivotAggregationEngine pivotEngine;
     private final CohortAnalysisService cohortService;
+    private final OlapReportingEngine olapEngine;
+    private final com.affiliate.platform.reporting.AiReportInsightService aiReportInsightService;
 
     @Autowired
     public ReportController(
             ReportService service,
             @Autowired(required = false) PivotAggregationEngine pivotEngine,
-            @Autowired(required = false) CohortAnalysisService cohortService
+            @Autowired(required = false) CohortAnalysisService cohortService,
+            @Autowired(required = false) OlapReportingEngine olapEngine,
+            @Autowired(required = false) com.affiliate.platform.reporting.AiReportInsightService aiReportInsightService
     ) {
         this.service = service;
         this.pivotEngine = pivotEngine != null ? pivotEngine : new PivotAggregationEngine();
         this.cohortService = cohortService != null ? cohortService : new CohortAnalysisService();
+        this.olapEngine = olapEngine != null ? olapEngine : new OlapReportingEngine();
+        this.aiReportInsightService = aiReportInsightService != null ? aiReportInsightService : new com.affiliate.platform.reporting.AiReportInsightService(service);
     }
 
     /**
@@ -64,12 +71,40 @@ public class ReportController {
      * 留存率与 LTV 衰减 Cohort 分析
      * GET /api/v1/reports/cohort?from=2026-08-01&to=2026-09-02
      */
+    /**
+     * 双引擎 OLAP 高性能多维聚合查询
+     * GET /api/v1/reports/olap?from=2026-08-01&to=2026-09-02&groupBy=offerId
+     */
+    @GetMapping("/olap")
+    public List<OlapReportingEngine.OlapAggregationRow> olap(
+            @RequestParam LocalDate from,
+            @RequestParam LocalDate to,
+            @RequestParam(required = false, defaultValue = "offerId") String groupBy
+    ) {
+        String tenant = TenantContext.get() != null ? TenantContext.get() : "default";
+        OlapReportingEngine engine = olapEngine != null ? olapEngine : new OlapReportingEngine();
+        return engine.queryAggregation(tenant, from, to, groupBy);
+    }
+
     @GetMapping("/cohort")
     public CohortAnalysisService.CohortMatrix cohort(
             @RequestParam(required = false) LocalDate from,
             @RequestParam(required = false) LocalDate to
     ) {
         return cohortService.generateMatrix(from, to);
+    }
+
+    /**
+     * AI 商业数据多维洞察与高管经营分析报告
+     * GET /api/v1/reports/ai-insights?from=2026-08-01&to=2026-09-02
+     */
+    @GetMapping("/ai-insights")
+    public com.affiliate.platform.reporting.AiReportInsightService.ExecutiveInsightReport aiInsights(
+            @RequestParam(required = false) LocalDate from,
+            @RequestParam(required = false) LocalDate to
+    ) {
+        String tenant = TenantContext.get() != null ? TenantContext.get() : "default";
+        return aiReportInsightService.generateExecutiveInsights(tenant, from, to);
     }
 
     /**

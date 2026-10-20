@@ -17,6 +17,7 @@ import java.util.concurrent.ConcurrentMap;
  * 解决 SmartLink 场景的核心诉求：
  * 根据访客的地理位置（Country）、终端形态（DeviceType）与各候选 Offer 实时统计的
  * 收益转化表现（EPC - Earnings Per Click），动态自适应路由至产出最高的可用推广计划。
+ * 新增支持 Contextual Bandit (LinUCB + Thompson Sampling) 动态探索利用机制。
  */
 @Service
 public class TdsRouter {
@@ -32,18 +33,44 @@ public class TdsRouter {
     // 记录被临时熔断/降级的 Offer 及其恢复时间戳 (Degraded Offers Circuit Breaker)
     private final ConcurrentMap<String, Instant> degradedOffers = new ConcurrentHashMap<>();
     private final com.affiliate.platform.affiliate.metrics.AffiliateMetrics metrics;
+    private final LinUcbBanditEngine banditEngine;
 
     public TdsRouter(OfferService offerService) {
-        this(offerService, null);
+        this(offerService, null, null);
+    }
+
+    public TdsRouter(OfferService offerService, com.affiliate.platform.affiliate.metrics.AffiliateMetrics metrics) {
+        this(offerService, metrics, null);
     }
 
     @org.springframework.beans.factory.annotation.Autowired
     public TdsRouter(
             OfferService offerService,
-            @org.springframework.beans.factory.annotation.Autowired(required = false) com.affiliate.platform.affiliate.metrics.AffiliateMetrics metrics
+            @org.springframework.beans.factory.annotation.Autowired(required = false) com.affiliate.platform.affiliate.metrics.AffiliateMetrics metrics,
+            @org.springframework.beans.factory.annotation.Autowired(required = false) LinUcbBanditEngine banditEngine
     ) {
         this.offerService = offerService;
         this.metrics = metrics != null ? metrics : new com.affiliate.platform.affiliate.metrics.AffiliateMetrics();
+        this.banditEngine = banditEngine != null ? banditEngine : new LinUcbBanditEngine();
+    }
+
+    public LinUcbBanditEngine getBanditEngine() {
+        return banditEngine;
+    }
+
+    /**
+     * 接收转化或点击收益反馈，在线增量更新 Bandit 模型
+     */
+    public void recordBanditFeedback(
+            String tenantId,
+            String smartLinkId,
+            String offerId,
+            LinUcbBanditEngine.BanditContext context,
+            double reward
+    ) {
+        if (banditEngine != null && offerId != null) {
+            banditEngine.updateArm(tenantId, smartLinkId, offerId, context, reward);
+        }
     }
 
     public void updateOfferEpc(String offerId, BigDecimal epc) {
@@ -166,7 +193,33 @@ public class TdsRouter {
             return candidates.get(index);
         }
 
-        // 2. 收益最大化策略 (HIGHEST_EPC) - 带平局均摊防饿死机制
+        // 2. 上下文多臂老虎机自适应探索策略 (BANDIT_LINUCB)
+        if (smartLink.routingStrategy() == SmartLink.RoutingStrategy.BANDIT_LINUCB) {
+            List<String> candidateIds = new ArrayList<>();
+            Map<String, Offer> offerMap = new HashMap<>();
+            for (Offer c : candidates) {
+                candidateIds.add(c.id());
+                offerMap.put(c.id(), c);
+            }
+
+            int currentHour = java.time.ZonedDateTime.now(java.time.ZoneOffset.UTC).getHour();
+            LinUcbBanditEngine.BanditContext banditCtx = LinUcbBanditEngine.BanditContext.of(
+                    country, deviceType, currentHour
+            );
+
+            String selectedOfferId = banditEngine.selectBestOffer(
+                    smartLink.tenantId(),
+                    smartLink.id(),
+                    candidateIds,
+                    banditCtx
+            );
+
+            if (selectedOfferId != null && offerMap.containsKey(selectedOfferId)) {
+                return offerMap.get(selectedOfferId);
+            }
+        }
+
+        // 3. 收益最大化策略 (HIGHEST_EPC) - 带平局均摊防饿死机制
         if (smartLink.routingStrategy() == SmartLink.RoutingStrategy.HIGHEST_EPC) {
             metrics.recordTdsRouteHighestEpc();
             BigDecimal maxEpc = null;

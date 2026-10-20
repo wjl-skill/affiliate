@@ -43,6 +43,9 @@ public class MenuManagementService {
                 if (menuMapper.selectById("menu-macros") == null) {
                     save(buildMacrosMenu());
                 }
+                if (menuMapper.selectById("menu-sys-ai") == null) {
+                    save(buildAiMenu());
+                }
             } catch (Exception e) {
                 initDefaultMenus();
             }
@@ -60,12 +63,18 @@ public class MenuManagementService {
         save(new SysMenu("menu-finance", "0", "财务账期出账", "💰", "/finance", "pages/finance/index.vue", "finance:settle", 6, true, SysMenu.Status.ACTIVE));
         save(new SysMenu("menu-analytics", "0", "Sub-ID 报表", "📈", "/analytics", "pages/analytics/index.vue", "report:analytics", 7, true, SysMenu.Status.ACTIVE));
         save(buildMacrosMenu());
+        save(buildAiMenu());
         save(new SysMenu("menu-sys-users", "0", "用户管理", "👥", "/system/users", "pages/system/users.vue", "system:user:read", 10, true, SysMenu.Status.ACTIVE));
         save(new SysMenu("menu-sys-roles", "0", "角色管理", "🛡️", "/system/roles", "pages/system/roles.vue", "system:role:read", 11, true, SysMenu.Status.ACTIVE));
         save(new SysMenu("menu-sys-menus", "0", "菜单管理", "📑", "/system/menus", "pages/system/menus.vue", "system:menu:manage", 12, true, SysMenu.Status.ACTIVE));
         save(new SysMenu("menu-sys-perms", "0", "权限字典", "🔑", "/system/permissions", "pages/system/permissions.vue", "system:role:read", 13, true, SysMenu.Status.ACTIVE));
         save(new SysMenu("menu-sys-s3", "0", "S3 存储配置", "🗄️", "/system/s3", "pages/system/s3.vue", "system:s3:read", 14, true, SysMenu.Status.ACTIVE));
         save(new SysMenu("menu-sys-domains", "0", "域名池管理", "🌐", "/system/domains", "pages/system/domains.vue", "system:domain:read", 15, true, SysMenu.Status.ACTIVE));
+    }
+
+    private SysMenu buildAiMenu() {
+        return new SysMenu("menu-sys-ai", "0", "AI 模型配置", "🤖", "/system/ai",
+                "pages/system/ai.vue", "system:ai:read", 16, true, SysMenu.Status.ACTIVE);
     }
 
     private SysMenu buildMacrosMenu() {

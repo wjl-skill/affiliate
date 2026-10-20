@@ -32,6 +32,10 @@ public class PermissionRegistryService {
         register(new PermissionDefinition("system:domain:read", "域名查看", "域名管理", "查看跟踪域名池状态", PermissionDefinition.Type.API));
         register(new PermissionDefinition("system:domain:write", "域名配置", "域名管理", "绑定新域名并检测 CNAME", PermissionDefinition.Type.BUTTON));
 
+        // AI 认知中枢与大模型网关
+        register(new PermissionDefinition("system:ai:read", "AI配置查看", "AI模型网关", "查看大模型接入配置及调用配额统计", PermissionDefinition.Type.API));
+        register(new PermissionDefinition("system:ai:write", "AI配置维护", "AI模型网关", "新增、编辑大模型配置、连通性测试与切换默认模型", PermissionDefinition.Type.BUTTON));
+
         // 网盟业务
         register(new PermissionDefinition("offer:read", "计划查询", "Offer计划", "查看推广计划与出价", PermissionDefinition.Type.API));
         register(new PermissionDefinition("offer:write", "计划维护", "Offer计划", "创建与修改推广计划及 Cap", PermissionDefinition.Type.BUTTON));

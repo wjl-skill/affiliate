@@ -32,6 +32,8 @@ public record SmartLink(
         /** 收益最大化：动态优先路由至近期历史 EPC 最高的可用 Offer */
         HIGHEST_EPC,
         /** 轮询均摊测试 */
-        ROUND_ROBIN
+        ROUND_ROBIN,
+        /** 上下文多臂老虎机 (LinUCB + Thompson Sampling)：自适应探索新 Offer 与利用高收益 Offer */
+        BANDIT_LINUCB
     }
 }

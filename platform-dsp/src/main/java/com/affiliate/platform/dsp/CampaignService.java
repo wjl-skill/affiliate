@@ -7,6 +7,7 @@ import com.affiliate.platform.service.NotFoundException;
 import com.affiliate.platform.tenant.TenantContext;
 import org.springframework.stereotype.Service;
 
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
@@ -28,6 +29,10 @@ public class CampaignService {
 
     // 无锁倒排索引
     private final CampaignInvertedIndex invertedIndex;
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private DeepBiddingOptimizer biddingOptimizer;
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private AiCampaignAdvisoryService advisoryService;
 
     public CampaignService(Repository<Campaign> repository, EventPublisher events) {
         this(repository, events, new CampaignInvertedIndex());
@@ -120,6 +125,26 @@ public class CampaignService {
      * @param ctx 综合流量环境上下文
      * @return 符合全部定向条件的可用活动列表
      */
+    public DeepBiddingOptimizer.DeepBiddingDecision evaluateOptimalBid(
+            String campaignId,
+            TrafficContext context,
+            BigDecimal floorPrice
+    ) {
+        Campaign campaign = get(campaignId);
+        DeepBiddingOptimizer opt = biddingOptimizer != null ? biddingOptimizer : new DeepBiddingOptimizer();
+        return opt.optimizeBid(context, campaign, BigDecimal.valueOf(15.0), floorPrice, "slot:" + (context != null ? context.domain() : "all"));
+    }
+
+    public AiCampaignAdvisoryService.CampaignAdvisoryResult getAiAdvisory(
+            String campaignId,
+            TrafficContext context,
+            BigDecimal floorPrice
+    ) {
+        Campaign campaign = get(campaignId);
+        AiCampaignAdvisoryService service = advisoryService != null ? advisoryService : new AiCampaignAdvisoryService();
+        return service.adviseCampaign(campaign, context, floorPrice);
+    }
+
     public List<Campaign> match(TrafficContext ctx) {
         if (ctx == null) {
             return List.of();
