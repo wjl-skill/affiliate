@@ -2,8 +2,11 @@ package com.affiliate.platform.affiliate.service;
 
 import com.affiliate.platform.affiliate.domain.SkanAttributionResult;
 import com.affiliate.platform.affiliate.domain.SkanPostbackPayload;
+import com.affiliate.platform.entity.AffiliateSkanPostbackEntity;
+import com.affiliate.platform.mapper.AffiliateSkanPostbackMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
@@ -20,7 +23,8 @@ import java.util.concurrent.ConcurrentMap;
  * 1. 层次化 Source Identifier 解构 (4 位层级：Campaign, Location/Placement, Creative)；
  * 2. 3 阶段时间窗口 (Window 1: 0-2d, Window 2: 3-7d, Window 3: 8-35d) 序列校验与防重放；
  * 3. 粗细粒度转化值 (Fine CV 0-63 vs Coarse CV low/medium/high) 商业价值映射与期望收入评估；
- * 4. 严格全局幂等 (Transaction ID + Sequence Index) 拦截重放攻击与重复记账。
+ * 4. 严格全局幂等 (Tenant + AdNetworkId + Transaction ID + Sequence Index) 拦截重放攻击与重复记账；
+ * 5. 双模持久化至 PostgreSQL `affiliate_skan_postback` 表并同步报表统计。
  */
 @Service
 public class SkanAttributionEngine {
@@ -32,18 +36,75 @@ public class SkanAttributionEngine {
     public static final BigDecimal COARSE_MEDIUM_VALUE = BigDecimal.valueOf(10.00);
     public static final BigDecimal COARSE_HIGH_VALUE = BigDecimal.valueOf(30.00);
 
-    // 幂等记录索引：key 为 "tenantId:transactionId:postbackSequenceIndex"
+    private final AffiliateSkanPostbackMapper skanMapper;
+    private final SubIdAnalyticsService analyticsService;
+
+    // 幂等记录索引：key 为 "tenantId:adNetworkId:transactionId:postbackSequenceIndex"
     private final ConcurrentMap<String, SkanAttributionResult> processedResults = new ConcurrentHashMap<>();
 
     // 广告网络流水归集：key 为 "tenantId:adNetworkId" -> 结果列表
     private final ConcurrentMap<String, List<SkanAttributionResult>> networkIndex = new ConcurrentHashMap<>();
 
+    public SkanAttributionEngine() {
+        this(null, null);
+    }
+
+    @Autowired
+    public SkanAttributionEngine(
+            @Autowired(required = false) AffiliateSkanPostbackMapper skanMapper,
+            @Autowired(required = false) SubIdAnalyticsService analyticsService
+    ) {
+        this.skanMapper = skanMapper;
+        this.analyticsService = analyticsService;
+        preloadFromDatabase();
+    }
+
+    private void preloadFromDatabase() {
+        if (skanMapper != null) {
+            try {
+                List<AffiliateSkanPostbackEntity> list = skanMapper.selectList(null);
+                if (list != null) {
+                    for (AffiliateSkanPostbackEntity e : list) {
+                        SourceIdComponents comp = parseSourceIdentifier(e.getSourceIdentifier());
+                        String recordId = e.getId() != null ? String.valueOf(e.getId()) : UUID.randomUUID().toString();
+                        int seq = e.getPostbackSequenceIndex() != null ? e.getPostbackSequenceIndex() : 0;
+                        String netId = e.getAdNetworkId() != null ? e.getAdNetworkId() : "unknown";
+                        SkanAttributionResult res = new SkanAttributionResult(
+                                recordId,
+                                e.getTenantId(),
+                                e.getTransactionId(),
+                                netId,
+                                e.getSourceIdentifier(),
+                                e.getCampaignId() != null ? e.getCampaignId() : comp.campaignId(),
+                                comp.placementHint(),
+                                comp.creativeHint(),
+                                seq,
+                                e.getConversionValueFine(),
+                                e.getConversionValueCoarse(),
+                                e.getEstimatedRevenue() != null ? e.getEstimatedRevenue() : BigDecimal.ZERO,
+                                e.getFidelityType() != null ? e.getFidelityType() : 1,
+                                e.getSkanVersion() != null ? e.getSkanVersion() : "4.0",
+                                e.getReceivedAt() != null ? e.getReceivedAt() : Instant.now(),
+                                e.getStatus() != null ? e.getStatus() : "PROCESSED"
+                        );
+                        String idempotencyKey = buildIdempotencyKey(res.tenantId(), netId, res.transactionId(), seq);
+                        processedResults.putIfAbsent(idempotencyKey, res);
+                        String networkKey = res.tenantId() + ":" + netId;
+                        networkIndex.computeIfAbsent(networkKey, k -> Collections.synchronizedList(new ArrayList<>())).add(res);
+                    }
+                }
+            } catch (Exception e) {
+                log.debug("[SkanAttributionEngine] DB preload skipped: {}", e.getMessage());
+            }
+        }
+    }
+
+    private String buildIdempotencyKey(String tenantId, String adNetworkId, String txId, int seqIndex) {
+        return tenantId + ":" + adNetworkId + ":" + txId + ":" + seqIndex;
+    }
+
     /**
      * 处理并归因一条 Apple SKAN 4.0 服务端回传
-     *
-     * @param tenantId 租户 ID
-     * @param payload  Apple 官方规范回传负载
-     * @return 解析完成的归因凭证
      */
     public SkanAttributionResult processPostback(String tenantId, SkanPostbackPayload payload) {
         if (payload == null) {
@@ -56,8 +117,11 @@ public class SkanAttributionEngine {
             throw new IllegalArgumentException("SKAN transaction-id must not be blank");
         }
 
-        int seqIndex = Math.max(0, payload.postbackSequenceIndex());
-        String idempotencyKey = effectiveTenant + ":" + txId + ":" + seqIndex;
+        String adNetworkId = (payload.adNetworkId() != null && !payload.adNetworkId().isBlank())
+                ? payload.adNetworkId()
+                : "unknown";
+        int seqIndex = Math.max(0, Math.min(2, payload.postbackSequenceIndex()));
+        String idempotencyKey = buildIdempotencyKey(effectiveTenant, adNetworkId, txId, seqIndex);
 
         // 1. 幂等查重防重放
         SkanAttributionResult existing = processedResults.get(idempotencyKey);
@@ -78,11 +142,12 @@ public class SkanAttributionEngine {
 
         // 4. 生成统一归因流水凭据
         String recordId = UUID.randomUUID().toString();
+        Instant now = Instant.now();
         SkanAttributionResult result = new SkanAttributionResult(
                 recordId,
                 effectiveTenant,
                 txId,
-                payload.adNetworkId() != null ? payload.adNetworkId() : "unknown",
+                adNetworkId,
                 payload.sourceIdentifier(),
                 components.campaignId(),
                 components.placementHint(),
@@ -92,8 +157,8 @@ public class SkanAttributionEngine {
                 payload.coarseConversionValue(),
                 estimatedRevenue,
                 payload.fidelityType(),
-                payload.version(),
-                Instant.now(),
+                payload.version() != null ? payload.version() : "4.0",
+                now,
                 "PROCESSED"
         );
 
@@ -105,6 +170,48 @@ public class SkanAttributionEngine {
 
         String networkKey = effectiveTenant + ":" + result.adNetworkId();
         networkIndex.computeIfAbsent(networkKey, k -> Collections.synchronizedList(new ArrayList<>())).add(result);
+
+        // 5. 持久化至 affiliate_skan_postback 表
+        if (skanMapper != null) {
+            try {
+                AffiliateSkanPostbackEntity entity = new AffiliateSkanPostbackEntity(
+                        null,
+                        effectiveTenant,
+                        txId,
+                        adNetworkId,
+                        payload.sourceIdentifier() != null ? payload.sourceIdentifier() : "0",
+                        result.campaignId(),
+                        seqIndex,
+                        payload.conversionValue(),
+                        payload.coarseConversionValue(),
+                        estimatedRevenue,
+                        payload.fidelityType(),
+                        result.skanVersion(),
+                        payload.appId(),
+                        payload.attributionSignature(),
+                        now,
+                        result.status()
+                );
+                skanMapper.insert(entity);
+            } catch (Exception e) {
+                log.debug("[SkanAttributionEngine] DB insert skipped: {}", e.getMessage());
+            }
+        }
+
+        // 6. 同步写入多维报表统计
+        if (analyticsService != null && estimatedRevenue.compareTo(BigDecimal.ZERO) > 0) {
+            try {
+                BigDecimal estimatedPayout = estimatedRevenue.multiply(BigDecimal.valueOf(0.70)).setScale(4, RoundingMode.HALF_UP);
+                analyticsService.recordConversion(
+                        adNetworkId,
+                        "skan_camp_" + result.campaignId(),
+                        estimatedPayout,
+                        estimatedRevenue
+                );
+            } catch (Exception e) {
+                log.debug("[SkanAttributionEngine] Analytics sync skipped: {}", e.getMessage());
+            }
+        }
 
         log.info("SKAN 4.0 postback processed: txId={}, seqIndex={}, campaignId={}, estRev=${}",
                 txId, seqIndex, result.campaignId(), result.estimatedRevenue());
@@ -171,7 +278,15 @@ public class SkanAttributionEngine {
 
     public List<SkanAttributionResult> listByAdNetwork(String tenantId, String adNetworkId) {
         String effectiveTenant = (tenantId != null && !tenantId.isBlank()) ? tenantId : "default";
-        String networkKey = effectiveTenant + ":" + (adNetworkId != null ? adNetworkId : "");
+        if (adNetworkId == null || adNetworkId.isBlank()) {
+            return processedResults.values().stream()
+                    .filter(r -> effectiveTenant.equals(r.tenantId())
+                            || ("default".equals(effectiveTenant) && "public".equals(r.tenantId()))
+                            || ("public".equals(effectiveTenant) && "default".equals(r.tenantId())))
+                    .sorted(Comparator.comparing(SkanAttributionResult::receivedAt).reversed())
+                    .toList();
+        }
+        String networkKey = effectiveTenant + ":" + adNetworkId;
         List<SkanAttributionResult> list = networkIndex.get(networkKey);
         return list != null ? new ArrayList<>(list) : List.of();
     }

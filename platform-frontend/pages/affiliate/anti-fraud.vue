@@ -3,7 +3,7 @@
     <div class="flex flex-wrap items-center justify-between gap-4">
       <div>
         <h3 class="text-lg font-bold text-slate-900">4D 智能反作弊与流量风控中心 (Anti-Fraud & Risk Center)</h3>
-        <p class="text-xs text-slate-500">毫秒级 4 维作弊特征矩阵：CTIT 转化时间差异常、数据中心机房 IP、爬虫 UA、点击突增与动态黑名单拦截</p>
+        <p class="text-xs text-slate-500">毫秒级 4 维作弊特征矩阵：CTIT 转化时间差异常、数据中心机房 IP、爬虫 UA、点击突增与 AI 深度取证研判</p>
       </div>
       <div class="flex items-center gap-3">
         <button
@@ -48,7 +48,7 @@
       <div class="p-4 border-b border-slate-200 flex items-center justify-between">
         <div>
           <h4 class="text-sm font-bold text-slate-800">实时作弊流量检测与拦截审计流 (Risk Audit Log)</h4>
-          <p class="text-[11px] text-slate-400">针对所有 S2S Postback 转化与点击会话执行四维置信度打分 (0~100)</p>
+          <p class="text-[11px] text-slate-400">针对所有 S2S Postback 转化与点击会话执行四维置信度打分 (0~100) 与 AI 异常取证</p>
         </div>
         <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
           <span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
@@ -127,8 +127,50 @@
         <template #cell-time="{ row }">
           <span class="text-[11px] text-slate-400 font-mono">{{ row.time }}</span>
         </template>
+
+        <template #cell-investigate="{ row }">
+          <button
+            type="button"
+            class="px-2.5 py-1 text-[11px] font-semibold rounded-lg bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-200 transition-colors"
+            @click="runAiInvestigation(row)"
+          >
+            🤖 AI 取证
+          </button>
+        </template>
       </CommonTable>
     </div>
+
+    <!-- AI 异常取证研判报告弹窗 -->
+    <ModalDialog
+      :show="showInvestigationModal"
+      title="🤖 AI 反作弊深度取证与定性研判报告"
+      confirm-text="关闭报告"
+      @close="showInvestigationModal = false"
+      @confirm="showInvestigationModal = false"
+    >
+      <div v-if="investigating" class="py-8 text-center text-xs text-slate-500">
+        正在调取会话遥测特征并执行 AI 反作弊取证研判...
+      </div>
+      <div v-else-if="investigationReport" class="space-y-3 text-xs">
+        <div class="grid grid-cols-3 gap-2 p-3 rounded-lg bg-slate-50 border border-slate-200">
+          <div>
+            <span class="text-[10px] text-slate-400 block">取证 Click ID</span>
+            <span class="font-mono font-bold text-slate-800">{{ investigationReport.clickId }}</span>
+          </div>
+          <div>
+            <span class="text-[10px] text-slate-400 block">综合风险评分</span>
+            <span class="font-mono font-bold text-rose-600">{{ investigationReport.riskScore }} / 100</span>
+          </div>
+          <div>
+            <span class="text-[10px] text-slate-400 block">推荐处置裁决</span>
+            <span class="font-mono font-bold text-indigo-700">{{ investigationReport.verdict }}</span>
+          </div>
+        </div>
+        <div class="p-3.5 rounded-lg bg-slate-900 text-slate-100 font-mono text-[11px] whitespace-pre-wrap leading-relaxed">
+          {{ investigationReport.aiNarrativeAnalysis }}
+        </div>
+      </div>
+    </ModalDialog>
 
     <!-- 黑名单快速添加弹窗 -->
     <ModalDialog
@@ -182,6 +224,10 @@ const blacklistType = ref('IP')
 const blacklistValue = ref('')
 const activeBlacklistCount = ref(0)
 
+const showInvestigationModal = ref(false)
+const investigating = ref(false)
+const investigationReport = ref<any>(null)
+
 const fraudSummary = ref({
   interceptRatePercent: '0.0',
   savedAmountUsd: '0.00',
@@ -197,7 +243,8 @@ const columns = [
   { key: 'score', label: '风险评分 (0-100)', slot: 'score' },
   { key: 'reason', label: '首要作弊原因', slot: 'reason' },
   { key: 'action', label: '处置动作', slot: 'action' },
-  { key: 'time', label: '拦截时间', slot: 'time' }
+  { key: 'time', label: '拦截时间', slot: 'time' },
+  { key: 'investigate', label: 'AI 研判', slot: 'investigate' }
 ]
 
 const auditLogs = ref<any[]>([])
@@ -235,6 +282,32 @@ const loadStats = async () => {
     showToast(`加载风控数据失败：${err.message || err}`, 'error', 5000)
   } finally {
     loading.value = false
+  }
+}
+
+const runAiInvestigation = async (row: any) => {
+  showInvestigationModal.value = true
+  investigating.value = true
+  try {
+    investigationReport.value = await fetchApi<any>('/api/v1/affiliate/anti-fraud/ai-investigate', {
+      method: 'POST',
+      body: {
+        clickId: row.clickId || row.transactionId,
+        anomalyType: row.primaryReason || 'CTIT_HYPER_SPEED_INJECTION',
+        telemetry: {
+          ip: row.ip,
+          affiliateId: row.affiliateId,
+          ctitSeconds: row.ctitSeconds ?? 1,
+          riskScore: row.riskScore ?? 85,
+          datacenterProxy: !!row.isDatacenter
+        }
+      }
+    })
+  } catch (err: any) {
+    showToast(`AI 取证请求失败：${err.message || err}`, 'error')
+    showInvestigationModal.value = false
+  } finally {
+    investigating.value = false
   }
 }
 

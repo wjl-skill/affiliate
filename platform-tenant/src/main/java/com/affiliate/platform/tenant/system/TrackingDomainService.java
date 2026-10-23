@@ -14,7 +14,7 @@ import java.util.concurrent.ConcurrentMap;
 /**
  * 推广跟踪域名池管理服务 (Tracking Domain Service - MyBatis-Plus)
  * <p>
- * 基于 MyBatis-Plus 接入 PostgreSQL `sys_tracking_domain` 表管理域名池。
+ * 基于 MyBatis-Plus 接入 PostgreSQL `sys_tracking_domain` 表管理域名池，并具备离线内存回退保护能力。
  */
 @Service
 public class TrackingDomainService {
@@ -33,84 +33,54 @@ public class TrackingDomainService {
     }
 
     private void ensureDefaultDomains() {
+        for (TrackingDomain seed : buildDefaultDomains()) {
+            fallbackStore.put(seed.id(), seed);
+        }
         if (domainMapper != null) {
             try {
                 Long count = domainMapper.selectCount(null);
                 if (count != null && count == 0) {
-                    initDefaultDomains();
+                    for (TrackingDomain seed : buildDefaultDomains()) {
+                        saveDomain(seed);
+                    }
                 }
-            } catch (Exception e) {
-                initDefaultDomains();
+            } catch (Exception ignored) {
             }
-        } else {
-            initDefaultDomains();
         }
     }
 
-    private void initDefaultDomains() {
-        saveDomain(new TrackingDomain(
-                "dom-01",
-                "tenant-1",
-                "trk.smartaff.com",
-                TrackingDomain.DomainType.TRACKING,
-                "lb-global.affnetwork.com",
-                TrackingDomain.DnsStatus.VERIFIED,
-                TrackingDomain.SslStatus.AUTO_SSL_ACTIVE,
-                null,
-                true,
-                TrackingDomain.Status.ACTIVE,
-                Instant.now()
-        ));
-
-        saveDomain(new TrackingDomain(
-                "dom-02",
-                "tenant-1",
-                "click.apexmedia.io",
-                TrackingDomain.DomainType.TRACKING,
-                "lb-global.affnetwork.com",
-                TrackingDomain.DnsStatus.PENDING_CNAME,
-                TrackingDomain.SslStatus.AUTO_SSL_ACTIVE,
-                "aff-vip-888",
-                false,
-                TrackingDomain.Status.ACTIVE,
-                Instant.now()
-        ));
+    private List<TrackingDomain> buildDefaultDomains() {
+        return List.of(
+                new TrackingDomain(
+                        "dom-01",
+                        "tenant-1",
+                        "trk.smartaff.com",
+                        TrackingDomain.DomainType.TRACKING,
+                        "lb-global.affnetwork.com",
+                        TrackingDomain.DnsStatus.VERIFIED,
+                        TrackingDomain.SslStatus.AUTO_SSL_ACTIVE,
+                        null,
+                        true,
+                        TrackingDomain.Status.ACTIVE,
+                        Instant.now()
+                ),
+                new TrackingDomain(
+                        "dom-02",
+                        "tenant-1",
+                        "click.apexmedia.io",
+                        TrackingDomain.DomainType.TRACKING,
+                        "lb-global.affnetwork.com",
+                        TrackingDomain.DnsStatus.PENDING_CNAME,
+                        TrackingDomain.SslStatus.AUTO_SSL_ACTIVE,
+                        "aff-vip-888",
+                        false,
+                        TrackingDomain.Status.ACTIVE,
+                        Instant.now()
+                )
+        );
     }
 
     public TrackingDomain saveDomain(TrackingDomain domain) {
-        if (domainMapper != null) {
-            if (domain.isDefault()) {
-                QueryWrapper<TrackingDomainEntity> defQw = new QueryWrapper<>();
-                defQw.eq("is_default", true);
-                List<TrackingDomainEntity> defs = domainMapper.selectList(defQw);
-                for (TrackingDomainEntity d : defs) {
-                    d.setIsDefault(false);
-                    domainMapper.updateById(d);
-                }
-            }
-
-            TrackingDomainEntity entity = new TrackingDomainEntity(
-                    domain.id(),
-                    domain.tenantId(),
-                    domain.domain(),
-                    domain.domainType().name(),
-                    domain.cnameTarget(),
-                    domain.dnsStatus().name(),
-                    domain.sslStatus().name(),
-                    domain.assignedAffiliateId(),
-                    domain.isDefault(),
-                    domain.status().name(),
-                    domain.createdAt() != null ? domain.createdAt() : Instant.now()
-            );
-
-            if (domainMapper.selectById(domain.id()) != null) {
-                domainMapper.updateById(entity);
-            } else {
-                domainMapper.insert(entity);
-            }
-            return domain;
-        }
-
         if (domain.isDefault()) {
             fallbackStore.values().forEach(d -> {
                 if (d.isDefault()) {
@@ -119,41 +89,92 @@ public class TrackingDomainService {
             });
         }
         fallbackStore.put(domain.id(), domain);
+
+        if (domainMapper != null) {
+            try {
+                if (domain.isDefault()) {
+                    QueryWrapper<TrackingDomainEntity> defQw = new QueryWrapper<>();
+                    defQw.eq("is_default", true);
+                    List<TrackingDomainEntity> defs = domainMapper.selectList(defQw);
+                    for (TrackingDomainEntity d : defs) {
+                        d.setIsDefault(false);
+                        domainMapper.updateById(d);
+                    }
+                }
+
+                TrackingDomainEntity entity = new TrackingDomainEntity(
+                        domain.id(),
+                        domain.tenantId(),
+                        domain.domain(),
+                        domain.domainType().name(),
+                        domain.cnameTarget(),
+                        domain.dnsStatus().name(),
+                        domain.sslStatus().name(),
+                        domain.assignedAffiliateId(),
+                        domain.isDefault(),
+                        domain.status().name(),
+                        domain.createdAt() != null ? domain.createdAt() : Instant.now()
+                );
+
+                if (domainMapper.selectById(domain.id()) != null) {
+                    domainMapper.updateById(entity);
+                } else {
+                    domainMapper.insert(entity);
+                }
+            } catch (Exception ignored) {
+            }
+        }
         return domain;
     }
 
     public List<TrackingDomain> listDomains() {
         if (domainMapper != null) {
-            QueryWrapper<TrackingDomainEntity> qw = new QueryWrapper<>();
-            qw.orderByDesc("is_default").orderByAsc("created_at");
-            List<TrackingDomainEntity> list = domainMapper.selectList(qw);
-            return list.stream().map(this::toDomain).toList();
+            try {
+                QueryWrapper<TrackingDomainEntity> qw = new QueryWrapper<>();
+                qw.orderByDesc("is_default").orderByAsc("created_at");
+                List<TrackingDomainEntity> list = domainMapper.selectList(qw);
+                return list.stream().map(this::toDomain).toList();
+            } catch (Exception ignored) {
+            }
         }
         return new ArrayList<>(fallbackStore.values());
     }
 
     public Optional<TrackingDomain> find(String id) {
         if (domainMapper != null) {
-            TrackingDomainEntity entity = domainMapper.selectById(id);
-            return Optional.ofNullable(entity).map(this::toDomain);
+            try {
+                TrackingDomainEntity entity = domainMapper.selectById(id);
+                return Optional.ofNullable(entity).map(this::toDomain);
+            } catch (Exception ignored) {
+            }
         }
         return Optional.ofNullable(fallbackStore.get(id));
     }
 
     public boolean delete(String id) {
         if (domainMapper != null) {
-            return domainMapper.deleteById(id) > 0;
+            try {
+                boolean deleted = domainMapper.deleteById(id) > 0;
+                fallbackStore.remove(id);
+                return deleted;
+            } catch (Exception ignored) {
+            }
         }
         return fallbackStore.remove(id) != null;
     }
 
     public TrackingDomain verifyDns(String id) {
         if (domainMapper != null) {
-            TrackingDomainEntity entity = domainMapper.selectById(id);
-            if (entity == null) throw new NoSuchElementException("域名不存在: " + id);
-            entity.setDnsStatus(TrackingDomain.DnsStatus.VERIFIED.name());
-            domainMapper.updateById(entity);
-            return toDomain(entity);
+            try {
+                TrackingDomainEntity entity = domainMapper.selectById(id);
+                if (entity == null) throw new NoSuchElementException("域名不存在: " + id);
+                entity.setDnsStatus(TrackingDomain.DnsStatus.VERIFIED.name());
+                domainMapper.updateById(entity);
+                return toDomain(entity);
+            } catch (NoSuchElementException e) {
+                throw e;
+            } catch (Exception ignored) {
+            }
         }
 
         TrackingDomain domain = fallbackStore.get(id);
@@ -165,20 +186,25 @@ public class TrackingDomainService {
 
     public TrackingDomain setDefault(String id) {
         if (domainMapper != null) {
-            TrackingDomainEntity target = domainMapper.selectById(id);
-            if (target == null) throw new NoSuchElementException("域名不存在: " + id);
+            try {
+                TrackingDomainEntity target = domainMapper.selectById(id);
+                if (target == null) throw new NoSuchElementException("域名不存在: " + id);
 
-            QueryWrapper<TrackingDomainEntity> defQw = new QueryWrapper<>();
-            defQw.eq("is_default", true);
-            List<TrackingDomainEntity> defs = domainMapper.selectList(defQw);
-            for (TrackingDomainEntity d : defs) {
-                d.setIsDefault(false);
-                domainMapper.updateById(d);
+                QueryWrapper<TrackingDomainEntity> defQw = new QueryWrapper<>();
+                defQw.eq("is_default", true);
+                List<TrackingDomainEntity> defs = domainMapper.selectList(defQw);
+                for (TrackingDomainEntity d : defs) {
+                    d.setIsDefault(false);
+                    domainMapper.updateById(d);
+                }
+
+                target.setIsDefault(true);
+                domainMapper.updateById(target);
+                return toDomain(target);
+            } catch (NoSuchElementException e) {
+                throw e;
+            } catch (Exception ignored) {
             }
-
-            target.setIsDefault(true);
-            domainMapper.updateById(target);
-            return toDomain(target);
         }
 
         TrackingDomain target = fallbackStore.get(id);

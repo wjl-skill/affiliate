@@ -11,7 +11,6 @@ import org.springframework.stereotype.Service;
 import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
@@ -27,6 +26,7 @@ public class AiUsageMeteringService {
     @Autowired
     public AiUsageMeteringService(@Autowired(required = false) AiUsageLogMapper usageLogMapper) {
         this.usageLogMapper = usageLogMapper;
+        preloadFromDatabase();
     }
 
     public AiUsageMeteringService() {
@@ -63,6 +63,52 @@ public class AiUsageMeteringService {
     private final Map<String, AtomicLong> tenantTotalLatency = new ConcurrentHashMap<>();
     private final List<AiLogEntry> recentLogs = Collections.synchronizedList(new LinkedList<>());
 
+    private void preloadFromDatabase() {
+        if (usageLogMapper == null) {
+            return;
+        }
+        try {
+            List<AiUsageLogEntity> entities = usageLogMapper.selectList(null);
+            if (entities == null || entities.isEmpty()) {
+                return;
+            }
+            entities.sort(Comparator.comparing(AiUsageLogEntity::getCreatedAt, Comparator.nullsLast(Comparator.naturalOrder())));
+            for (AiUsageLogEntity e : entities) {
+                String tid = e.getTenantId() != null ? e.getTenantId() : "default";
+                tenantRequests.computeIfAbsent(tid, k -> new AtomicLong()).incrementAndGet();
+                tenantTotalLatency.computeIfAbsent(tid, k -> new AtomicLong())
+                        .addAndGet(e.getLatencyMs() != null ? e.getLatencyMs() : 0L);
+                int pTok = e.getPromptTokens() != null ? e.getPromptTokens() : 0;
+                int cTok = e.getCompletionTokens() != null ? e.getCompletionTokens() : 0;
+                int tTok = e.getTotalTokens() != null ? e.getTotalTokens() : (pTok + cTok);
+                tenantTotalTokens.computeIfAbsent(tid, k -> new AtomicLong()).addAndGet(tTok);
+                tenantPromptTokens.computeIfAbsent(tid, k -> new AtomicLong()).addAndGet(pTok);
+                tenantCompletionTokens.computeIfAbsent(tid, k -> new AtomicLong()).addAndGet(cTok);
+
+                AiLogEntry entry = new AiLogEntry(
+                        e.getId(),
+                        tid,
+                        e.getCallerModule() != null ? e.getCallerModule() : "GENERAL",
+                        e.getModelName() != null ? e.getModelName() : "unknown",
+                        pTok,
+                        cTok,
+                        tTok,
+                        e.getLatencyMs() != null ? e.getLatencyMs() : 0L,
+                        e.getStatus() != null ? e.getStatus() : "SUCCESS",
+                        e.getCreatedAt() != null ? e.getCreatedAt() : Instant.now()
+                );
+                synchronized (recentLogs) {
+                    recentLogs.add(0, entry);
+                    if (recentLogs.size() > 500) {
+                        recentLogs.remove(recentLogs.size() - 1);
+                    }
+                }
+            }
+        } catch (Exception e) {
+            log.debug("[AiUsageMeteringService] Database preload skipped: {}", e.getMessage());
+        }
+    }
+
     public void recordUsage(
             String tenantId,
             String callerModule,
@@ -72,7 +118,7 @@ public class AiUsageMeteringService {
             boolean fallbackUsed,
             String errorMsg
     ) {
-        String tid = tenantId != null ? tenantId : "default";
+        String tid = (tenantId != null && !tenantId.isBlank()) ? tenantId : "default";
         tenantRequests.computeIfAbsent(tid, k -> new AtomicLong()).incrementAndGet();
         tenantTotalLatency.computeIfAbsent(tid, k -> new AtomicLong()).addAndGet(latencyMs);
 
@@ -96,9 +142,11 @@ public class AiUsageMeteringService {
                 Instant.now()
         );
 
-        recentLogs.add(0, entry);
-        if (recentLogs.size() > 500) {
-            recentLogs.remove(recentLogs.size() - 1);
+        synchronized (recentLogs) {
+            recentLogs.add(0, entry);
+            if (recentLogs.size() > 500) {
+                recentLogs.remove(recentLogs.size() - 1);
+            }
         }
 
         if (usageLogMapper != null) {
@@ -118,7 +166,7 @@ public class AiUsageMeteringService {
     }
 
     public TenantAiStats getTenantStats(String tenantId) {
-        String tid = tenantId != null ? tenantId : "default";
+        String tid = (tenantId != null && !tenantId.isBlank()) ? tenantId : "default";
         long reqs = tenantRequests.getOrDefault(tid, new AtomicLong(0)).get();
         long totalTok = tenantTotalTokens.getOrDefault(tid, new AtomicLong(0)).get();
         long pTok = tenantPromptTokens.getOrDefault(tid, new AtomicLong(0)).get();
@@ -130,10 +178,13 @@ public class AiUsageMeteringService {
     }
 
     public List<AiLogEntry> getRecentLogs(String tenantId, int limit) {
-        String tid = tenantId != null ? tenantId : "default";
-        return recentLogs.stream()
-                .filter(l -> tid.equals(l.tenantId()) || "default".equals(tid))
-                .limit(limit > 0 ? limit : 50)
-                .toList();
+        String tid = (tenantId != null && !tenantId.isBlank()) ? tenantId : "default";
+        int maxResults = limit > 0 ? limit : 50;
+        synchronized (recentLogs) {
+            return recentLogs.stream()
+                    .filter(l -> tid.equals(l.tenantId()) || ("public".equals(tid) && "default".equals(l.tenantId())))
+                    .limit(maxResults)
+                    .toList();
+        }
     }
 }

@@ -6,6 +6,9 @@ import com.affiliate.platform.domain.agent.CreativeAgentDiagnosis;
 import com.affiliate.platform.domain.quality.MaterialQualityLevel;
 import com.affiliate.platform.domain.studio.CapCutDraftExportResult;
 import com.affiliate.platform.domain.studio.StudioProject;
+import com.affiliate.platform.entity.CreativeAgentActionEntity;
+import com.affiliate.platform.mapper.CreativeAgentActionMapper;
+import com.affiliate.platform.service.ad.AdLearningRuleEngine;
 import com.affiliate.platform.service.studio.StudioProjectService;
 import com.affiliate.platform.web.studio.dto.StudioProjectCreateRequest;
 import org.slf4j.Logger;
@@ -28,7 +31,8 @@ import java.util.concurrent.ConcurrentMap;
  * 2. 智能深度归因流失漏斗：前 3 秒流失 (HOOK_FATIGUE)、转化无力 (CTA_INEFFECTIVE) 或审美疲劳 (AUDIENCE_FATIGUE)；
  * 3. 驱动 Prompt Self-Refine：针对性重写黄金 3 秒痛点分镜与结尾紧迫感 CTA；
  * 4. 自动化调用 StudioProjectService 重构分镜工程并导出 CapCut 标准 4 轨道草稿包；
- * 5. 防失控熔断机制 (Runaway Guardrail)：单素材 24 小时内最多允许 3 次自治迭代。
+ * 5. 自动向 AdLearningRuleEngine 注册探索期小额预算 AB 实验规则，并持久化至 creative_agent_action 表；
+ * 6. 防失控熔断机制 (Runaway Guardrail)：单租户单素材 24 小时内最多允许 3 次自治迭代。
  */
 @Service
 public class CreativeAutonomousAgentService {
@@ -40,43 +44,82 @@ public class CreativeAutonomousAgentService {
 
     private final StudioProjectService studioProjectService;
     private final AiOrchestratorService aiOrchestratorService;
+    private final AdLearningRuleEngine adLearningRuleEngine;
+    private final CreativeAgentActionMapper actionMapper;
 
     // 历史诊断记录：materialId -> 诊断历史
     private final ConcurrentMap<String, List<CreativeAgentDiagnosis>> diagnosisHistory = new ConcurrentHashMap<>();
     // 历史调优执行流水：actionId -> Action
     private final ConcurrentMap<String, CreativeAgentAction> actionStore = new ConcurrentHashMap<>();
-    // 素材维度的优化时间戳记录 (用于频控)：materialId -> [Timestamps]
+    // 租户+素材维度的优化时间戳记录 (用于频控)："tenantId:materialId" -> [Timestamps]
     private final ConcurrentMap<String, List<Instant>> materialOptimizationTimestamps = new ConcurrentHashMap<>();
 
     @Autowired
     public CreativeAutonomousAgentService(
             @Autowired(required = false) StudioProjectService studioProjectService,
-            @Autowired(required = false) AiOrchestratorService aiOrchestratorService
+            @Autowired(required = false) AiOrchestratorService aiOrchestratorService,
+            @Autowired(required = false) AdLearningRuleEngine adLearningRuleEngine,
+            @Autowired(required = false) CreativeAgentActionMapper actionMapper
     ) {
         this.studioProjectService = studioProjectService;
         this.aiOrchestratorService = aiOrchestratorService;
+        this.adLearningRuleEngine = adLearningRuleEngine;
+        this.actionMapper = actionMapper;
+        preloadFromDatabase();
+    }
+
+    public CreativeAutonomousAgentService(
+            StudioProjectService studioProjectService,
+            AiOrchestratorService aiOrchestratorService
+    ) {
+        this(studioProjectService, aiOrchestratorService, null, null);
     }
 
     public CreativeAutonomousAgentService(StudioProjectService studioProjectService) {
-        this(studioProjectService, null);
+        this(studioProjectService, null, null, null);
     }
 
     public CreativeAutonomousAgentService() {
-        this(null, null);
+        this(null, null, null, null);
+    }
+
+    private void preloadFromDatabase() {
+        if (actionMapper != null) {
+            try {
+                List<CreativeAgentActionEntity> entities = actionMapper.selectList(null);
+                if (entities != null) {
+                    for (CreativeAgentActionEntity e : entities) {
+                        CreativeAgentAction.ActionStatus status;
+                        try {
+                            status = CreativeAgentAction.ActionStatus.valueOf(e.getStatus());
+                        } catch (Exception ex) {
+                            status = CreativeAgentAction.ActionStatus.DIAGNOSED;
+                        }
+                        CreativeAgentAction action = new CreativeAgentAction(
+                                e.getActionId(),
+                                e.getTenantId(),
+                                e.getMaterialId(),
+                                e.getOriginalProjectId(),
+                                e.getNewProjectId(),
+                                e.getRevisedPrompt(),
+                                e.getRefinedOpeningHook(),
+                                e.getRefinedCta(),
+                                e.getCapcutDraftPath(),
+                                status,
+                                e.getExecutionLog(),
+                                e.getCreatedAt() != null ? e.getCreatedAt() : Instant.now()
+                        );
+                        actionStore.put(action.actionId(), action);
+                    }
+                }
+            } catch (Exception e) {
+                log.debug("[CreativeAutonomousAgentService] DB preload skipped: {}", e.getMessage());
+            }
+        }
     }
 
     /**
      * 对低质或衰退素材执行端到端自治诊断与闭环重构
-     *
-     * @param tenantId      租户 ID
-     * @param materialId    素材 ID
-     * @param currentLevel  当前质量等级
-     * @param dropOff3s     前 3 秒跳出流失率 (0.0 ~ 1.0)
-     * @param ctr           点击率 (0.0 ~ 1.0)
-     * @param cvr           转化率 (0.0 ~ 1.0)
-     * @param roi           当前投产比
-     * @param originalPrompt 原始制作提示词/剧本
-     * @return 自治调优执行快照
      */
     public CreativeAgentAction triggerAutonomousOptimization(
             String tenantId,
@@ -89,9 +132,10 @@ public class CreativeAutonomousAgentService {
             String originalPrompt
     ) {
         String effectiveTenant = (tenantId != null && !tenantId.isBlank()) ? tenantId : "default";
+        String rateLimitKey = effectiveTenant + ":" + materialId;
 
         // 1. 执行防失控频控检查 (Rate Limiting Check)
-        if (isRateLimited(materialId)) {
+        if (isRateLimited(rateLimitKey)) {
             String actionId = UUID.randomUUID().toString();
             CreativeAgentAction limitedAction = new CreativeAgentAction(
                     actionId,
@@ -107,7 +151,7 @@ public class CreativeAutonomousAgentService {
                     "24h 内自治优化次数已达上限 (" + MAX_DAILY_OPTIMIZATIONS + " 次)，触发防失控熔断保护",
                     Instant.now()
             );
-            actionStore.put(actionId, limitedAction);
+            persistAction(limitedAction);
             log.warn("Creative agent optimization rate-limited for material: {}", materialId);
             return limitedAction;
         }
@@ -122,7 +166,7 @@ public class CreativeAutonomousAgentService {
         RefinedScript refinedScript = refinePromptAndScript(diagnosis.primaryIssue(), originalPrompt, effectiveTenant, materialId);
 
         String actionId = UUID.randomUUID().toString();
-        recordOptimizationTimestamp(materialId);
+        recordOptimizationTimestamp(rateLimitKey);
 
         String newProjectId = null;
         String capcutPath = null;
@@ -141,7 +185,7 @@ public class CreativeAutonomousAgentService {
                         "TIKTOK",
                         "FEED",
                         "DYNAMIC",
-                        "kling_v1"
+                        "ark_seedance_2_0"
                 );
 
                 StudioProject createdProject = studioProjectService.createProject(effectiveTenant, createReq);
@@ -155,10 +199,21 @@ public class CreativeAutonomousAgentService {
                     if (exportResult != null && exportResult.draftUrl() != null && !exportResult.draftUrl().isBlank()) {
                         capcutPath = exportResult.draftUrl();
                         finalStatus = CreativeAgentAction.ActionStatus.COMPLETED;
-                        logBuilder.append("已自动生成新工程 ").append(newProjectId).append(" 并成功导出剪映 4 轨道草稿包");
+                        logBuilder.append("已自动生成新工程 ").append(newProjectId).append(" 并成功导出剪映 4 轨道草稿包; ");
                     } else {
                         finalStatus = CreativeAgentAction.ActionStatus.PROJECT_REGENERATED;
-                        logBuilder.append("新工程已生成，草稿导出降级");
+                        logBuilder.append("新工程已生成，草稿导出降级; ");
+                    }
+
+                    // 5. 自动注入广告学习期小额 AB 实验规则
+                    if (adLearningRuleEngine != null) {
+                        adLearningRuleEngine.registerLearningExperiment(
+                                effectiveTenant,
+                                newProjectId,
+                                "AutoAB_" + materialId,
+                                "TIKTOK"
+                        );
+                        logBuilder.append("已注入学习期 AB 探索规则");
                     }
                 }
             } catch (Exception e) {
@@ -184,10 +239,36 @@ public class CreativeAutonomousAgentService {
                 Instant.now()
         );
 
-        actionStore.put(actionId, action);
+        persistAction(action);
         log.info("Creative agent successfully executed autonomous action: id={}, materialId={}, status={}",
                 actionId, materialId, finalStatus);
         return action;
+    }
+
+    private void persistAction(CreativeAgentAction action) {
+        actionStore.put(action.actionId(), action);
+        if (actionMapper != null) {
+            try {
+                CreativeAgentActionEntity entity = new CreativeAgentActionEntity(
+                        null,
+                        action.actionId(),
+                        action.tenantId(),
+                        action.materialId(),
+                        action.originalProjectId(),
+                        action.newProjectId(),
+                        action.revisedPrompt(),
+                        action.refinedOpeningHook(),
+                        action.refinedCta(),
+                        action.capCutDraftPath(),
+                        action.status() != null ? action.status().name() : "DIAGNOSED",
+                        action.executionLog(),
+                        action.createdAt() != null ? action.createdAt() : Instant.now()
+                );
+                actionMapper.insert(entity);
+            } catch (Exception e) {
+                log.debug("[CreativeAutonomousAgentService] Persist action skipped: {}", e.getMessage());
+            }
+        }
     }
 
     /**
@@ -211,7 +292,7 @@ public class CreativeAutonomousAgentService {
         } else if (cvr < 0.015 && ctr >= 0.02) {
             type = CreativeAgentDiagnosis.DiagnosisType.CTA_INEFFECTIVE;
             analysis = String.format(Locale.ROOT, "中段点击率达 %.2f%%，但后端转化仅 %.2f%%，结尾行动号召（CTA）缺乏紧迫利益点", ctr * 100, cvr * 100);
-        } else if (roi.compareTo(BigDecimal.valueOf(0.60)) < 0 && dropOff3s < 0.50) {
+        } else if (roi != null && roi.compareTo(BigDecimal.valueOf(0.60)) < 0 && dropOff3s < 0.50) {
             type = CreativeAgentDiagnosis.DiagnosisType.COST_OVERRUN;
             analysis = String.format(Locale.ROOT, "播放完成度尚可但投产比仅 %s，单次转化成本过高，需重塑核心卖点说服力", roi);
         } else if (level == MaterialQualityLevel.BLACKHOLE) {
@@ -251,7 +332,33 @@ public class CreativeAutonomousAgentService {
     ) {
         String cleanBase = (basePrompt != null && !basePrompt.isBlank()) ? basePrompt.trim() : "Premium Modern Lifestyle Product";
 
-        // 1. 优先尝试大模型自主推理自省重构
+        // 1. 计算启发式基线 Hook & CTA
+        String heuristicHook;
+        String heuristicCta;
+        switch (issue != null ? issue : CreativeAgentDiagnosis.DiagnosisType.UNKNOWN_DECLINE) {
+            case HOOK_FATIGUE -> {
+                heuristicHook = "Wait! Stop scrolling right now! If you struggle with daily frustration, this one gadget changes everything in 3 seconds.";
+                heuristicCta = "Tap the link below before the 50% flash discount expires tonight!";
+            }
+            case CTA_INEFFECTIVE -> {
+                heuristicHook = "Everyone is talking about this viral secret...";
+                heuristicCta = "EXCLUSIVE DEAL: Only 37 units left at this price! Claim your VIP discount package right now before it's gone!";
+            }
+            case COST_OVERRUN -> {
+                heuristicHook = "Why pay $200 when you can get the exact same premium quality for under $30?";
+                heuristicCta = "Try it 100% risk-free with a 30-day money-back guarantee. Order yours today!";
+            }
+            case AUDIENCE_FATIGUE -> {
+                heuristicHook = "You've never seen it from this perspective before - the game changer of 2026.";
+                heuristicCta = "Join over 100,000 satisfied users. Click install to start your free trial!";
+            }
+            default -> {
+                heuristicHook = "Here is the ultimate solution you've been searching for.";
+                heuristicCta = "Limited time offer - click here to get yours now!";
+            }
+        }
+
+        // 2. 优先尝试大模型自主推理自省重构
         if (aiOrchestratorService != null) {
             try {
                 String aiDiagnosis = aiOrchestratorService.diagnoseCreativeWithAi(
@@ -262,9 +369,10 @@ public class CreativeAutonomousAgentService {
                         cleanBase
                 );
                 if (aiDiagnosis != null && !aiDiagnosis.isBlank()) {
-                    String hook = "Wait! Stop scrolling right now! If you struggle with daily frustration, this one gadget changes everything in 3 seconds.";
-                    String cta = "Tap the link below before the 50% flash discount expires tonight!";
-                    String revisedPrompt = cleanBase + " | [AI_REFINED_DIRECTIVE: " + aiDiagnosis.replaceAll("\\s+", " ") + "]";
+                    String compactAi = aiDiagnosis.replaceAll("\\s+", " ").trim();
+                    String hook = heuristicHook + " [" + compactAi.substring(0, Math.min(80, compactAi.length())) + "]";
+                    String cta = heuristicCta;
+                    String revisedPrompt = cleanBase + " | [REFINED_HOOK: " + hook + "] | [HIGH_CONVERTING_CTA: " + cta + "] | [AI_REFINED_DIRECTIVE: " + compactAi + "]";
                     return new RefinedScript(hook, cta, revisedPrompt);
                 }
             } catch (Exception e) {
@@ -272,39 +380,12 @@ public class CreativeAutonomousAgentService {
             }
         }
 
-        // 2. 确定性领域启发式规则兜底
-        String hook;
-        String cta;
-
-        switch (issue) {
-            case HOOK_FATIGUE -> {
-                hook = "Wait! Stop scrolling right now! If you struggle with daily frustration, this one gadget changes everything in 3 seconds.";
-                cta = "Tap the link below before the 50% flash discount expires tonight!";
-            }
-            case CTA_INEFFECTIVE -> {
-                hook = "Everyone is talking about this viral secret...";
-                cta = "EXCLUSIVE DEAL: Only 37 units left at this price! Claim your VIP discount package right now before it's gone!";
-            }
-            case COST_OVERRUN -> {
-                hook = "Why pay $200 when you can get the exact same premium quality for under $30?";
-                cta = "Try it 100% risk-free with a 30-day money-back guarantee. Order yours today!";
-            }
-            case AUDIENCE_FATIGUE -> {
-                hook = "You've never seen it from this perspective before - the game changer of 2026.";
-                cta = "Join over 100,000 satisfied users. Click install to start your free trial!";
-            }
-            default -> {
-                hook = "Here is the ultimate solution you've been searching for.";
-                cta = "Limited time offer - click here to get yours now!";
-            }
-        }
-
         String revisedPrompt = String.format(
                 "%s | [REFINED_HOOK: %s] | [HIGH_CONVERTING_CTA: %s] | VisualStyle: Dynamic Cinematic Lighting, 4k Ultra-Sharp, Fast Paced Cuts",
-                cleanBase, hook, cta
+                cleanBase, heuristicHook, heuristicCta
         );
 
-        return new RefinedScript(hook, cta, revisedPrompt);
+        return new RefinedScript(heuristicHook, heuristicCta, revisedPrompt);
     }
 
     /**
@@ -325,9 +406,9 @@ public class CreativeAutonomousAgentService {
         return "High converting ad copy for " + productName + ": Special discount for " + targetAudience;
     }
 
-    private boolean isRateLimited(String materialId) {
-        if (materialId == null) return false;
-        List<Instant> timestamps = materialOptimizationTimestamps.get(materialId);
+    private boolean isRateLimited(String rateLimitKey) {
+        if (rateLimitKey == null) return false;
+        List<Instant> timestamps = materialOptimizationTimestamps.get(rateLimitKey);
         if (timestamps == null || timestamps.isEmpty()) {
             return false;
         }
@@ -336,12 +417,11 @@ public class CreativeAutonomousAgentService {
         return recentCount >= MAX_DAILY_OPTIMIZATIONS;
     }
 
-    private void recordOptimizationTimestamp(String materialId) {
-        if (materialId == null) return;
-        materialOptimizationTimestamps.compute(materialId, (k, list) -> {
+    private void recordOptimizationTimestamp(String rateLimitKey) {
+        if (rateLimitKey == null) return;
+        materialOptimizationTimestamps.compute(rateLimitKey, (k, list) -> {
             List<Instant> updated = (list == null) ? new ArrayList<>() : new ArrayList<>(list);
             updated.add(Instant.now());
-            // 清理 24 小时之前的旧记录
             Instant cutoff = Instant.now().minus(24, ChronoUnit.HOURS);
             updated.removeIf(t -> t.isBefore(cutoff));
             return updated;
@@ -353,8 +433,28 @@ public class CreativeAutonomousAgentService {
         return list != null ? new ArrayList<>(list) : List.of();
     }
 
+    public List<CreativeAgentDiagnosis> getDiagnosisHistory(String tenantId, String materialId) {
+        List<CreativeAgentDiagnosis> list = getDiagnosisHistory(materialId);
+        if (tenantId == null || tenantId.isBlank()) {
+            return list;
+        }
+        return list.stream()
+                .filter(d -> tenantId.equals(d.tenantId()) || "default".equals(d.tenantId()))
+                .toList();
+    }
+
     public Optional<CreativeAgentAction> getAction(String actionId) {
         return Optional.ofNullable(actionStore.get(actionId));
+    }
+
+    public List<CreativeAgentAction> listActions(String tenantId) {
+        String effectiveTenant = (tenantId != null && !tenantId.isBlank()) ? tenantId : "default";
+        return actionStore.values().stream()
+                .filter(a -> effectiveTenant.equals(a.tenantId())
+                        || ("default".equals(effectiveTenant) && "public".equals(a.tenantId()))
+                        || ("public".equals(effectiveTenant) && "default".equals(a.tenantId())))
+                .sorted(Comparator.comparing(CreativeAgentAction::createdAt).reversed())
+                .toList();
     }
 
     public void clear() {

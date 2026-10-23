@@ -1,5 +1,6 @@
 package com.affiliate.platform.tenant.system;
 
+import com.affiliate.platform.tenant.TenantContext;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -21,6 +22,14 @@ public class SystemConfigController {
     public SystemConfigController(S3StorageConfigService s3Service, TrackingDomainService domainService) {
         this.s3Service = s3Service;
         this.domainService = domainService;
+    }
+
+    private String resolveTenant(Map<String, Object> body) {
+        if (body != null && body.get("tenantId") instanceof String tid && !tid.isBlank()) {
+            return tid;
+        }
+        String ctx = TenantContext.get();
+        return (ctx != null && !ctx.isBlank()) ? ctx : "tenant-1";
     }
 
     // ==========================================
@@ -48,7 +57,7 @@ public class SystemConfigController {
 
         S3StorageConfig config = new S3StorageConfig(
                 id,
-                "tenant-1",
+                resolveTenant(body),
                 name,
                 S3StorageConfig.Provider.valueOf(providerStr),
                 region,
@@ -100,7 +109,7 @@ public class SystemConfigController {
 
         TrackingDomain item = new TrackingDomain(
                 id,
-                "tenant-1",
+                resolveTenant(body),
                 domain,
                 TrackingDomain.DomainType.valueOf(typeStr),
                 cnameTarget,

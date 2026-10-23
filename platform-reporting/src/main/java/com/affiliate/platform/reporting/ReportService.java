@@ -5,7 +5,6 @@ import com.affiliate.platform.cache.TwoTierCacheManager;
 import com.affiliate.platform.entity.ReportDailyEntity;
 import com.affiliate.platform.mapper.ReportDailyMapper;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
-import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 import com.affiliate.platform.reporting.olap.OlapReportingEngine;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
@@ -19,10 +18,6 @@ import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * 广告报表多维聚合统计服务 (Reporting OLAP Aggregation Service)
- * <p>
- * 负责按租户、日期、活动等多维度实时累计广告曝光量、点击量、转化量、广告消耗与平台营收，
- * 并提供全套核心衍生指标（CTR、CVR、eCPM、eCPC、CPA、毛利与 ROI）的实时计算。
- * 存储层基于 MyBatis-Plus `ReportDailyMapper` 执行聚合持久化，读取层通过 Guava + Redis 两级缓存加速。
  */
 @Service
 public class ReportService {
@@ -48,6 +43,10 @@ public class ReportService {
         this(null, null);
     }
 
+    public void setOlapEngine(OlapReportingEngine olapEngine) {
+        this.olapEngine = olapEngine;
+    }
+
     /**
      * 增量原子累加一笔业务效果与资金流水
      */
@@ -62,6 +61,10 @@ public class ReportService {
             BigDecimal revenue
     ) {
         String key = tenantId + ":" + date + ":" + campaignId;
+
+        if (olapEngine != null) {
+            olapEngine.ingestFact(tenantId, date, campaignId, "all", "", "", "", clicks, conversions, spend, revenue);
+        }
 
         if (reportMapper != null) {
             ReportDailyEntity delta = new ReportDailyEntity(
@@ -81,9 +84,6 @@ public class ReportService {
 
             if (cache != null) {
                 cache.put(key, result);
-            }
-            if (olapEngine != null) {
-                olapEngine.ingestFact(tenantId, date, campaignId, "all", "", "", "", clicks, conversions, spend, revenue);
             }
             return result;
         }

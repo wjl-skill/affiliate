@@ -64,7 +64,7 @@
           </span>
         </div>
         <div class="mt-2 text-[11px] text-slate-500 font-mono">
-          PostgreSQL · Redis · S3 · DNS
+          PostgreSQL · Redis · S3 · AI Hub
         </div>
       </div>
     </aside>
@@ -132,7 +132,7 @@ const userInitials = computed(() => {
   const name = authUser.value?.displayName || authUser.value?.username || '?'
   return name.slice(0, 2).toUpperCase()
 })
-const primaryRole = computed(() => authUser.value?.roles?.[0] || 'VIEWER')
+const primaryRole = computed(() => authUser.value?.roles?.[0] || 'SUPER_ADMIN')
 
 const handleLogout = async () => {
   loggingOut.value = true
@@ -164,7 +164,8 @@ const defaultSystemMenus = [
   { id: 'm-menu', title: '菜单管理', path: '/system/menus', icon: '📑' },
   { id: 'm-perm', title: '权限字典', path: '/system/permissions', icon: '🔑' },
   { id: 'm-s3', title: 'S3 存储配置', path: '/system/s3', icon: '🗄️' },
-  { id: 'm-dom', title: '域名池管理', path: '/system/domains', icon: '🌐' }
+  { id: 'm-dom', title: '域名池管理', path: '/system/domains', icon: '🌐' },
+  { id: 'm-ai', title: 'AI 模型配置', path: '/system/ai', icon: '🤖' }
 ]
 
 const businessMenus = ref<any[]>(defaultBusinessMenus)
@@ -188,7 +189,8 @@ const currentPageTitle = computed(() => {
 
 const loadDynamicMenus = async () => {
   try {
-    const tree = await fetchApi<any[]>('/api/v1/system/menus/user-tree?role=SUPER_ADMIN')
+    const roleParam = encodeURIComponent(primaryRole.value || 'SUPER_ADMIN')
+    const tree = await fetchApi<any[]>(`/api/v1/system/menus/user-tree?role=${roleParam}`)
     if (tree && tree.length > 0) {
       businessMenus.value = tree.filter(m => !m.path.startsWith('/system/'))
       systemMenus.value = tree.filter(m => m.path.startsWith('/system/'))

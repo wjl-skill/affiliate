@@ -213,6 +213,9 @@ public class AffiliateAdminController {
             );
         }
         smartLinks.put(link.id(), link);
+        if (tdsRouter != null) {
+            tdsRouter.registerSmartLink(link);
+        }
         if (smartLinkMapper != null) {
             SmartLinkEntity entity = new SmartLinkEntity(
                     link.id(),

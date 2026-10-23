@@ -39,6 +39,8 @@ public class MybatisPlusConfig {
             "affiliate_invoice",
             "affiliate_sub_id_stats",
             "affiliate_offer_goal",
+            "affiliate_offer_tier_payout",
+            "affiliate_skan_postback",
             "affiliate_antifraud_blacklist",
             "affiliate_antifraud_audit_log",
             "billing_entry",
@@ -51,6 +53,15 @@ public class MybatisPlusConfig {
             "auction",
             "partner_connection",
             "budget_reservation",
+            "dsp_ad_group",
+            "dsp_bid_strategy",
+            "dsp_dynamic_creative_template",
+            "adx_deal",
+            "adx_publisher_app",
+            "adx_supply_endpoint",
+            "adx_consent_audit_log",
+            "attribution_touchpoint",
+            "conversion_attribution_result",
             "cdp_profile",
             "cdp_customer_event",
             "cdp_identity_graph",
@@ -61,7 +72,8 @@ public class MybatisPlusConfig {
             "report_cohort_acquisition",
             "report_cohort_activity",
             "wallet_account",
-            "api_key"
+            "api_key",
+            "audit_event"
     );
 
     /**
@@ -111,4 +123,3 @@ public class MybatisPlusConfig {
         return interceptor;
     }
 }
-

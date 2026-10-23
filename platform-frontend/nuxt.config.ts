@@ -34,13 +34,16 @@ export default defineNuxtConfig({
       '/api/**': {
         proxy: 'http://localhost:8080/api/**'
       },
-      // 点击追踪与 S2S Postback 回传链路不在 /api 前缀内，需同样代理到后端；
-      // 仅精确匹配这两个后端端点，避免吞掉 /affiliate/macros、/affiliate/anti-fraud 等前端页面路由
+      // 点击追踪、S2S Postback 与 SKAN 4.0 回传链路不在 /api 前缀内，需同样代理到后端；
+      // 仅精确匹配这些后端端点，避免吞掉 /affiliate/macros、/affiliate/anti-fraud 等前端页面路由
       '/affiliate/click': {
         proxy: 'http://localhost:8080/affiliate/click'
       },
       '/affiliate/postback': {
         proxy: 'http://localhost:8080/affiliate/postback'
+      },
+      '/affiliate/skan/**': {
+        proxy: 'http://localhost:8080/affiliate/skan/**'
       }
     }
   }

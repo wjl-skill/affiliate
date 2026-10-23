@@ -24,15 +24,6 @@ import java.time.LocalDate;
 
 /**
  * 渠道推广点击接收控制器 (Affiliate Click Inbound Controller)
- * <p>
- * 接收形如：
- * `GET /affiliate/click?offer_id=101&aff_id=202&sub1=fb&sub2=campaign_a`
- * 或 SmartLink 分流链接：
- * `GET /affiliate/click?smartlink_id=sl_101&aff_id=202&sub1=fb`
- * 1. 验证 Offer 有效性及 Cap 配额，如超限自动路由至 Fallback Offer；SmartLink 则经 TDS 引擎优选候选；
- * 2. 拦截单 IP 泛洪点击；
- * 3. 沉淀会话存根，记录 Sub-ID 流式报表；
- * 4. 执行 HTTP 302 重定向至广告主落地页。
  */
 @RestController
 public class AffiliateClickController {
@@ -132,25 +123,27 @@ public class AffiliateClickController {
     }
 
     private SmartLink findSmartLink(String smartLinkId) {
-        if (smartLinkMapper == null) {
-            return null;
+        if (smartLinkMapper != null) {
+            try {
+                SmartLinkEntity entity = smartLinkMapper.selectById(smartLinkId);
+                if (entity != null) {
+                    return new SmartLink(
+                            entity.getId(),
+                            entity.getTenantId(),
+                            entity.getName(),
+                            entity.getCategory(),
+                            entity.getTargetOfferIds() != null ? entity.getTargetOfferIds() : java.util.List.of(),
+                            entity.getRoutingStrategy() != null
+                                    ? SmartLink.RoutingStrategy.valueOf(entity.getRoutingStrategy())
+                                    : SmartLink.RoutingStrategy.HIGHEST_EPC,
+                            entity.getFallbackOfferId(),
+                            entity.getCreatedAt()
+                    );
+                }
+            } catch (Exception ignored) {
+            }
         }
-        SmartLinkEntity entity = smartLinkMapper.selectById(smartLinkId);
-        if (entity == null) {
-            return null;
-        }
-        return new SmartLink(
-                entity.getId(),
-                entity.getTenantId(),
-                entity.getName(),
-                entity.getCategory(),
-                entity.getTargetOfferIds() != null ? entity.getTargetOfferIds() : java.util.List.of(),
-                entity.getRoutingStrategy() != null
-                        ? SmartLink.RoutingStrategy.valueOf(entity.getRoutingStrategy())
-                        : SmartLink.RoutingStrategy.HIGHEST_EPC,
-                entity.getFallbackOfferId(),
-                entity.getCreatedAt()
-        );
+        return tdsRouter != null ? tdsRouter.findSmartLink(smartLinkId).orElse(null) : null;
     }
 
     private String resolveClientIp(HttpServletRequest request) {

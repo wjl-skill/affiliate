@@ -22,13 +22,6 @@ import java.util.concurrent.ConcurrentMap;
 
 /**
  * 留存率与用户生命周期价值 (LTV) 队列衰减分析服务 (Cohort Retention & LTV Analysis Service)
- * <p>
- * 商业级网盟与买量增长平台标配能力（参考 Singular, Adjust, AppsFlyer）：
- * 1. 按用户初始获客日期 (Cohort Acquisition Date) 对新增人群分群；
- * 2. 追踪 D1, D3, D7, D14, D30 滚动留存率衰减曲线；
- * 3. 追踪 D0~D30 累积 LTV (Lifetime Value) 增长曲线与单客获客成本 (CAC)；
- * 4. 自动计算投资回收周期 (Payback Period) 与 D30 回本投资回报率 (ROAS/ROI)；
- * 5. 全量异步接入 PostgreSQL `report_cohort_acquisition` 与 `report_cohort_activity` 存储。
  */
 @Service
 public class CohortAnalysisService {
@@ -62,6 +55,7 @@ public class CohortAnalysisService {
     ) {}
 
     private record UserAcquisition(
+            String tenantId,
             String userId,
             LocalDate cohortDate,
             BigDecimal cost
@@ -91,21 +85,31 @@ public class CohortAnalysisService {
         this(null, null);
     }
 
+    private String userKey(String tenantId, String userId) {
+        return (tenantId != null ? tenantId : "public") + ":" + userId;
+    }
+
     /**
      * 登记用户初始转化获客
      */
     public void recordAcquisition(String userId, LocalDate cohortDate, BigDecimal cost) {
         if (userId == null || cohortDate == null) return;
+        String currentTenant = tenant();
         BigDecimal effectiveCost = cost == null ? BigDecimal.ZERO : cost;
         if (acquisitionMapper != null) {
             LambdaQueryWrapper<ReportCohortAcquisitionEntity> query = new LambdaQueryWrapper<ReportCohortAcquisitionEntity>()
-                    .eq(ReportCohortAcquisitionEntity::getTenantId, tenant()).eq(ReportCohortAcquisitionEntity::getUserId, userId)
+                    .eq(ReportCohortAcquisitionEntity::getTenantId, currentTenant)
+                    .eq(ReportCohortAcquisitionEntity::getUserId, userId)
                     .eq(ReportCohortAcquisitionEntity::getCohortDate, cohortDate);
             ReportCohortAcquisitionEntity existing = acquisitionMapper.selectOne(query);
-            if (existing == null) acquisitionMapper.insert(new ReportCohortAcquisitionEntity(UUID.randomUUID().toString(), tenant(), userId, cohortDate, effectiveCost, Instant.now()));
-            else { existing.setCost(effectiveCost); acquisitionMapper.updateById(existing); }
+            if (existing == null) {
+                acquisitionMapper.insert(new ReportCohortAcquisitionEntity(UUID.randomUUID().toString(), currentTenant, userId, cohortDate, effectiveCost, Instant.now()));
+            } else {
+                existing.setCost(effectiveCost);
+                acquisitionMapper.updateById(existing);
+            }
         }
-        acquisitions.put(userId, new UserAcquisition(userId, cohortDate, effectiveCost));
+        acquisitions.put(userKey(currentTenant, userId), new UserAcquisition(currentTenant, userId, cohortDate, effectiveCost));
     }
 
     /**
@@ -113,11 +117,13 @@ public class CohortAnalysisService {
      */
     public void recordActivity(String userId, LocalDate activityDate, BigDecimal revenue) {
         if (userId == null || activityDate == null) return;
+        String currentTenant = tenant();
         BigDecimal effectiveRevenue = revenue == null ? BigDecimal.ZERO : revenue;
         if (activityMapper != null) {
-            activityMapper.insert(new ReportCohortActivityEntity(UUID.randomUUID().toString(), tenant(), userId, activityDate, effectiveRevenue, Instant.now()));
+            activityMapper.insert(new ReportCohortActivityEntity(UUID.randomUUID().toString(), currentTenant, userId, activityDate, effectiveRevenue, Instant.now()));
         }
-        activities.computeIfAbsent(userId, k -> Collections.synchronizedList(new ArrayList<>())).add(new UserActivity(activityDate, effectiveRevenue));
+        activities.computeIfAbsent(userKey(currentTenant, userId), k -> Collections.synchronizedList(new ArrayList<>()))
+                .add(new UserActivity(activityDate, effectiveRevenue));
     }
 
     /**
@@ -126,26 +132,38 @@ public class CohortAnalysisService {
     public CohortMatrix generateMatrix(LocalDate from, LocalDate to) {
         LocalDate start = from == null ? LocalDate.now().minusDays(30) : from;
         LocalDate end = to == null ? LocalDate.now() : to;
+        String currentTenant = tenant();
 
-        // 若本地内存为空且已接入数据库，则从 PostgreSQL 自动回源加载指定区间数据
+        // 若已接入数据库，则从 PostgreSQL 幂等同步指定区间数据（先清理对应 userKey 历史列表防止重复叠加）
         if (acquisitionMapper != null) {
             try {
                 LambdaQueryWrapper<ReportCohortAcquisitionEntity> acqQuery = new LambdaQueryWrapper<>();
-                acqQuery.eq(ReportCohortAcquisitionEntity::getTenantId, tenant()).ge(ReportCohortAcquisitionEntity::getCohortDate, start)
+                acqQuery.eq(ReportCohortAcquisitionEntity::getTenantId, currentTenant)
+                        .ge(ReportCohortAcquisitionEntity::getCohortDate, start)
                         .le(ReportCohortAcquisitionEntity::getCohortDate, end);
                 List<ReportCohortAcquisitionEntity> dbAcqs = acquisitionMapper.selectList(acqQuery);
                 for (ReportCohortAcquisitionEntity e : dbAcqs) {
-                    acquisitions.put(e.getUserId(), new UserAcquisition(e.getUserId(), e.getCohortDate(), e.getCost()));
+                    acquisitions.put(userKey(currentTenant, e.getUserId()),
+                            new UserAcquisition(currentTenant, e.getUserId(), e.getCohortDate(), e.getCost()));
                 }
 
                 if (activityMapper != null && !dbAcqs.isEmpty()) {
                     List<String> userIds = dbAcqs.stream().map(ReportCohortAcquisitionEntity::getUserId).toList();
+                    for (String uid : userIds) {
+                        activities.remove(userKey(currentTenant, uid));
+                    }
                     LambdaQueryWrapper<ReportCohortActivityEntity> actQuery = new LambdaQueryWrapper<>();
-                    actQuery.eq(ReportCohortActivityEntity::getTenantId, tenant()).in(ReportCohortActivityEntity::getUserId, userIds);
+                    actQuery.eq(ReportCohortActivityEntity::getTenantId, currentTenant)
+                            .in(ReportCohortActivityEntity::getUserId, userIds);
                     List<ReportCohortActivityEntity> dbActs = activityMapper.selectList(actQuery);
                     for (ReportCohortActivityEntity act : dbActs) {
-                        List<UserActivity> values = activities.computeIfAbsent(act.getUserId(), k -> Collections.synchronizedList(new ArrayList<>()));
-                        synchronized (values) { values.add(new UserActivity(act.getActivityDate(), act.getRevenue())); }
+                        List<UserActivity> values = activities.computeIfAbsent(
+                                userKey(currentTenant, act.getUserId()),
+                                k -> Collections.synchronizedList(new ArrayList<>())
+                        );
+                        synchronized (values) {
+                            values.add(new UserActivity(act.getActivityDate(), act.getRevenue()));
+                        }
                     }
                 }
             } catch (Exception e) {
@@ -153,13 +171,15 @@ public class CohortAnalysisService {
             }
         }
 
-        // 1. 过滤在日期区间内的获客用户
+        // 1. 过滤当前租户且在日期区间内的获客用户
         Map<LocalDate, List<UserAcquisition>> byCohortDate = new TreeMap<>();
         long totalUsers = 0;
         BigDecimal totalSpend = BigDecimal.ZERO;
 
         for (UserAcquisition acq : acquisitions.values()) {
-            if (!acq.cohortDate().isBefore(start) && !acq.cohortDate().isAfter(end)) {
+            if (currentTenant.equals(acq.tenantId())
+                    && !acq.cohortDate().isBefore(start)
+                    && !acq.cohortDate().isAfter(end)) {
                 byCohortDate.computeIfAbsent(acq.cohortDate(), k -> new ArrayList<>()).add(acq);
                 totalUsers++;
                 totalSpend = totalSpend.add(acq.cost());
@@ -187,7 +207,7 @@ public class CohortAnalysisService {
                 // D0 自动包含所有初始获客
                 activeUsersByDay.get(0).add(u.userId());
 
-                List<UserActivity> acts = activities.get(u.userId());
+                List<UserActivity> acts = activities.get(userKey(currentTenant, u.userId()));
                 if (acts != null) {
                     synchronized (acts) {
                         for (UserActivity act : acts) {

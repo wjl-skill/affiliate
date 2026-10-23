@@ -20,4 +20,15 @@ public interface AdLearningRuleEngine {
             Integer timeDaysThreshold,
             BigDecimal costThreshold
     );
+
+    /**
+     * 为新生成的自治素材或测试工程注册小额探索期 AB 实验规则
+     */
+    default void registerLearningExperiment(
+            String tenantId,
+            String entityId,
+            String entityName,
+            String channelCode
+    ) {
+    }
 }

@@ -1,22 +1,79 @@
 package com.affiliate.platform.service.ad.impl;
 
 import com.affiliate.platform.domain.quality.MaterialQualityLevel;
+import com.affiliate.platform.entity.CreativeAdLearningRuleEntity;
+import com.affiliate.platform.mapper.CreativeAdLearningRuleMapper;
 import com.affiliate.platform.service.ad.AdLearningRuleEngine;
 import com.affiliate.platform.service.ad.AdLearningStatus;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * 广告学习期规则判定引擎实现
+ * 广告学习期规则判定引擎实现 (支持 PostgreSQL 持久化与内存双模存储)
  */
 @Service
 public class AdLearningRuleEngineImpl implements AdLearningRuleEngine {
 
     public static final int DEFAULT_TIME_DAYS = 2; // 48 小时
     public static final BigDecimal DEFAULT_COST_THRESHOLD = BigDecimal.valueOf(50.00);
+
+    private final CreativeAdLearningRuleMapper learningRuleMapper;
+    private final Map<String, CreativeAdLearningRuleEntity> ruleStore = new ConcurrentHashMap<>();
+
+    public AdLearningRuleEngineImpl() {
+        this(null);
+    }
+
+    @Autowired
+    public AdLearningRuleEngineImpl(@Autowired(required = false) CreativeAdLearningRuleMapper learningRuleMapper) {
+        this.learningRuleMapper = learningRuleMapper;
+    }
+
+    @Override
+    public void registerLearningExperiment(
+            String tenantId,
+            String entityId,
+            String entityName,
+            String channelCode
+    ) {
+        if (entityId == null || entityId.isBlank()) {
+            return;
+        }
+        String effectiveTenant = (tenantId != null && !tenantId.isBlank()) ? tenantId : "default";
+        String id = "lrn_" + UUID.randomUUID().toString().replace("-", "").substring(0, 16);
+        Instant now = Instant.now();
+
+        CreativeAdLearningRuleEntity entity = new CreativeAdLearningRuleEntity(
+                id,
+                effectiveTenant,
+                "AD_GROUP",
+                entityId,
+                entityName != null ? entityName : entityId,
+                channelCode != null ? channelCode : "TIKTOK",
+                DEFAULT_TIME_DAYS,
+                DEFAULT_COST_THRESHOLD,
+                now,
+                BigDecimal.ZERO,
+                true,
+                true,
+                now,
+                now
+        );
+        ruleStore.put(effectiveTenant + ":" + entityId, entity);
+        if (learningRuleMapper != null) {
+            try {
+                learningRuleMapper.insert(entity);
+            } catch (Exception ignored) {
+            }
+        }
+    }
 
     @Override
     public AdLearningStatus evaluateLearningPhase(

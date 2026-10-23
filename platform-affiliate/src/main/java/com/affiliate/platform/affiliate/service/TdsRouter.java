@@ -17,12 +17,18 @@ import java.util.concurrent.ConcurrentMap;
  * 解决 SmartLink 场景的核心诉求：
  * 根据访客的地理位置（Country）、终端形态（DeviceType）与各候选 Offer 实时统计的
  * 收益转化表现（EPC - Earnings Per Click），动态自适应路由至产出最高的可用推广计划。
- * 新增支持 Contextual Bandit (LinUCB + Thompson Sampling) 动态探索利用机制。
+ * 新增支持 Contextual Bandit (LinUCB + Thompson Sampling) 动态探索利用机制及内存 SmartLink 共享注册表。
  */
 @Service
 public class TdsRouter {
 
     private final OfferService offerService;
+
+    // 共享 SmartLink 内存注册表（消除 AdminController 与 ClickController 内存模式割裂）
+    private final ConcurrentMap<String, SmartLink> smartLinkRegistry = new ConcurrentHashMap<>();
+
+    // 记录 Offer 最近关联的 SmartLink ID（用于转化回传时精准定位对应的 Bandit Arm）
+    private final ConcurrentMap<String, String> offerSmartLinkMapping = new ConcurrentHashMap<>();
 
     // 缓存各 Offer 的最新平均 EPC 分值（供动态排序比价）
     private final ConcurrentMap<String, BigDecimal> offerEpcCache = new ConcurrentHashMap<>();
@@ -58,8 +64,30 @@ public class TdsRouter {
         return banditEngine;
     }
 
+    public void registerSmartLink(SmartLink link) {
+        if (link != null && link.id() != null) {
+            smartLinkRegistry.put(link.id(), link);
+            if (link.targetOfferIds() != null) {
+                for (String offerId : link.targetOfferIds()) {
+                    if (offerId != null) {
+                        offerSmartLinkMapping.put(offerId, link.id());
+                    }
+                }
+            }
+        }
+    }
+
+    public Optional<SmartLink> findSmartLink(String id) {
+        if (id == null) return Optional.empty();
+        return Optional.ofNullable(smartLinkRegistry.get(id));
+    }
+
+    public List<SmartLink> listSmartLinks() {
+        return List.copyOf(smartLinkRegistry.values());
+    }
+
     /**
-     * 接收转化或点击收益反馈，在线增量更新 Bandit 模型
+     * 接收转化或点击收益反馈，在线增量更新 Bandit 模型（自动同步关联 SmartLink 与全局池）
      */
     public void recordBanditFeedback(
             String tenantId,
@@ -70,6 +98,10 @@ public class TdsRouter {
     ) {
         if (banditEngine != null && offerId != null) {
             banditEngine.updateArm(tenantId, smartLinkId, offerId, context, reward);
+            String mappedSmartLinkId = offerSmartLinkMapping.get(offerId);
+            if (mappedSmartLinkId != null && !mappedSmartLinkId.equals(smartLinkId)) {
+                banditEngine.updateArm(tenantId, mappedSmartLinkId, offerId, context, reward);
+            }
         }
     }
 
@@ -85,9 +117,6 @@ public class TdsRouter {
 
     /**
      * 临时熔断或降级指定 Offer（在指定时长内不再参与流量分发）
-     *
-     * @param offerId  推广活动 ID
-     * @param duration 熔断时长
      */
     public void markOfferDegraded(String offerId, java.time.Duration duration) {
         if (offerId != null && duration != null) {
@@ -122,13 +151,6 @@ public class TdsRouter {
 
     /**
      * 执行 SmartLink 智能路由决断 (结合 Client IP 自动解析物理国家)
-     *
-     * @param smartLink  智能分流链接配置
-     * @param clientIp   访客客户端 IP
-     * @param country    访客显式传入国家代码 (为空或默认时从 IP 自动解析)
-     * @param deviceType 访客设备类型
-     * @param dateKey    当前日期标识
-     * @return 最终选取的最佳有效 Offer
      */
     public Offer route(SmartLink smartLink, String clientIp, String country, int deviceType, String dateKey) {
         String effectiveCountry = country;
@@ -144,17 +166,13 @@ public class TdsRouter {
 
     /**
      * 执行 SmartLink 智能路由决断
-     *
-     * @param smartLink  智能分流链接配置
-     * @param country    访客国家代码
-     * @param deviceType 访客设备类型
-     * @param dateKey    当前日期标识
-     * @return 最终选取的最佳有效 Offer（未命中或超限则退至 fallbackOffer）
      */
     public Offer route(SmartLink smartLink, String country, int deviceType, String dateKey) {
         if (smartLink == null || smartLink.targetOfferIds().isEmpty()) {
             return null;
         }
+
+        registerSmartLink(smartLink);
 
         List<Offer> candidates = new ArrayList<>();
         for (String offerId : smartLink.targetOfferIds()) {
@@ -197,14 +215,19 @@ public class TdsRouter {
         if (smartLink.routingStrategy() == SmartLink.RoutingStrategy.BANDIT_LINUCB) {
             List<String> candidateIds = new ArrayList<>();
             Map<String, Offer> offerMap = new HashMap<>();
+            BigDecimal avgPriorEpc = BigDecimal.ZERO;
             for (Offer c : candidates) {
                 candidateIds.add(c.id());
                 offerMap.put(c.id(), c);
+                BigDecimal epc = offerEpcCache.getOrDefault(c.id(), BigDecimal.ZERO);
+                if (epc.compareTo(avgPriorEpc) > 0) {
+                    avgPriorEpc = epc;
+                }
             }
 
             int currentHour = java.time.ZonedDateTime.now(java.time.ZoneOffset.UTC).getHour();
             LinUcbBanditEngine.BanditContext banditCtx = LinUcbBanditEngine.BanditContext.of(
-                    country, deviceType, currentHour
+                    country, deviceType, currentHour, linkKey, avgPriorEpc
             );
 
             String selectedOfferId = banditEngine.selectBestOffer(
@@ -215,6 +238,7 @@ public class TdsRouter {
             );
 
             if (selectedOfferId != null && offerMap.containsKey(selectedOfferId)) {
+                offerSmartLinkMapping.put(selectedOfferId, smartLink.id());
                 return offerMap.get(selectedOfferId);
             }
         }

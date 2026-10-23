@@ -37,7 +37,7 @@ public class AiOrchestratorService {
     }
 
     /**
-     * 统一模板化 AI 交互入口
+     * 统一模板化 AI 交互入口（支持 Prompt 模板级模型偏好与自适应容灾）
      */
     public AiChatResponse chatWithTemplate(
             String tenantId,
@@ -46,8 +46,9 @@ public class AiOrchestratorService {
             String callerModule
     ) {
         long start = System.currentTimeMillis();
-        AiModelConfig config = configService.resolveActiveModel(tenantId);
         var templateOpt = templateService.findTemplate(tenantId, templateKey);
+        String preferredModel = templateOpt.map(AiPromptTemplate::modelPreference).orElse(null);
+        AiModelConfig config = configService.resolveActiveModel(tenantId, preferredModel);
 
         String systemPrompt = templateOpt.map(AiPromptTemplate::systemPrompt)
                 .orElse("You are a professional ad-tech AI assistant.");

@@ -129,7 +129,7 @@ public class AiPromptTemplateService {
                 广告计划: {{campaignId}}
                 当前基准出价: ${{currentBid}}
                 预估点击率 (eCTR): {{eCtr}}
-                预估转化率 (eCVR): {{eCvr}}
+                预估转化率 (eCvr): {{eCvr}}
                 竞价底价 (Floor Price): ${{floorPrice}}
                 最近胜出率 (Win Rate): {{winRate}}
                 
@@ -174,12 +174,14 @@ public class AiPromptTemplateService {
     }
 
     private String buildStoreKey(String tenantId, String key) {
-        return (tenantId != null ? tenantId : "default") + ":" + key;
+        return (tenantId != null && !tenantId.isBlank() ? tenantId : "default") + ":" + key;
     }
 
     public List<AiPromptTemplate> listTemplates(String tenantId) {
-        String targetTenant = tenantId != null ? tenantId : (TenantContext.get() != null ? TenantContext.get() : "default");
-        Map<String, AiPromptTemplate> result = new HashMap<>();
+        String targetTenant = (tenantId != null && !tenantId.isBlank())
+                ? tenantId
+                : (TenantContext.get() != null ? TenantContext.get() : "default");
+        Map<String, AiPromptTemplate> result = new LinkedHashMap<>();
 
         // 先载入 default 模板，再用租户级自定义模板覆盖
         store.forEach((k, v) -> {
@@ -197,7 +199,9 @@ public class AiPromptTemplateService {
     }
 
     public Optional<AiPromptTemplate> findTemplate(String tenantId, String templateKey) {
-        String tid = tenantId != null ? tenantId : (TenantContext.get() != null ? TenantContext.get() : "default");
+        String tid = (tenantId != null && !tenantId.isBlank())
+                ? tenantId
+                : (TenantContext.get() != null ? TenantContext.get() : "default");
         AiPromptTemplate custom = store.get(buildStoreKey(tid, templateKey));
         if (custom != null) {
             return Optional.of(custom);
@@ -209,8 +213,18 @@ public class AiPromptTemplateService {
         if (template == null || template.templateKey() == null) {
             throw new IllegalArgumentException("Template and templateKey cannot be null");
         }
-        String tid = template.tenantId() != null ? template.tenantId() : (TenantContext.get() != null ? TenantContext.get() : "default");
-        String id = template.id() != null ? template.id() : "ptpl_" + UUID.randomUUID().toString().replace("-", "").substring(0, 16);
+        String tid = (template.tenantId() != null && !template.tenantId().isBlank())
+                ? template.tenantId()
+                : (TenantContext.get() != null ? TenantContext.get() : "default");
+        String storeKey = buildStoreKey(tid, template.templateKey());
+        AiPromptTemplate existing = store.get(storeKey);
+
+        // 若该租户同 key 模板已存在，则复用其主键 ID，防止触发数据库 UNIQUE(tenant_id, template_key) 约束冲突
+        String id = existing != null
+                ? existing.id()
+                : (template.id() != null && !template.id().isBlank() && !template.id().startsWith("ptpl_global_")
+                    ? template.id()
+                    : "ptpl_" + UUID.randomUUID().toString().replace("-", "").substring(0, 16));
 
         AiPromptTemplate toSave = new AiPromptTemplate(
                 id,
@@ -220,11 +234,11 @@ public class AiPromptTemplateService {
                 template.systemPrompt() != null ? template.systemPrompt() : "You are a professional ad-tech AI assistant.",
                 template.userPromptTemplate() != null ? template.userPromptTemplate() : "",
                 template.modelPreference(),
-                store.containsKey(buildStoreKey(tid, template.templateKey())) ? store.get(buildStoreKey(tid, template.templateKey())).createdAt() : Instant.now(),
+                existing != null ? existing.createdAt() : Instant.now(),
                 Instant.now()
         );
 
-        store.put(buildStoreKey(tid, template.templateKey()), toSave);
+        store.put(storeKey, toSave);
         if (templateMapper != null) {
             try {
                 AiPromptTemplateEntity entity = new AiPromptTemplateEntity(

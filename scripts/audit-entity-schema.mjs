@@ -185,7 +185,14 @@ const entities = walk(root, (file) => file.endsWith("Entity.java"))
   .sort((left, right) => left.table.localeCompare(right.table) || left.file.localeCompare(right.file));
 
 let mismatchCount = 0;
+const mappedTables = new Map();
 for (const entity of entities) {
+  if (mappedTables.has(entity.table)) {
+    mismatchCount += 1;
+    console.log(`DUPLICATE ENTITY MAPPING ${entity.table} <- ${entity.file} (already mapped by ${mappedTables.get(entity.table)})`);
+  } else {
+    mappedTables.set(entity.table, entity.file);
+  }
   const tableColumns = schema.get(entity.table);
   if (!tableColumns) {
     mismatchCount += 1;
@@ -201,10 +208,17 @@ for (const entity of entities) {
   if (tableOnly.length > 0) console.log(`  table-only:  ${tableOnly.join(", ")}`);
 }
 
+for (const table of schema.keys()) {
+  if (!mappedTables.has(table)) {
+    mismatchCount += 1;
+    console.log(`UNMAPPED FLYWAY TABLE ${table} (no *Entity.java maps to this table)`);
+  }
+}
+
 console.log(`Checked ${entities.length} entities against ${schema.size} Flyway tables.`);
 if (mismatchCount > 0) {
   console.error(`Found ${mismatchCount} entity/schema mismatches.`);
   process.exitCode = 1;
 } else {
-  console.log("All mapped entity columns match the Flyway schema.");
+  console.log("All mapped entity columns match the Flyway schema (100% bidirectional alignment).");
 }

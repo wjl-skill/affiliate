@@ -139,9 +139,10 @@ public class MaterialQualityTagJobServiceImpl implements MaterialQualityTagJobSe
         if (agentService != null && res != null &&
                 (res.qualityLevel() == MaterialQualityLevel.BLACKHOLE || res.qualityLevel() == MaterialQualityLevel.RISK)) {
             try {
-                double dropOff = 0.70;
                 double ctr = p.impressions() > 0 ? (double) p.clicks() / p.impressions() : 0.01;
                 double cvr = p.clicks() > 0 ? (double) p.installNum() / p.clicks() : 0.005;
+                // 基于真实 CTR 动态评估前 3 秒跳出率：CTR < 1.2% 视为开场 Hook 疲劳 (>65%)，否则进入 CTA/ROI/受众疲劳细分诊断
+                double dropOff = ctr < 0.012 ? 0.72 : (ctr < 0.025 ? 0.55 : 0.42);
                 agentService.triggerAutonomousOptimization(
                         tenantId,
                         p.materialId(),

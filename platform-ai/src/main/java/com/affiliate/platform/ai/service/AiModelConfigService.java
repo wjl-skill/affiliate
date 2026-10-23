@@ -117,13 +117,11 @@ public class AiModelConfigService {
         }
 
         final String finalTenant = targetTenant;
-        List<AiModelConfig> list = store.values().stream()
+        return store.values().stream()
                 .filter(c -> finalTenant.equals(c.tenantId()) || "default".equals(c.tenantId()))
                 .sorted(Comparator.comparing(AiModelConfig::priority, Comparator.nullsLast(Integer::compareTo)))
                 .map(c -> maskKeys ? c.maskApiKey() : c)
                 .toList();
-
-        return list;
     }
 
     public Optional<AiModelConfig> getById(String id, boolean maskKeys) {
@@ -146,17 +144,23 @@ public class AiModelConfigService {
                 ? config.id()
                 : "aimc_" + UUID.randomUUID().toString().replace("-", "").substring(0, 16);
 
-        // 如果更新时传入了脱敏密钥，则保留原有真实密钥
+        // 如果更新时传入了脱敏密钥，且同租户记录存在，则保留原有真实密钥
         String apiKey = config.apiKey();
-        if (apiKey != null && apiKey.contains("****") && store.containsKey(id)) {
-            apiKey = store.get(id).apiKey();
+        AiModelConfig existing = store.get(id);
+        if (apiKey != null && apiKey.contains("****") && existing != null
+                && (tenantId.equals(existing.tenantId()) || "default".equals(existing.tenantId()))) {
+            apiKey = existing.apiKey();
         }
 
-        // 如果设置为默认模型，则清空当前租户下其他配置的默认标志
+        // 如果设置为默认模型，则清空当前租户下其他配置的默认标志并同步持久化
         if (Boolean.TRUE.equals(config.isDefault())) {
             store.values().stream()
-                    .filter(c -> tenantId.equals(c.tenantId()) && !c.id().equals(id))
-                    .forEach(c -> store.put(c.id(), c.withDefault(false)));
+                    .filter(c -> tenantId.equals(c.tenantId()) && !c.id().equals(id) && Boolean.TRUE.equals(c.isDefault()))
+                    .forEach(c -> {
+                        AiModelConfig demoted = c.withDefault(false);
+                        store.put(c.id(), demoted);
+                        persistToDatabase(demoted);
+                    });
         }
 
         AiModelConfig toSave = new AiModelConfig(
@@ -174,11 +178,18 @@ public class AiModelConfigService {
                 config.isDefault() != null ? config.isDefault() : false,
                 config.active() != null ? config.active() : true,
                 config.priority() != null ? config.priority() : 1,
-                store.containsKey(id) ? store.get(id).createdAt() : Instant.now(),
+                existing != null ? existing.createdAt() : Instant.now(),
                 Instant.now()
         );
 
         store.put(id, toSave);
+        persistToDatabase(toSave);
+        log.info("[AiModelConfigService] Saved AI config: id={}, tenant={}, provider={}, model={}",
+                toSave.id(), toSave.tenantId(), toSave.provider(), toSave.modelName());
+        return toSave;
+    }
+
+    private void persistToDatabase(AiModelConfig toSave) {
         if (modelConfigMapper != null) {
             try {
                 AiModelConfigEntity entity = new AiModelConfigEntity(
@@ -196,9 +207,6 @@ public class AiModelConfigService {
                 log.debug("[AiModelConfigService] Database write skipped: {}", e.getMessage());
             }
         }
-        log.info("[AiModelConfigService] Saved AI config: id={}, tenant={}, provider={}, model={}",
-                toSave.id(), toSave.tenantId(), toSave.provider(), toSave.modelName());
-        return toSave;
     }
 
     public boolean delete(String id) {
@@ -221,15 +229,47 @@ public class AiModelConfigService {
         if (target == null) {
             return false;
         }
-        String tid = tenantId != null ? tenantId : target.tenantId();
+        String tid = (tenantId != null && !tenantId.isBlank()) ? tenantId : target.tenantId();
         store.values().stream()
                 .filter(c -> tid.equals(c.tenantId()))
-                .forEach(c -> store.put(c.id(), c.withDefault(c.id().equals(id))));
+                .forEach(c -> {
+                    boolean shouldBeDefault = c.id().equals(id);
+                    if (!Objects.equals(c.isDefault(), shouldBeDefault)) {
+                        AiModelConfig updated = c.withDefault(shouldBeDefault);
+                        store.put(c.id(), updated);
+                        persistToDatabase(updated);
+                    }
+                });
         return true;
     }
 
     public AiModelConfig resolveActiveModel(String tenantId) {
-        String tid = tenantId != null ? tenantId : (TenantContext.get() != null ? TenantContext.get() : "default");
+        return resolveActiveModel(tenantId, null);
+    }
+
+    public AiModelConfig resolveActiveModel(String tenantId, String preferredModelOrProvider) {
+        String tid = (tenantId != null && !tenantId.isBlank())
+                ? tenantId
+                : (TenantContext.get() != null ? TenantContext.get() : "default");
+
+        // 0. 如果模板或请求指定了模型/供应商偏好，优先匹配激活配置
+        if (preferredModelOrProvider != null && !preferredModelOrProvider.isBlank()) {
+            String pref = preferredModelOrProvider.trim();
+            Optional<AiModelConfig> matchedTenant = store.values().stream()
+                    .filter(c -> tid.equals(c.tenantId()) && Boolean.TRUE.equals(c.active())
+                            && (pref.equalsIgnoreCase(c.modelName()) || pref.equalsIgnoreCase(c.provider().name()) || pref.equalsIgnoreCase(c.id())))
+                    .min(Comparator.comparing(AiModelConfig::priority, Comparator.nullsLast(Integer::compareTo)));
+            if (matchedTenant.isPresent()) {
+                return matchedTenant.get();
+            }
+            Optional<AiModelConfig> matchedGlobal = store.values().stream()
+                    .filter(c -> "default".equals(c.tenantId()) && Boolean.TRUE.equals(c.active())
+                            && (pref.equalsIgnoreCase(c.modelName()) || pref.equalsIgnoreCase(c.provider().name()) || pref.equalsIgnoreCase(c.id())))
+                    .min(Comparator.comparing(AiModelConfig::priority, Comparator.nullsLast(Integer::compareTo)));
+            if (matchedGlobal.isPresent()) {
+                return matchedGlobal.get();
+            }
+        }
 
         // 1. 尝试查找当前租户自定义的默认且激活的配置
         Optional<AiModelConfig> tenantDefault = store.values().stream()

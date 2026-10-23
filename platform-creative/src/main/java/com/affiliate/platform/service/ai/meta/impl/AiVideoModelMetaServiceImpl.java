@@ -107,7 +107,33 @@ public class AiVideoModelMetaServiceImpl implements AiVideoModelMetaService {
         );
         modelRegistry.put(happyHorse.modelCode(), happyHorse);
 
-        // 4. Local Mock 测试模型
+        // 4. 快手可灵 Kling v1 (支持自治重构与长视频分镜渲染)
+        AiVideoModelMetaDTO kling = new AiVideoModelMetaDTO(
+                "kling_v1",
+                "快手可灵 Kling 1.6 Pro (电影级运镜)",
+                "BYTEDANCE_ARK",
+                "kling-v1-6-pro",
+                List.of(AiGenerateType.TEXT_TO_VIDEO, AiGenerateType.IMAGE_TO_VIDEO, AiGenerateType.REFERENCE_TO_VIDEO),
+                "SECOND",
+                BigDecimal.valueOf(0.1600),
+                BigDecimal.ONE,
+                true,
+                List.of(
+                        new AiVideoModelFieldDTO("aspectRatio", "画幅比例", "select", true, "9:16", "生成比例",
+                                List.of(
+                                        AiVideoModelFieldOptionDTO.ofDefault("竖屏 9:16", "9:16"),
+                                        AiVideoModelFieldOptionDTO.of("横屏 16:9", "16:9")
+                                )),
+                        new AiVideoModelFieldDTO("durationSeconds", "时长", "select", true, 5, "生成时长",
+                                List.of(
+                                        AiVideoModelFieldOptionDTO.ofDefault("5 秒", 5),
+                                        AiVideoModelFieldOptionDTO.of("10 秒", 10)
+                                ))
+                )
+        );
+        modelRegistry.put(kling.modelCode(), kling);
+
+        // 5. Local Mock 测试模型
         AiVideoModelMetaDTO mock = new AiVideoModelMetaDTO(
                 "local_mock_video",
                 "Local Mock Video Model (本地测试极速模型)",

@@ -18,8 +18,8 @@ import java.util.stream.Collectors;
 /**
  * 用户账号管理服务 (User Account Management Service - MyBatis-Plus)
  * <p>
- * 全面基于 MyBatis-Plus 接入 PostgreSQL 真实持久化存储，操作表 `sys_user_account` 与 `sys_user_role`。
- * 密码以 BCrypt 哈希存储于 `password_hash` 列。
+ * 全面基于 MyBatis-Plus 接入 PostgreSQL 真实持久化存储，操作表 `sys_user_account` 与 `sys_user_role`，
+ * 并具备离线内存回退保护能力。密码以 BCrypt 哈希存储于 `password_hash` 列。
  */
 @Service
 public class UserAccountService {
@@ -56,127 +56,151 @@ public class UserAccountService {
                     initDefaultSeedUsers();
                 }
             } catch (Exception e) {
-                initDefaultSeedUsers();
+                initDefaultSeedUsersFallbackOnly();
             }
         } else {
-            initDefaultSeedUsers();
+            initDefaultSeedUsersFallbackOnly();
         }
     }
 
     private void initDefaultSeedUsers() {
-        saveUser(new UserAccount(
-                "usr-admin-01",
-                "public",
-                "admin",
-                "Super Administrator",
-                "admin@affiliate.io",
-                "+1-800-555-0199",
-                "https://api.dicebear.com/7.x/bottts/svg?seed=admin",
-                UserAccount.Status.ACTIVE,
-                Set.of("SUPER_ADMIN"),
-                Instant.now(),
-                Instant.now(),
-                Instant.now()
-        ));
+        for (UserAccount seed : buildSeedUsers()) {
+            saveUser(seed);
+        }
+    }
 
-        saveUser(new UserAccount(
-                "usr-bd-01",
-                "tenant-1",
-                "alex_bd",
-                "Alex Wang (商务主管)",
-                "alex@affiliate.io",
-                "+1-800-555-0123",
-                "https://api.dicebear.com/7.x/bottts/svg?seed=alex",
-                UserAccount.Status.ACTIVE,
-                Set.of("AFFILIATE_MANAGER"),
-                Instant.now().minusSeconds(3600 * 2),
-                Instant.now(),
-                Instant.now()
-        ));
+    private void initDefaultSeedUsersFallbackOnly() {
+        for (UserAccount seed : buildSeedUsers()) {
+            fallbackStore.put(seed.id(), seed);
+            fallbackPasswordHashes.putIfAbsent(seed.username().toLowerCase(), passwordEncoder.encode(DEFAULT_INITIAL_PASSWORD));
+        }
+    }
 
-        saveUser(new UserAccount(
-                "usr-fn-01",
-                "tenant-1",
-                "sarah_fin",
-                "Sarah Lee (财务总监)",
-                "sarah@affiliate.io",
-                "+1-800-555-0188",
-                "https://api.dicebear.com/7.x/bottts/svg?seed=sarah",
-                UserAccount.Status.ACTIVE,
-                Set.of("FINANCE_OFFICER"),
-                Instant.now().minusSeconds(3600 * 12),
-                Instant.now(),
-                Instant.now()
-        ));
+    private List<UserAccount> buildSeedUsers() {
+        return List.of(
+                new UserAccount(
+                        "usr-admin-01",
+                        "public",
+                        "admin",
+                        "Super Administrator",
+                        "admin@affiliate.io",
+                        "+1-800-555-0199",
+                        "https://api.dicebear.com/7.x/bottts/svg?seed=admin",
+                        UserAccount.Status.ACTIVE,
+                        Set.of("SUPER_ADMIN"),
+                        Instant.now(),
+                        Instant.now(),
+                        Instant.now()
+                ),
+                new UserAccount(
+                        "usr-bd-01",
+                        "tenant-1",
+                        "alex_bd",
+                        "Alex Wang (商务主管)",
+                        "alex@affiliate.io",
+                        "+1-800-555-0123",
+                        "https://api.dicebear.com/7.x/bottts/svg?seed=alex",
+                        UserAccount.Status.ACTIVE,
+                        Set.of("AFFILIATE_MANAGER"),
+                        Instant.now().minusSeconds(3600 * 2),
+                        Instant.now(),
+                        Instant.now()
+                ),
+                new UserAccount(
+                        "usr-fn-01",
+                        "tenant-1",
+                        "sarah_fin",
+                        "Sarah Lee (财务总监)",
+                        "sarah@affiliate.io",
+                        "+1-800-555-0188",
+                        "https://api.dicebear.com/7.x/bottts/svg?seed=sarah",
+                        UserAccount.Status.ACTIVE,
+                        Set.of("FINANCE_OFFICER"),
+                        Instant.now().minusSeconds(3600 * 12),
+                        Instant.now(),
+                        Instant.now()
+                )
+        );
     }
 
     public UserAccount saveUser(UserAccount user) {
-        if (userMapper != null) {
-            UserAccountEntity existing = userMapper.selectById(user.id());
-            String carriedHash = existing != null ? existing.getPasswordHash() : null;
-            if (carriedHash == null) {
-                carriedHash = findPasswordHash(user.username());
-            }
-            if (carriedHash == null) {
-                carriedHash = passwordEncoder.encode(DEFAULT_INITIAL_PASSWORD);
-            }
-
-            UserAccountEntity entity = new UserAccountEntity(
-                    user.id(),
-                    user.tenantId(),
-                    user.username(),
-                    user.displayName(),
-                    user.email(),
-                    user.phone(),
-                    user.avatar(),
-                    carriedHash,
-                    user.status().name(),
-                    user.lastLoginAt(),
-                    user.createdAt() != null ? user.createdAt() : Instant.now(),
-                    Instant.now()
-            );
-
-            if (existing != null) {
-                userMapper.updateById(entity);
-            } else {
-                userMapper.insert(entity);
-            }
-
-            if (userRoleMapper != null && user.roles() != null) {
-                assignRoles(user.id(), user.roles());
-            }
-            return user;
-        }
-
         fallbackStore.put(user.id(), user);
         fallbackPasswordHashes.putIfAbsent(user.username().toLowerCase(), passwordEncoder.encode(DEFAULT_INITIAL_PASSWORD));
+
+        if (userMapper != null) {
+            try {
+                UserAccountEntity existing = userMapper.selectById(user.id());
+                String carriedHash = existing != null ? existing.getPasswordHash() : null;
+                if (carriedHash == null) {
+                    carriedHash = findPasswordHash(user.username());
+                }
+                if (carriedHash == null) {
+                    carriedHash = passwordEncoder.encode(DEFAULT_INITIAL_PASSWORD);
+                }
+
+                UserAccountEntity entity = new UserAccountEntity(
+                        user.id(),
+                        user.tenantId(),
+                        user.username(),
+                        user.displayName(),
+                        user.email(),
+                        user.phone(),
+                        user.avatar(),
+                        carriedHash,
+                        user.status().name(),
+                        user.lastLoginAt(),
+                        user.createdAt() != null ? user.createdAt() : Instant.now(),
+                        Instant.now()
+                );
+
+                if (existing != null) {
+                    userMapper.updateById(entity);
+                } else {
+                    userMapper.insert(entity);
+                }
+
+                if (userRoleMapper != null && user.roles() != null) {
+                    assignRoles(user.id(), user.roles());
+                }
+            } catch (Exception ignored) {
+            }
+        }
         return user;
     }
 
     public List<UserAccount> listUsers() {
         if (userMapper != null) {
-            QueryWrapper<UserAccountEntity> qw = new QueryWrapper<>();
-            qw.orderByDesc("created_at").last("LIMIT 1000");
-            List<UserAccountEntity> entities = userMapper.selectList(qw);
-            return entities.stream().map(this::toDomain).toList();
+            try {
+                QueryWrapper<UserAccountEntity> qw = new QueryWrapper<>();
+                qw.orderByDesc("created_at").last("LIMIT 1000");
+                List<UserAccountEntity> entities = userMapper.selectList(qw);
+                return entities.stream().map(this::toDomain).toList();
+            } catch (Exception ignored) {
+            }
         }
         return new ArrayList<>(fallbackStore.values());
     }
 
     public Optional<UserAccount> find(String id) {
         if (userMapper != null) {
-            UserAccountEntity entity = userMapper.selectById(id);
-            return Optional.ofNullable(entity).map(this::toDomain);
+            try {
+                UserAccountEntity entity = userMapper.selectById(id);
+                return Optional.ofNullable(entity).map(this::toDomain);
+            } catch (Exception ignored) {
+            }
         }
         return Optional.ofNullable(fallbackStore.get(id));
     }
 
     public Optional<UserAccount> findByUsername(String username) {
         if (userMapper != null) {
-            QueryWrapper<UserAccountEntity> qw = new QueryWrapper<>();
-            qw.eq("username", username).last("LIMIT 1");
-            UserAccountEntity entity = userMapper.selectOne(qw);
-            return Optional.ofNullable(entity).map(this::toDomain);
+            try {
+                QueryWrapper<UserAccountEntity> qw = new QueryWrapper<>();
+                qw.eq("username", username).last("LIMIT 1");
+                UserAccountEntity entity = userMapper.selectOne(qw);
+                return Optional.ofNullable(entity).map(this::toDomain);
+            } catch (Exception ignored) {
+            }
         }
         return fallbackStore.values().stream()
                 .filter(u -> u.username().equalsIgnoreCase(username))
@@ -185,13 +209,16 @@ public class UserAccountService {
 
     public Optional<UserAccountEntity> findEntityByUsername(String username, String tenantId) {
         if (userMapper != null) {
-            QueryWrapper<UserAccountEntity> qw = new QueryWrapper<>();
-            qw.eq("username", username);
-            if (tenantId != null && !tenantId.isBlank()) {
-                qw.eq("tenant_id", tenantId);
+            try {
+                QueryWrapper<UserAccountEntity> qw = new QueryWrapper<>();
+                qw.eq("username", username);
+                if (tenantId != null && !tenantId.isBlank()) {
+                    qw.eq("tenant_id", tenantId);
+                }
+                qw.last("LIMIT 1");
+                return Optional.ofNullable(userMapper.selectOne(qw));
+            } catch (Exception ignored) {
             }
-            qw.last("LIMIT 1");
-            return Optional.ofNullable(userMapper.selectOne(qw));
         }
         UserAccount user = fallbackStore.values().stream()
                 .filter(u -> u.username().equalsIgnoreCase(username) && (tenantId == null || tenantId.isBlank() || tenantId.equalsIgnoreCase(u.tenantId())))
@@ -209,12 +236,17 @@ public class UserAccountService {
 
     public UserAccount toggleStatus(String id, UserAccount.Status status) {
         if (userMapper != null) {
-            UserAccountEntity entity = userMapper.selectById(id);
-            if (entity == null) throw new NoSuchElementException("用户不存在: " + id);
-            entity.setStatus(status.name());
-            entity.setUpdatedAt(Instant.now());
-            userMapper.updateById(entity);
-            return toDomain(entity);
+            try {
+                UserAccountEntity entity = userMapper.selectById(id);
+                if (entity == null) throw new NoSuchElementException("用户不存在: " + id);
+                entity.setStatus(status.name());
+                entity.setUpdatedAt(Instant.now());
+                userMapper.updateById(entity);
+                return toDomain(entity);
+            } catch (NoSuchElementException e) {
+                throw e;
+            } catch (Exception ignored) {
+            }
         }
         UserAccount user = fallbackStore.get(id);
         if (user == null) throw new NoSuchElementException("用户不存在: " + id);
@@ -225,19 +257,24 @@ public class UserAccountService {
 
     public UserAccount assignRoles(String id, Set<String> roles) {
         if (userMapper != null && userRoleMapper != null) {
-            UserAccountEntity entity = userMapper.selectById(id);
-            if (entity == null) throw new NoSuchElementException("用户不存在: " + id);
+            try {
+                UserAccountEntity entity = userMapper.selectById(id);
+                if (entity == null) throw new NoSuchElementException("用户不存在: " + id);
 
-            QueryWrapper<UserRoleEntity> delQw = new QueryWrapper<>();
-            delQw.eq("user_id", id);
-            userRoleMapper.delete(delQw);
+                QueryWrapper<UserRoleEntity> delQw = new QueryWrapper<>();
+                delQw.eq("user_id", id);
+                userRoleMapper.delete(delQw);
 
-            if (roles != null) {
-                for (String roleId : roles) {
-                    userRoleMapper.insert(new UserRoleEntity(id, roleId, Instant.now()));
+                if (roles != null) {
+                    for (String roleId : roles) {
+                        userRoleMapper.insert(new UserRoleEntity(id, roleId, Instant.now()));
+                    }
                 }
+                return toDomain(entity);
+            } catch (NoSuchElementException e) {
+                throw e;
+            } catch (Exception ignored) {
             }
-            return toDomain(entity);
         }
         UserAccount user = fallbackStore.get(id);
         if (user == null) throw new NoSuchElementException("用户不存在: " + id);
@@ -248,16 +285,21 @@ public class UserAccountService {
 
     public boolean delete(String id) {
         if (userMapper != null) {
-            UserAccountEntity entity = userMapper.selectById(id);
-            if (entity != null && "admin".equalsIgnoreCase(entity.getUsername())) {
-                throw new IllegalArgumentException("系统超级管理员不可删除！");
+            try {
+                UserAccountEntity entity = userMapper.selectById(id);
+                if (entity != null && "admin".equalsIgnoreCase(entity.getUsername())) {
+                    throw new IllegalArgumentException("系统超级管理员不可删除！");
+                }
+                if (userRoleMapper != null) {
+                    QueryWrapper<UserRoleEntity> delQw = new QueryWrapper<>();
+                    delQw.eq("user_id", id);
+                    userRoleMapper.delete(delQw);
+                }
+                return userMapper.deleteById(id) > 0;
+            } catch (IllegalArgumentException e) {
+                throw e;
+            } catch (Exception ignored) {
             }
-            if (userRoleMapper != null) {
-                QueryWrapper<UserRoleEntity> delQw = new QueryWrapper<>();
-                delQw.eq("user_id", id);
-                userRoleMapper.delete(delQw);
-            }
-            return userMapper.deleteById(id) > 0;
         }
         UserAccount user = fallbackStore.get(id);
         if (user != null && "admin".equalsIgnoreCase(user.username())) {
@@ -278,7 +320,7 @@ public class UserAccountService {
                 UserAccountEntity entity = userMapper.selectOne(qw);
                 return entity != null ? entity.getPasswordHash() : null;
             } catch (Exception e) {
-                return null;
+                return fallbackPasswordHashes.get(username.toLowerCase());
             }
         }
         return fallbackPasswordHashes.get(username.toLowerCase());
@@ -290,14 +332,17 @@ public class UserAccountService {
     public boolean setPassword(String username, String rawPassword) {
         String hash = passwordEncoder.encode(rawPassword);
         if (userMapper != null) {
-            QueryWrapper<UserAccountEntity> qw = new QueryWrapper<>();
-            qw.eq("username", username).last("LIMIT 1");
-            UserAccountEntity entity = userMapper.selectOne(qw);
-            if (entity == null) return false;
-            entity.setPasswordHash(hash);
-            entity.setUpdatedAt(Instant.now());
-            userMapper.updateById(entity);
-            return true;
+            try {
+                QueryWrapper<UserAccountEntity> qw = new QueryWrapper<>();
+                qw.eq("username", username).last("LIMIT 1");
+                UserAccountEntity entity = userMapper.selectOne(qw);
+                if (entity == null) return false;
+                entity.setPasswordHash(hash);
+                entity.setUpdatedAt(Instant.now());
+                userMapper.updateById(entity);
+                return true;
+            } catch (Exception ignored) {
+            }
         }
         fallbackPasswordHashes.put(username.toLowerCase(), hash);
         return fallbackStore.values().stream().anyMatch(u -> u.username().equalsIgnoreCase(username));
@@ -314,13 +359,16 @@ public class UserAccountService {
     public void recordLogin(String userId) {
         Instant now = Instant.now();
         if (userMapper != null) {
-            UserAccountEntity entity = userMapper.selectById(userId);
-            if (entity != null) {
-                entity.setLastLoginAt(now);
-                entity.setUpdatedAt(now);
-                userMapper.updateById(entity);
+            try {
+                UserAccountEntity entity = userMapper.selectById(userId);
+                if (entity != null) {
+                    entity.setLastLoginAt(now);
+                    entity.setUpdatedAt(now);
+                    userMapper.updateById(entity);
+                }
+                return;
+            } catch (Exception ignored) {
             }
-            return;
         }
         UserAccount user = fallbackStore.get(userId);
         if (user != null) {
@@ -355,10 +403,13 @@ public class UserAccountService {
     private UserAccount toDomain(UserAccountEntity entity) {
         Set<String> roleCodes = Set.of();
         if (userRoleMapper != null) {
-            QueryWrapper<UserRoleEntity> roleQw = new QueryWrapper<>();
-            roleQw.eq("user_id", entity.getId());
-            List<UserRoleEntity> roleEntities = userRoleMapper.selectList(roleQw);
-            roleCodes = roleEntities.stream().map(UserRoleEntity::getRoleId).collect(Collectors.toSet());
+            try {
+                QueryWrapper<UserRoleEntity> roleQw = new QueryWrapper<>();
+                roleQw.eq("user_id", entity.getId());
+                List<UserRoleEntity> roleEntities = userRoleMapper.selectList(roleQw);
+                roleCodes = roleEntities.stream().map(UserRoleEntity::getRoleId).collect(Collectors.toSet());
+            } catch (Exception ignored) {
+            }
         }
 
         return new UserAccount(

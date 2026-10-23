@@ -13,9 +13,11 @@ import java.util.Map;
 
 /**
  * Apple SKAdNetwork 4.0 / AdAttributionKit 回传接收与查询控制器
+ * <p>
+ * 同时暴露 `/affiliate/skan` (Apple 服务端回调) 与 `/api/v1/affiliate/skan` (管理端查询)。
  */
 @RestController
-@RequestMapping("/affiliate/skan")
+@RequestMapping({"/affiliate/skan", "/api/v1/affiliate/skan"})
 public class SkanPostbackController {
 
     private final SkanAttributionEngine skanEngine;

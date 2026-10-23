@@ -11,7 +11,7 @@ import java.util.Map;
  * 反作弊 AI 异常取证与调查 REST 控制器 (AI Anti-Fraud Investigation Controller)
  */
 @RestController
-@RequestMapping("/affiliate/anti-fraud")
+@RequestMapping({"/affiliate/anti-fraud", "/api/v1/affiliate/anti-fraud"})
 public class AiFraudInvestigationController {
 
     private final AiFraudInvestigationService investigationService;

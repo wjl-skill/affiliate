@@ -94,10 +94,10 @@ public class AiVideoGenerationService {
         IVideoGenerator generator = generatorFactory.getGenerator(request.modelCode());
         String providerCode = generator.providerCode();
 
-        String id = "tsk_id_" + UUID.randomUUID().toString().replace("-", "").substring(0, 16);
         String taskNo = "tsk_" + UUID.randomUUID().toString().replace("-", "").substring(0, 12);
+        String id = taskNo;
 
-        // 2. 创建本地 PENDING 初始任务单
+        // 2. 创建本地 PENDING 初始任务单 (id 与 taskNo 对齐，保障外键与业务单号一致)
         AiGenerateTaskRecord initialRecord = AiGenerateTaskRecord.createInitial(
                 id, tenantId, taskNo, request, providerCode, createdBy != null ? createdBy : "system"
         );

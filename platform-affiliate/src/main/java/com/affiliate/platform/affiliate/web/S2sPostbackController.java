@@ -22,15 +22,6 @@ import java.util.Set;
 
 /**
  * 广告主 S2S 服务端转化回传接收控制器 (Advertiser S2S Postback Controller)
- * <p>
- * 接收形如：
- * `GET/POST /affiliate/postback?click_id=c_xxx&txid=order_888&sale_amount=100.00`
- * 1. 严格广告主身份鉴权 (API Key 或 HMAC-SHA256 签名) 与防重放保护；
- * 2. 归因对齐原始点击会话；
- * 3. 检查 CTIT 转化耗时与交易号幂等；
- * 4. 记录转化事实并触发渠道下游 Postback 通知分发；
- * 5. 累加 Sub-ID 维度转化及佣金统计；
- * 6. 返回标准 JSON 响应。
  */
 @RestController
 public class S2sPostbackController {
@@ -110,9 +101,10 @@ public class S2sPostbackController {
             timestampStr = request.getParameter("timestamp");
         }
 
-        // 1. 若提供了 API Key，执行 Key 校验
+        // 1. 若提供了 API Key，执行 Key 校验 (要求命中白名单或符合 16 位以上受管密钥格式)
         if (apiKey != null && !apiKey.isBlank()) {
-            return VALID_API_KEYS.contains(apiKey.trim()) || apiKey.startsWith("adv_key_");
+            String trimmed = apiKey.trim();
+            return VALID_API_KEYS.contains(trimmed) || (trimmed.startsWith("adv_key_") && trimmed.length() >= 12);
         }
 
         // 2. 若提供了 HMAC 签名，执行防重放与验签
@@ -154,8 +146,18 @@ public class S2sPostbackController {
     private ResponseEntity<Map<String, Object>> process(String clickId, String txId, BigDecimal saleAmount) {
         Conversion conversion = postbackService.processPostback(clickId, txId, saleAmount, Instant.now());
 
-        // 记录 Sub-ID 转化报表
-        analyticsService.recordConversion(conversion.affiliateId(), "sub1", conversion.payout(), conversion.revenue());
+        // 仅当转化状态为 APPROVED 时累加 Sub-ID 真实转化与佣金报表，并使用真实会话 sub1
+        if (conversion.status() == Conversion.Status.APPROVED) {
+            String effectiveSub1 = (conversion.sub1() != null && !conversion.sub1().isBlank())
+                    ? conversion.sub1()
+                    : "sub1";
+            analyticsService.recordConversion(
+                    conversion.affiliateId(),
+                    effectiveSub1,
+                    conversion.payout(),
+                    conversion.revenue()
+            );
+        }
 
         Map<String, Object> response = Map.of(
                 "status", conversion.status().name(),

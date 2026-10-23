@@ -3,6 +3,7 @@ package com.affiliate.platform.security.system;
 import com.affiliate.platform.security.auth.JwtTokenService;
 import com.affiliate.platform.tenant.TenantContext;
 import jakarta.validation.Valid;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
@@ -16,7 +17,7 @@ import java.util.*;
 /**
  * 系统安全与权限中心 REST 控制器 (System Security & RBAC Admin Controller)
  * <p>
- * 提供用户管理、角色定义、树形菜单维护及权限字典服务接口。
+ * 提供用户管理、角色定义、树形菜单维护、权限字典服务及安全审计事件 (`audit_event`) 查询接口。
  * 具备防提权边界校验与跨租户操作隔离。
  */
 @RestController
@@ -27,6 +28,22 @@ public class SystemSecurityController {
     private final RoleManagementService roleService;
     private final MenuManagementService menuService;
     private final PermissionRegistryService permissionService;
+    private final SecurityAuditService securityAuditService;
+
+    @Autowired
+    public SystemSecurityController(
+            UserAccountService userService,
+            RoleManagementService roleService,
+            MenuManagementService menuService,
+            PermissionRegistryService permissionService,
+            @Autowired(required = false) SecurityAuditService securityAuditService
+    ) {
+        this.userService = userService;
+        this.roleService = roleService;
+        this.menuService = menuService;
+        this.permissionService = permissionService;
+        this.securityAuditService = securityAuditService != null ? securityAuditService : new SecurityAuditService();
+    }
 
     public SystemSecurityController(
             UserAccountService userService,
@@ -34,10 +51,7 @@ public class SystemSecurityController {
             MenuManagementService menuService,
             PermissionRegistryService permissionService
     ) {
-        this.userService = userService;
-        this.roleService = roleService;
-        this.menuService = menuService;
-        this.permissionService = permissionService;
+        this(userService, roleService, menuService, permissionService, new SecurityAuditService());
     }
 
     private Optional<JwtTokenService.TokenPrincipal> getAuthenticatedPrincipal() {
@@ -46,6 +60,19 @@ public class SystemSecurityController {
             return Optional.of(principal);
         }
         return Optional.empty();
+    }
+
+    private String currentActorId() {
+        return getAuthenticatedPrincipal().map(JwtTokenService.TokenPrincipal::userId).orElse("admin");
+    }
+
+    private String currentTenantId(String fallbackTenant) {
+        if (fallbackTenant != null && !fallbackTenant.isBlank()) {
+            return fallbackTenant;
+        }
+        return getAuthenticatedPrincipal()
+                .map(JwtTokenService.TokenPrincipal::tenantId)
+                .orElseGet(() -> TenantContext.get() != null ? TenantContext.get() : "tenant-1");
     }
 
     private void enforceTenantAndRoleGovernance(String targetTenantId, Collection<String> targetRoles) {
@@ -106,7 +133,16 @@ public class SystemSecurityController {
                 Instant.now(),
                 Instant.now()
         );
-        return userService.saveUser(account);
+        UserAccount saved = userService.saveUser(account);
+        securityAuditService.recordEvent(
+                tenantId,
+                currentActorId(),
+                "CREATE_USER",
+                "USER_ACCOUNT",
+                saved.id(),
+                "{\"username\":\"" + username + "\",\"roles\":" + rolesList + "}"
+        );
+        return saved;
     }
 
     @GetMapping("/users/{id}")
@@ -119,7 +155,16 @@ public class SystemSecurityController {
         UserAccount target = userService.find(id)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "用户不存在: " + id));
         enforceTenantAndRoleGovernance(target.tenantId(), target.roles());
-        return userService.toggleStatus(id, status);
+        UserAccount updated = userService.toggleStatus(id, status);
+        securityAuditService.recordEvent(
+                target.tenantId(),
+                currentActorId(),
+                "UPDATE_USER_STATUS",
+                "USER_ACCOUNT",
+                id,
+                "{\"status\":\"" + status + "\"}"
+        );
+        return updated;
     }
 
     @PostMapping("/users/{id}/roles")
@@ -127,7 +172,16 @@ public class SystemSecurityController {
         UserAccount target = userService.find(id)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "用户不存在: " + id));
         enforceTenantAndRoleGovernance(target.tenantId(), roles);
-        return userService.assignRoles(id, roles);
+        UserAccount updated = userService.assignRoles(id, roles);
+        securityAuditService.recordEvent(
+                target.tenantId(),
+                currentActorId(),
+                "ASSIGN_USER_ROLES",
+                "USER_ACCOUNT",
+                id,
+                "{\"roles\":" + roles + "}"
+        );
+        return updated;
     }
 
     @DeleteMapping("/users/{id}")
@@ -137,6 +191,16 @@ public class SystemSecurityController {
             enforceTenantAndRoleGovernance(target.tenantId(), target.roles());
         }
         boolean deleted = userService.delete(id);
+        if (deleted) {
+            securityAuditService.recordEvent(
+                    currentTenantId(target != null ? target.tenantId() : null),
+                    currentActorId(),
+                    "DELETE_USER",
+                    "USER_ACCOUNT",
+                    id,
+                    "{}"
+            );
+        }
         return deleted ? ResponseEntity.noContent().build() : ResponseEntity.notFound().build();
     }
 
@@ -173,25 +237,62 @@ public class SystemSecurityController {
                 RoleDefinition.Status.ACTIVE,
                 Instant.now()
         );
-        return roleService.saveRole(role);
+        RoleDefinition saved = roleService.saveRole(role);
+        securityAuditService.recordEvent(
+                tenantId,
+                currentActorId(),
+                "CREATE_ROLE",
+                "ROLE_DEFINITION",
+                saved.id(),
+                "{\"roleCode\":\"" + roleCode + "\",\"dataScope\":\"" + dataScopeStr + "\"}"
+        );
+        return saved;
     }
 
     @PostMapping("/roles/{id}/permissions")
     public RoleDefinition assignRolePermissions(@PathVariable String id, @RequestBody Set<String> permissions) {
         enforceTenantAndRoleGovernance(null, null);
-        return roleService.assignPermissions(id, permissions);
+        RoleDefinition saved = roleService.assignPermissions(id, permissions);
+        securityAuditService.recordEvent(
+                currentTenantId(saved.tenantId()),
+                currentActorId(),
+                "ASSIGN_ROLE_PERMISSIONS",
+                "ROLE_DEFINITION",
+                id,
+                "{\"permissionCount\":" + (permissions != null ? permissions.size() : 0) + "}"
+        );
+        return saved;
     }
 
     @PostMapping("/roles/{id}/menus")
     public RoleDefinition assignRoleMenus(@PathVariable String id, @RequestBody Set<String> menuIds) {
         enforceTenantAndRoleGovernance(null, null);
-        return roleService.assignMenus(id, menuIds);
+        RoleDefinition saved = roleService.assignMenus(id, menuIds);
+        securityAuditService.recordEvent(
+                currentTenantId(saved.tenantId()),
+                currentActorId(),
+                "ASSIGN_ROLE_MENUS",
+                "ROLE_DEFINITION",
+                id,
+                "{\"menuCount\":" + (menuIds != null ? menuIds.size() : 0) + "}"
+        );
+        return saved;
     }
 
     @DeleteMapping("/roles/{id}")
     public ResponseEntity<Void> deleteRole(@PathVariable String id) {
         enforceTenantAndRoleGovernance(null, null);
         boolean deleted = roleService.delete(id);
+        if (deleted) {
+            securityAuditService.recordEvent(
+                    currentTenantId(null),
+                    currentActorId(),
+                    "DELETE_ROLE",
+                    "ROLE_DEFINITION",
+                    id,
+                    "{}"
+            );
+        }
         return deleted ? ResponseEntity.noContent().build() : ResponseEntity.notFound().build();
     }
 
@@ -217,17 +318,47 @@ public class SystemSecurityController {
         if (menu.id() == null || menu.id().isBlank()) {
             menu = menu.withId("menu-" + UUID.randomUUID().toString().replace("-", "").substring(0, 12));
         }
-        return menuService.save(menu);
+        SysMenu saved = menuService.save(menu);
+        securityAuditService.recordEvent(
+                currentTenantId(null),
+                currentActorId(),
+                "SAVE_MENU",
+                "SYS_MENU",
+                saved.id(),
+                "{\"title\":\"" + saved.title() + "\",\"path\":\"" + saved.path() + "\"}"
+        );
+        return saved;
     }
 
     @DeleteMapping("/menus/{id}")
     public ResponseEntity<Void> deleteMenu(@PathVariable String id) {
         boolean deleted = menuService.delete(id);
+        if (deleted) {
+            securityAuditService.recordEvent(
+                    currentTenantId(null),
+                    currentActorId(),
+                    "DELETE_MENU",
+                    "SYS_MENU",
+                    id,
+                    "{}"
+            );
+        }
         return deleted ? ResponseEntity.noContent().build() : ResponseEntity.notFound().build();
     }
 
     @GetMapping("/menus/user-tree")
     public List<SysMenu> getUserMenuTree(@RequestParam(required = false, defaultValue = "SUPER_ADMIN") String role) {
         return menuService.getUserMenuTree(Set.of(role));
+    }
+
+    // ==========================================
+    // 5. 安全审计事件流水 (Audit Events)
+    // ==========================================
+    @GetMapping("/audit-events")
+    public List<SecurityAuditService.AuditEventRecord> listAuditEvents(
+            @RequestParam(required = false) String tenantId,
+            @RequestParam(required = false, defaultValue = "50") int limit
+    ) {
+        return securityAuditService.listEvents(currentTenantId(tenantId), limit);
     }
 }
