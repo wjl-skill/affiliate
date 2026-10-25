@@ -298,4 +298,46 @@ class OfferSupplementServiceTest {
         assertEquals(1, supplementService.listRules("tenant-b", edgeOffer.id()).size());
         assertEquals("rule_tenant_b", supplementService.listRules("tenant-b", edgeOffer.id()).get(0).id());
     }
+
+    @Test
+    @DisplayName("4. 验证后台定时自动补量调度器结合分布式锁安全执行与自动互斥")
+    void testScheduledAutoSupplementWithDistributedLock() {
+        com.affiliate.platform.lock.RedisDistributedLock lockService = new com.affiliate.platform.lock.RedisDistributedLock(null);
+        OfferSupplementService serviceWithLock = new OfferSupplementService(
+                offerService,
+                clickTrackerService,
+                analyticsService,
+                parquetReader,
+                null,
+                null,
+                false,
+                lockService
+        );
+
+        Offer offer = offerService.save(new Offer(
+                "off_auto_01", "tenant-sched", "adv_sched", "Scheduled Offer",
+                "https://app.appsflyer.com/id888?pid={aff_id}&clickid={click_id}",
+                Offer.PayoutType.CPI, BigDecimal.ONE, BigDecimal.TEN,
+                Offer.Status.ACTIVE, 1000, BigDecimal.valueOf(5000),
+                null, Set.of("TW"), Set.of(1), null, Instant.now()
+        ));
+
+        // 保存一条 active & autoEnabled = true 的规则 (最后执行时间为 2 小时前，满足 cronIntervalMinutes = 30)
+        OfferSupplementRule rule = serviceWithLock.saveRule(new OfferSupplementRule(
+                "rule_auto_sched_01", "tenant-sched", offer.id(), "aff_auto", "APPSFLYER",
+                offer.landingPageUrl(), "s3-aws-global", SAMPLE_PARQUET_PATH, "ios",
+                3, 50, true, 30, 0, 0L, "ACTIVE",
+                Instant.now().minusSeconds(7200), Instant.now(), Instant.now()
+        ));
+
+        // 执行调度巡检
+        assertDoesNotThrow(serviceWithLock::runScheduledAutoSupplement);
+
+        // 验证规则已被执行，游标推进至 3，总分发点击为 3
+        List<OfferSupplementRule> rules = serviceWithLock.listRules("tenant-sched", offer.id());
+        assertEquals(1, rules.size());
+        assertEquals(3, rules.get(0).lastCursorOffset());
+        assertEquals(3L, rules.get(0).totalDispatchedClicks());
+        assertNotNull(rules.get(0).lastExecutedAt());
+    }
 }

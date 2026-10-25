@@ -3,6 +3,7 @@ package com.affiliate.platform.affiliate.service;
 import com.affiliate.platform.affiliate.domain.*;
 import com.affiliate.platform.entity.OfferSupplementLogEntity;
 import com.affiliate.platform.entity.OfferSupplementRuleEntity;
+import com.affiliate.platform.lock.DistributedLock;
 import com.affiliate.platform.mapper.OfferSupplementLogMapper;
 import com.affiliate.platform.mapper.OfferSupplementRuleMapper;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
@@ -57,6 +58,7 @@ public class OfferSupplementService {
     private final OfferSupplementLogMapper logMapper;
     private final HttpClient httpClient;
     private final boolean networkEnabled;
+    private final DistributedLock distributedLock;
 
     private final ConcurrentMap<String, OfferSupplementRule> memoryRules = new ConcurrentHashMap<>();
     private final ConcurrentLinkedDeque<OfferSupplementLog> memoryLogs = new ConcurrentLinkedDeque<>();
@@ -67,7 +69,7 @@ public class OfferSupplementService {
             SubIdAnalyticsService analyticsService,
             ParquetUserProfileReader parquetReader
     ) {
-        this(offerService, clickTrackerService, analyticsService, parquetReader, null, null, false);
+        this(offerService, clickTrackerService, analyticsService, parquetReader, null, null, false, null);
     }
 
     @Autowired
@@ -78,7 +80,8 @@ public class OfferSupplementService {
             ParquetUserProfileReader parquetReader,
             @Autowired(required = false) OfferSupplementRuleMapper ruleMapper,
             @Autowired(required = false) OfferSupplementLogMapper logMapper,
-            @Value("${app.supplement.network-enabled:true}") boolean networkEnabled
+            @Value("${app.supplement.network-enabled:true}") boolean networkEnabled,
+            @Autowired(required = false) DistributedLock distributedLock
     ) {
         this.offerService = offerService;
         this.clickTrackerService = clickTrackerService;
@@ -87,6 +90,7 @@ public class OfferSupplementService {
         this.ruleMapper = ruleMapper;
         this.logMapper = logMapper;
         this.networkEnabled = networkEnabled;
+        this.distributedLock = distributedLock;
         // 关键：禁用 302 自动跟随重定向，仅触发 AF/Adjust 归因采集而不下载下游商店安装包
         this.httpClient = HttpClient.newBuilder()
                 .version(HttpClient.Version.HTTP_1_1)
@@ -202,7 +206,8 @@ public class OfferSupplementService {
                         memoryRules.put(e.getId(), toRuleDomain(e));
                     }
                 }
-            } catch (Exception ignored) {
+            } catch (Exception ex) {
+                log.debug("[OfferSupplement] List rules from DB skipped or failed: {}", ex.getMessage());
             }
         }
         return memoryRules.values().stream()
@@ -218,7 +223,8 @@ public class OfferSupplementService {
         if (ruleMapper != null) {
             try {
                 return ruleMapper.deleteById(ruleId) > 0 || removed != null;
-            } catch (Exception ignored) {
+            } catch (Exception ex) {
+                log.debug("[OfferSupplement] Delete rule from DB skipped or failed: {}", ex.getMessage());
             }
         }
         return removed != null;
@@ -307,7 +313,8 @@ public class OfferSupplementService {
             if (analyticsService != null) {
                 try {
                     analyticsService.recordClick(affiliateId, sub1);
-                } catch (Exception ignored) {
+                } catch (Exception ex) {
+                    log.debug("[OfferSupplement] Record Sub-ID click skipped: {}", ex.getMessage());
                 }
             }
 
@@ -600,19 +607,37 @@ public class OfferSupplementService {
 
     /**
      * 定时自动补量调度器：每 60 秒巡检已开启 `autoEnabled = true` 的活跃补量规则
+     * 支持分布式锁防护：多 Pod 集群部署下确保同一补量规则在同一调度周期内仅被一个节点锁定执行
      */
     @Scheduled(fixedDelay = 60000L, initialDelay = 30000L)
     public void runScheduledAutoSupplement() {
         Instant now = Instant.now();
-        for (OfferSupplementRule rule : memoryRules.values()) {
-            if (!rule.autoEnabled() || !"ACTIVE".equalsIgnoreCase(rule.status())) {
+        List<OfferSupplementRule> candidateRules = (ruleMapper != null)
+                ? listRules(null, null).stream().filter(OfferSupplementRule::autoEnabled).toList()
+                : memoryRules.values().stream().filter(OfferSupplementRule::autoEnabled).toList();
+
+        for (OfferSupplementRule rule : candidateRules) {
+            if (!"ACTIVE".equalsIgnoreCase(rule.status())) {
                 continue;
             }
             Instant lastExec = rule.lastExecutedAt();
             if (lastExec != null && Duration.between(lastExec, now).toMinutes() < rule.cronIntervalMinutes()) {
                 continue;
             }
-            try {
+
+            // 分布式锁加固：租期与 cron 周期对齐（最少 1 分钟，最多 15 分钟）
+            String lockKey = "lock:supplement:rule:" + rule.id();
+            Duration lease = Duration.ofMinutes(Math.max(1, Math.min(rule.cronIntervalMinutes(), 15)));
+            Optional<DistributedLock.LockHandle> lockOpt = (distributedLock != null)
+                    ? distributedLock.tryAcquire(lockKey, lease)
+                    : Optional.empty();
+
+            if (distributedLock != null && lockOpt.isEmpty()) {
+                log.debug("[OfferSupplement] Rule {} is currently locked by another node, skipping scheduled run", rule.id());
+                continue;
+            }
+
+            try (var ignoredHandle = lockOpt.orElse(null)) {
                 executeSupplementBatch(new SupplementTriggerRequest(
                         rule.tenantId(),
                         rule.id(),
@@ -650,7 +675,8 @@ public class OfferSupplementService {
                 if (dbLogs != null && !dbLogs.isEmpty()) {
                     return dbLogs.stream().map(this::toLogDomain).toList();
                 }
-            } catch (Exception ignored) {
+            } catch (Exception ex) {
+                log.debug("[OfferSupplement] List logs from DB skipped or failed: {}", ex.getMessage());
             }
         }
         return memoryLogs.stream()
