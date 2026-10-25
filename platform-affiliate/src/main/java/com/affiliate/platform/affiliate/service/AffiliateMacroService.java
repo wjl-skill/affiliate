@@ -18,12 +18,11 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
-import java.util.stream.Collectors;
 
 /**
  * 宏参数与平台映射管理服务 (Macro Parameter & Platform Mapping Service - MyBatis-Plus)
  * <p>
- * 维护本平台标准宏字典，以及各广告/流量平台 (Awin、ShareASale、CJ、TikTok 等) 的宏写法对照表，
+ * 维护本平台标准宏字典，以及各广告/流量平台 (Awin、ShareASale、CJ、TikTok、AppsFlyer、Adjust 等) 的宏写法对照表，
  * 提供追踪链接与 S2S 回传链接在「标准宏 ⇄ 平台宏」之间的双向渲染转换。
  * 宏配置为平台级全局字典，跨租户共享。
  */
@@ -117,7 +116,6 @@ public class AffiliateMacroService {
     public boolean deleteParam(String id) {
         if (macroParamMapper != null && dbAvailable) {
             try {
-                // 查询外提：进入循环前单次查询待删除实体，判断存在性并提取宏键
                 MacroParamEntity e = macroParamMapper.selectById(id);
                 if (e == null) {
                     return false;
@@ -262,18 +260,10 @@ public class AffiliateMacroService {
     // 链接双向渲染
     // ==========================================
 
-    /**
-     * 渲染方向: 标准宏 → 平台宏
-     * 例: https://advertiser.com/land?clickid={click_id}&u1={sub1} → AWIN 写法
-     */
     public RenderResult renderToPlatform(String platformCode, String url) {
         return convert(platformCode, url, true);
     }
 
-    /**
-     * 反渲染方向: 平台宏 → 标准宏
-     * 例: 广告主提供的含平台原生宏的链接 → 本平台标准追踪链接模板
-     */
     public RenderResult renderToStandard(String platformCode, String url) {
         return convert(platformCode, url, false);
     }
@@ -300,7 +290,6 @@ public class AffiliateMacroService {
         List<String> unmapped = new ArrayList<>();
 
         if (toPlatform) {
-            // 标准 → 平台: 按标准宏 token 长度倒序排序，避免短子串误伤长占位符（如 {sub1} 误伤 {sub10}）
             List<PlatformMacroMapping> sortedMappings = mappings.stream()
                     .sorted(Comparator.comparingInt((PlatformMacroMapping m) -> ("{" + m.macroKey() + "}").length()).reversed())
                     .toList();
@@ -311,7 +300,6 @@ public class AffiliateMacroService {
                 Matcher matcher = pattern.matcher(result);
                 if (matcher.find()) {
                     result = matcher.replaceAll(Matcher.quoteReplacement(m.platformMacroToken()));
-                    // 恒等映射不计入 replaced（例如 {country} 转为 {country} 无实质形态转换）
                     if (!standardToken.equalsIgnoreCase(m.platformMacroToken())) {
                         replaced.add(Map.of("macroKey", m.macroKey(), "token", m.platformMacroToken()));
                     }
@@ -324,29 +312,24 @@ public class AffiliateMacroService {
                 }
             }
         } else {
-            // 平台 → 标准 (standardize): 按平台宏 token 长度倒序排序，避免短子串误伤长占位符（如 [subid] 误伤 [subid_extra]）
             List<PlatformMacroMapping> sortedMappings = mappings.stream()
                     .sorted(Comparator.comparingInt((PlatformMacroMapping m) -> m.platformMacroToken().length()).reversed())
                     .toList();
 
             for (PlatformMacroMapping m : sortedMappings) {
-                // 反向匹配大小写归一：无论传入 [ssn]、[SSN] 还是 __clickid__、__CLICKID__，均可不敏感匹配并替换为标准宏
                 Pattern pattern = Pattern.compile(Pattern.quote(m.platformMacroToken()), Pattern.CASE_INSENSITIVE);
                 Matcher matcher = pattern.matcher(result);
                 if (matcher.find()) {
                     String standardToken = "{" + m.macroKey() + "}";
                     result = matcher.replaceAll(Matcher.quoteReplacement(standardToken));
-                    // 恒等映射不计入 replaced
                     if (!m.platformMacroToken().equalsIgnoreCase(standardToken)) {
                         replaced.add(Map.of("macroKey", m.macroKey(), "token", m.platformMacroToken()));
                     }
                 }
             }
 
-            // standardize 补 unmapped 反馈：扫描转换后仍残留的未映射宏占位符（支持 {...}, [...], __...__ 等常见平台宏风格）
             for (String token : extractPotentialMacroTokens(result)) {
                 String stripped = token.replaceAll("^[\\[{_]+|[\\]}_]+$", "");
-                // 如果是已识别的标准宏占位符形如 {macro_key}，说明已标准化或本身就是标准宏，不计入 unmapped
                 if (token.startsWith("{") && token.endsWith("}") && knownStandard.contains(stripped.toLowerCase())) {
                     continue;
                 }
@@ -358,20 +341,16 @@ public class AffiliateMacroService {
         return new RenderResult(result, replaced, unmapped);
     }
 
-    /** 提取 URL 中形如 {xxx}, [xxx], __XXX__ 的宏占位候选词 */
     private List<String> extractPotentialMacroTokens(String url) {
         List<String> tokens = new ArrayList<>();
-        // 1. 方括号 [xxx]
         Matcher mBrackets = Pattern.compile("\\[([^\\[\\]]+)\\]").matcher(url);
         while (mBrackets.find()) {
             tokens.add(mBrackets.group(0));
         }
-        // 2. 双下划线 __XXX__
         Matcher mUnderscores = Pattern.compile("(__[A-Za-z0-9_]+__)").matcher(url);
         while (mUnderscores.find()) {
             tokens.add(mUnderscores.group(0));
         }
-        // 3. 花括号 {xxx}
         Matcher mBraces = Pattern.compile("\\{([^{}]+)\\}").matcher(url);
         while (mBraces.find()) {
             tokens.add(mBraces.group(0));
@@ -379,7 +358,6 @@ public class AffiliateMacroService {
         return tokens;
     }
 
-    /** 提取 URL 中剩余的 {xxx} 宏占位符 (不含 {}) */
     private List<String> extractBraceTokens(String url) {
         List<String> tokens = new ArrayList<>();
         int i = 0;
@@ -402,7 +380,6 @@ public class AffiliateMacroService {
     // ==========================================
 
     private void ensureSeedData() {
-        // 先在内存中构建完备的默认种子字典，确保表未创建、未迁移或离线模式下系统直接高可用
         initFallbackSeed();
 
         if (macroParamMapper != null && mappingMapper != null) {
@@ -418,7 +395,6 @@ public class AffiliateMacroService {
                 }
             } catch (Exception e) {
                 dbAvailable = false;
-                // 关键保护：缺 V12 表或数据库无法访问时，记录告警并安全降级，绝不阻塞应用上下文启动
                 log.warn("[AffiliateMacroService] Macro tables (V12) not ready or query failed, graceful fallback to in-memory seeds. Details: {}", e.getMessage());
             }
         } else {
@@ -442,6 +418,12 @@ public class AffiliateMacroService {
             seedFallbackParam("device_type", "设备类型", "1=Mobile 2=Desktop 3=Tablet", "1", "ENVIRONMENT");
             seedFallbackParam("ip", "访客 IP", "点击发生时的客户端 IP", "203.0.113.7", "ENVIRONMENT");
             seedFallbackParam("ua", "User-Agent", "点击发生时的客户端 UA (URL 编码)", "Mozilla%2F5.0", "ENVIRONMENT");
+            seedFallbackParam("idfa", "iOS 广告标识 IDFA", "Apple iOS 设备广告标识符 (补量与 MMP 归因核心标识)", "9DB378C6-22B5-407B-AAC5-8D47F7898E49", "DEVICE");
+            seedFallbackParam("gadvid", "Google 广告标识 GAID", "Android Google Advertising ID (gadvid / gps_adid)", "38400000-8cf0-11bd-b23e-10b96e40000d", "DEVICE");
+            seedFallbackParam("ds_publisher_id", "下游子媒体 ID", "存储桶补量画像中的原始子媒体标识 (ds_publisher_id)", "56cff4d39deefe246000001d", "SUB_TRACKING");
+            seedFallbackParam("ds_adx", "下游交易平台 ADX", "存储桶补量画像中的流量交易平台 (如 mvungle/inmobi/topon)", "mvungle", "SUB_TRACKING");
+            seedFallbackParam("s", "流量源地区标签 s", "存储桶补量画像中的源标签 (如 ym_tw_ios)", "ym_tw_ios", "SUB_TRACKING");
+            seedFallbackParam("m", "流量模型分层标识 m", "存储桶补量画像中的模型整型标识", "6", "SUB_TRACKING");
         }
 
         if (fallbackMappings.isEmpty()) {
@@ -478,6 +460,21 @@ public class AffiliateMacroService {
             seedFallbackMapping("APPSFLYER", "AppsFlyer MMP", "sub1", "{pid}", "渠道媒体来源 pid");
             seedFallbackMapping("APPSFLYER", "AppsFlyer MMP", "country", "{country}", "归因国家");
             seedFallbackMapping("APPSFLYER", "AppsFlyer MMP", "os", "{os}", "设备系统");
+            seedFallbackMapping("APPSFLYER", "AppsFlyer MMP", "idfa", "{idfa}", "iOS IDFA 设备号");
+            seedFallbackMapping("APPSFLYER", "AppsFlyer MMP", "gadvid", "{advertising_id}", "Android GAID 广告号");
+            seedFallbackMapping("APPSFLYER", "AppsFlyer MMP", "ip", "{ip}", "客户端设备 IP");
+            seedFallbackMapping("APPSFLYER", "AppsFlyer MMP", "ua", "{ua}", "客户端 User-Agent");
+            seedFallbackMapping("APPSFLYER", "AppsFlyer MMP", "ds_publisher_id", "{af_siteid}", "AF 子媒体站点 ID");
+            seedFallbackMapping("APPSFLYER", "AppsFlyer MMP", "ds_adx", "{af_sub_siteid}", "AF 下游 ADX 标识");
+
+            // Adjust: 花括号风格
+            seedFallbackMapping("ADJUST", "Adjust MMP", "click_id", "{click_id}", "Adjust 归因点击 ID");
+            seedFallbackMapping("ADJUST", "Adjust MMP", "idfa", "{idfa}", "iOS IDFA 设备号");
+            seedFallbackMapping("ADJUST", "Adjust MMP", "gadvid", "{gps_adid}", "Google Play Advertising ID");
+            seedFallbackMapping("ADJUST", "Adjust MMP", "ip", "{ip_address}", "客户端设备 IP");
+            seedFallbackMapping("ADJUST", "Adjust MMP", "ua", "{user_agent}", "客户端 User-Agent");
+            seedFallbackMapping("ADJUST", "Adjust MMP", "ds_publisher_id", "{publisher_id}", "Adjust 子媒体 ID");
+            seedFallbackMapping("ADJUST", "Adjust MMP", "ds_adx", "{subpublisher_id}", "Adjust 下游 ADX 标识");
 
             // Google Ads: GCLID 体系
             seedFallbackMapping("GOOGLE", "Google Ads", "click_id", "{gclid}", "Google 点击 ID");
@@ -510,6 +507,12 @@ public class AffiliateMacroService {
         seedParam("device_type", "设备类型", "1=Mobile 2=Desktop 3=Tablet", "1", "ENVIRONMENT");
         seedParam("ip", "访客 IP", "点击发生时的客户端 IP", "203.0.113.7", "ENVIRONMENT");
         seedParam("ua", "User-Agent", "点击发生时的客户端 UA (URL 编码)", "Mozilla%2F5.0", "ENVIRONMENT");
+        seedParam("idfa", "iOS 广告标识 IDFA", "Apple iOS 设备广告标识符 (补量与 MMP 归因核心标识)", "9DB378C6-22B5-407B-AAC5-8D47F7898E49", "DEVICE");
+        seedParam("gadvid", "Google 广告标识 GAID", "Android Google Advertising ID (gadvid / gps_adid)", "38400000-8cf0-11bd-b23e-10b96e40000d", "DEVICE");
+        seedParam("ds_publisher_id", "下游子媒体 ID", "存储桶补量画像中的原始子媒体标识 (ds_publisher_id)", "56cff4d39deefe246000001d", "SUB_TRACKING");
+        seedParam("ds_adx", "下游交易平台 ADX", "存储桶补量画像中的流量交易平台 (如 mvungle/inmobi/topon)", "mvungle", "SUB_TRACKING");
+        seedParam("s", "流量源地区标签 s", "存储桶补量画像中的源标签 (如 ym_tw_ios)", "ym_tw_ios", "SUB_TRACKING");
+        seedParam("m", "流量模型分层标识 m", "存储桶补量画像中的模型整型标识", "6", "SUB_TRACKING");
     }
 
     private void initDbSeedMappings() {
@@ -546,6 +549,21 @@ public class AffiliateMacroService {
         seedMapping("APPSFLYER", "AppsFlyer MMP", "sub1", "{pid}", "渠道媒体来源 pid");
         seedMapping("APPSFLYER", "AppsFlyer MMP", "country", "{country}", "归因国家");
         seedMapping("APPSFLYER", "AppsFlyer MMP", "os", "{os}", "设备系统");
+        seedMapping("APPSFLYER", "AppsFlyer MMP", "idfa", "{idfa}", "iOS IDFA 设备号");
+        seedMapping("APPSFLYER", "AppsFlyer MMP", "gadvid", "{advertising_id}", "Android GAID 广告号");
+        seedMapping("APPSFLYER", "AppsFlyer MMP", "ip", "{ip}", "客户端设备 IP");
+        seedMapping("APPSFLYER", "AppsFlyer MMP", "ua", "{ua}", "客户端 User-Agent");
+        seedMapping("APPSFLYER", "AppsFlyer MMP", "ds_publisher_id", "{af_siteid}", "AF 子媒体站点 ID");
+        seedMapping("APPSFLYER", "AppsFlyer MMP", "ds_adx", "{af_sub_siteid}", "AF 下游 ADX 标识");
+
+        // Adjust
+        seedMapping("ADJUST", "Adjust MMP", "click_id", "{click_id}", "Adjust 归因点击 ID");
+        seedMapping("ADJUST", "Adjust MMP", "idfa", "{idfa}", "iOS IDFA 设备号");
+        seedMapping("ADJUST", "Adjust MMP", "gadvid", "{gps_adid}", "Google Play Advertising ID");
+        seedMapping("ADJUST", "Adjust MMP", "ip", "{ip_address}", "客户端设备 IP");
+        seedMapping("ADJUST", "Adjust MMP", "ua", "{user_agent}", "客户端 User-Agent");
+        seedMapping("ADJUST", "Adjust MMP", "ds_publisher_id", "{publisher_id}", "Adjust 子媒体 ID");
+        seedMapping("ADJUST", "Adjust MMP", "ds_adx", "{subpublisher_id}", "Adjust 下游 ADX 标识");
 
         // Google Ads
         seedMapping("GOOGLE", "Google Ads", "click_id", "{gclid}", "Google 点击 ID");
@@ -566,7 +584,6 @@ public class AffiliateMacroService {
         try {
             saveParam(param);
         } catch (Exception ignored) {
-            // 种子数据遇并发、已存在或表缺失时静默跳过
         }
     }
 
