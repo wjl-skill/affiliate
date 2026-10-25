@@ -5,6 +5,8 @@ import com.affiliate.platform.entity.UserRoleEntity;
 import com.affiliate.platform.mapper.UserAccountMapper;
 import com.affiliate.platform.mapper.UserRoleMapper;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.stereotype.Service;
@@ -23,6 +25,8 @@ import java.util.stream.Collectors;
  */
 @Service
 public class UserAccountService {
+
+    private static final Logger log = LoggerFactory.getLogger(UserAccountService.class);
 
     /** 新建用户与历史无密码种子用户的统一初始口令 */
     public static final String DEFAULT_INITIAL_PASSWORD = "Admin@123";
@@ -56,6 +60,7 @@ public class UserAccountService {
                     initDefaultSeedUsers();
                 }
             } catch (Exception e) {
+                log.warn("Failed to check database seed users, using memory fallback: {}", e.getMessage());
                 initDefaultSeedUsersFallbackOnly();
             }
         } else {
@@ -162,7 +167,8 @@ public class UserAccountService {
                 if (userRoleMapper != null && user.roles() != null) {
                     assignRoles(user.id(), user.roles());
                 }
-            } catch (Exception ignored) {
+            } catch (Exception e) {
+                log.warn("Failed to persist user {} to database: {}, using memory store", user.id(), e.getMessage());
             }
         }
         return user;
@@ -175,7 +181,8 @@ public class UserAccountService {
                 qw.orderByDesc("created_at").last("LIMIT 1000");
                 List<UserAccountEntity> entities = userMapper.selectList(qw);
                 return entities.stream().map(this::toDomain).toList();
-            } catch (Exception ignored) {
+            } catch (Exception e) {
+                log.warn("Failed to query user list from database: {}, using memory store", e.getMessage());
             }
         }
         return new ArrayList<>(fallbackStore.values());
@@ -186,7 +193,8 @@ public class UserAccountService {
             try {
                 UserAccountEntity entity = userMapper.selectById(id);
                 return Optional.ofNullable(entity).map(this::toDomain);
-            } catch (Exception ignored) {
+            } catch (Exception e) {
+                log.warn("Failed to query user {} from database: {}, using memory store", id, e.getMessage());
             }
         }
         return Optional.ofNullable(fallbackStore.get(id));
@@ -199,7 +207,8 @@ public class UserAccountService {
                 qw.eq("username", username).last("LIMIT 1");
                 UserAccountEntity entity = userMapper.selectOne(qw);
                 return Optional.ofNullable(entity).map(this::toDomain);
-            } catch (Exception ignored) {
+            } catch (Exception e) {
+                log.warn("Failed to query user by username {} from database: {}, using memory store", username, e.getMessage());
             }
         }
         return fallbackStore.values().stream()
@@ -217,7 +226,8 @@ public class UserAccountService {
                 }
                 qw.last("LIMIT 1");
                 return Optional.ofNullable(userMapper.selectOne(qw));
-            } catch (Exception ignored) {
+            } catch (Exception e) {
+                log.warn("Failed to query user entity by username {} from database: {}, using memory store", username, e.getMessage());
             }
         }
         UserAccount user = fallbackStore.values().stream()
@@ -245,7 +255,8 @@ public class UserAccountService {
                 return toDomain(entity);
             } catch (NoSuchElementException e) {
                 throw e;
-            } catch (Exception ignored) {
+            } catch (Exception e) {
+                log.warn("Failed to toggle user {} status to {} in database: {}, using memory store", id, status, e.getMessage());
             }
         }
         UserAccount user = fallbackStore.get(id);
@@ -273,7 +284,8 @@ public class UserAccountService {
                 return toDomain(entity);
             } catch (NoSuchElementException e) {
                 throw e;
-            } catch (Exception ignored) {
+            } catch (Exception e) {
+                log.warn("Failed to assign roles to user {} in database: {}, using memory store", id, e.getMessage());
             }
         }
         UserAccount user = fallbackStore.get(id);
@@ -298,7 +310,8 @@ public class UserAccountService {
                 return userMapper.deleteById(id) > 0;
             } catch (IllegalArgumentException e) {
                 throw e;
-            } catch (Exception ignored) {
+            } catch (Exception e) {
+                log.warn("Failed to delete user {} from database: {}, using memory store", id, e.getMessage());
             }
         }
         UserAccount user = fallbackStore.get(id);
@@ -320,6 +333,7 @@ public class UserAccountService {
                 UserAccountEntity entity = userMapper.selectOne(qw);
                 return entity != null ? entity.getPasswordHash() : null;
             } catch (Exception e) {
+                log.warn("Failed to query password hash for user {} from database: {}, using memory store", username, e.getMessage());
                 return fallbackPasswordHashes.get(username.toLowerCase());
             }
         }
@@ -341,7 +355,8 @@ public class UserAccountService {
                 entity.setUpdatedAt(Instant.now());
                 userMapper.updateById(entity);
                 return true;
-            } catch (Exception ignored) {
+            } catch (Exception e) {
+                log.warn("Failed to update password hash for user {} in database: {}, using memory store", username, e.getMessage());
             }
         }
         fallbackPasswordHashes.put(username.toLowerCase(), hash);
@@ -367,7 +382,8 @@ public class UserAccountService {
                     userMapper.updateById(entity);
                 }
                 return;
-            } catch (Exception ignored) {
+            } catch (Exception e) {
+                log.warn("Failed to record login for user {} in database: {}, using memory store", userId, e.getMessage());
             }
         }
         UserAccount user = fallbackStore.get(userId);
@@ -397,7 +413,9 @@ public class UserAccountService {
                     }
                 }
             }
-        } catch (Exception ignored) {}
+        } catch (Exception e) {
+            log.debug("Initial password check completed with notice: {}", e.getMessage());
+        }
     }
 
     private UserAccount toDomain(UserAccountEntity entity) {
@@ -408,7 +426,8 @@ public class UserAccountService {
                 roleQw.eq("user_id", entity.getId());
                 List<UserRoleEntity> roleEntities = userRoleMapper.selectList(roleQw);
                 roleCodes = roleEntities.stream().map(UserRoleEntity::getRoleId).collect(Collectors.toSet());
-            } catch (Exception ignored) {
+            } catch (Exception e) {
+                log.warn("Failed to fetch roles for user {} from database: {}", entity.getId(), e.getMessage());
             }
         }
 

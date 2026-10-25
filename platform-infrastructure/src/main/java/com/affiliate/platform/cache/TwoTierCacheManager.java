@@ -172,7 +172,9 @@ public class TwoTierCacheManager {
                         if (redisTemplate != null) {
                             try {
                                 redisTemplate.opsForValue().set(redisKey(key), NULL_OBJECT, Duration.ofSeconds(30));
-                            } catch (Exception ignored) {}
+                            } catch (Exception e) {
+                                log.debug("Redis null cache write notice for key {}: {}", key, e.getMessage());
+                            }
                         }
                     }
                     return loaded;

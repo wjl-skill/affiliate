@@ -17,3 +17,11 @@ resources:
 commonLabels:
   app.kubernetes.io/managed-by: kustomize
   app.kubernetes.io/part-of: affiliate-platform
+
+images:
+  - name: affiliate-dataplane
+    newName: ghcr.io/affiliate/dataplane
+    newTag: 0.2.0
+  - name: affiliate-controlplane
+    newName: ghcr.io/affiliate/controlplane
+    newTag: 0.2.0

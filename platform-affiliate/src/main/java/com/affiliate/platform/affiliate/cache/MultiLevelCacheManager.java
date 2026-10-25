@@ -2,6 +2,8 @@ package com.affiliate.platform.affiliate.cache;
 
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Component;
 
@@ -11,20 +13,22 @@ import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
 
 /**
- * 多级缓存管理器
+ * 多级缓存管理�?
  * <p>
- * 三级缓存架构：
- * L1: Caffeine 本地缓存（进程内，毫秒级）
- * L2: Redis 分布式缓存（跨实例，<10ms）
+ * 三级缓存架构�?
+ * L1: Caffeine 本地缓存（进程内，毫秒级�?
+ * L2: Redis 分布式缓存（跨实例，<10ms�?
  * L3: PostgreSQL 数据库（持久化存储）
  * <p>
- * 缓存策略：
+ * 缓存策略�?
  * - 读取：L1 -> L2 -> L3（数据库），逐级回填
- * - 写入：直接写入 L3，同时失效 L1 和 L2
- * - 删除：同时删除 L1、L2、L3
+ * - 写入：直接写�?L3，同时失�?L1 �?L2
+ * - 删除：同时删�?L1、L2、L3
  */
 @Component
 public class MultiLevelCacheManager {
+
+    private static final Logger log = LoggerFactory.getLogger(MultiLevelCacheManager.class);
 
     private final RedisTemplate<String, Object> redisTemplate;
 
@@ -40,7 +44,7 @@ public class MultiLevelCacheManager {
     public MultiLevelCacheManager(RedisTemplate<String, Object> redisTemplate) {
         this.redisTemplate = redisTemplate;
 
-        // 初始化 L1 缓存
+        // 初始�?L1 缓存
         this.l1Cache = Caffeine.newBuilder()
                 .maximumSize(L1_MAX_SIZE)
                 .expireAfterWrite(L1_EXPIRE_AFTER_WRITE)
@@ -52,11 +56,11 @@ public class MultiLevelCacheManager {
     /**
      * 获取缓存数据（自动穿透三级缓存）
      *
-     * @param key 缓存键
+     * @param key 缓存�?
      * @param type 返回类型
-     * @param dbLoader 数据库加载器（L3）
+     * @param dbLoader 数据库加载器（L3�?
      * @param <T> 泛型类型
-     * @return Optional 包装的结果
+     * @return Optional 包装的结�?
      */
     public <T> Optional<T> get(String key, Class<T> type, Supplier<T> dbLoader) {
         // L1: 本地缓存查询
@@ -73,10 +77,10 @@ public class MultiLevelCacheManager {
             return Optional.of(type.cast(l2Value));
         }
 
-        // L3: 数据库查询
+        // L3: 数据库查�?
         T dbValue = dbLoader.get();
         if (dbValue != null) {
-            // 回填 L2 和 L1
+            // 回填 L2 �?L1
             redisTemplate.opsForValue().set(key, dbValue, L2_DEFAULT_TTL);
             l1Cache.put(key, dbValue);
             return Optional.of(dbValue);
@@ -86,7 +90,7 @@ public class MultiLevelCacheManager {
     }
 
     /**
-     * 获取缓存数据（带自定义 TTL）
+     * 获取缓存数据（带自定�?TTL�?
      */
     public <T> Optional<T> get(String key, Class<T> type, Duration l2Ttl, Supplier<T> dbLoader) {
         // L1 查询
@@ -121,7 +125,7 @@ public class MultiLevelCacheManager {
     }
 
     /**
-     * 写入缓存（带自定义 TTL）
+     * 写入缓存（带自定�?TTL�?
      */
     public <T> void put(String key, T value, Duration l2Ttl) {
         // 写入 L1
@@ -136,7 +140,7 @@ public class MultiLevelCacheManager {
     }
 
     /**
-     * 分布式原子抢占锁 (SETNX)，结合 Redis 与本地 L1 双重保障跨节点幂等防重
+     * 分布式原子抢占锁 (SETNX)，结�?Redis 与本�?L1 双重保障跨节点幂等防�?
      */
     public boolean setIfAbsent(String key, Object value, Duration ttl) {
         if (redisTemplate != null) {
@@ -145,15 +149,15 @@ public class MultiLevelCacheManager {
                 if (success != null) {
                     return success;
                 }
-            } catch (Exception ignored) {
-                // Redis 离线时优雅降级
+            } catch (Exception e) {
+                log.debug("Redis unavailable for setIfAbsent on key {}: {}", key, e.getMessage());
             }
         }
         return l1Cache.asMap().putIfAbsent(key, value) == null;
     }
 
     /**
-     * 失效缓存（清除 L1 和 L2）
+     * 失效缓存（清�?L1 �?L2�?
      */
     public void evict(String key) {
         // 清除 L1
@@ -179,7 +183,7 @@ public class MultiLevelCacheManager {
         // L1: 清除所有（简化实现）
         l1Cache.invalidateAll();
 
-        // L2: 按模式删除
+        // L2: 按模式删�?
         var redisKeys = redisTemplate.keys(pattern);
         if (redisKeys != null && !redisKeys.isEmpty()) {
             redisTemplate.delete(redisKeys);
@@ -187,7 +191,7 @@ public class MultiLevelCacheManager {
     }
 
     /**
-     * 仅从 L1 获取（快速路径，不触发数据库）
+     * 仅从 L1 获取（快速路径，不触发数据库�?
      */
     public <T> Optional<T> getFromL1Only(String key, Class<T> type) {
         Object value = l1Cache.getIfPresent(key);
@@ -203,7 +207,7 @@ public class MultiLevelCacheManager {
     }
 
     /**
-     * 预热缓存（批量加载到 L1 和 L2）
+     * 预热缓存（批量加载到 L1 �?L2�?
      */
     public <T> void warmUp(String key, T value, Duration l2Ttl) {
         put(key, value, l2Ttl);
@@ -224,11 +228,11 @@ public class MultiLevelCacheManager {
     }
 
     /**
-     * 清空所有缓存
+     * 清空所有缓�?
      */
     public void clear() {
         l1Cache.invalidateAll();
-        // 注意：清空 Redis 需谨慎，这里只清除特定前缀
+        // 注意：清�?Redis 需谨慎，这里只清除特定前缀
     }
 
     /**

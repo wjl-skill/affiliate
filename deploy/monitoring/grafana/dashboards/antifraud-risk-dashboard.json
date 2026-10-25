@@ -1,0 +1,185 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": "-- Grafana --",
+        "enable": true,
+        "hide": true,
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "id": 1,
+      "title": "🛡️ 4D 智能反欺诈实时防御大盘 (Anti-Fraud Threat Matrix)",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 5.0 },
+              { "color": "red", "value": 15.0 }
+            ]
+          },
+          "unit": "percent"
+        }
+      },
+      "gridPos": { "h": 5, "w": 6, "x": 0, "y": 1 },
+      "id": 2,
+      "options": {
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(affiliate_antifraud_blocked_total[5m])) / (sum(rate(affiliate_antifraud_inspections_total[5m])) + 1e-6) * 100",
+          "legendFormat": "Rejection Rate",
+          "refId": "A"
+        }
+      ],
+      "title": "当前转化拦截拒绝率 (Rejection Rate)",
+      "type": "gauge"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "axisCenteredZero": false, "drawStyle": "bars", "stacking": { "group": "A", "mode": "normal" } }
+        }
+      },
+      "gridPos": { "h": 5, "w": 9, "x": 6, "y": 1 },
+      "id": 3,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } },
+      "targets": [
+        {
+          "expr": "sum by (reason) (rate(affiliate_antifraud_rejection_reason_total[1m]))",
+          "legendFormat": "{{reason}}",
+          "refId": "A"
+        }
+      ],
+      "title": "风控拦截原因归因分类 (Rejection Reasons Breakdown)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "axisCenteredZero": false, "drawStyle": "line", "lineInterpolation": "smooth" },
+          "unit": "short"
+        }
+      },
+      "gridPos": { "h": 5, "w": 9, "x": 15, "y": 1 },
+      "id": 4,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } },
+      "targets": [
+        {
+          "expr": "affiliate_antifraud_blacklist_size{type=\"ip\"}",
+          "legendFormat": "IP Blacklist Size",
+          "refId": "A"
+        },
+        {
+          "expr": "affiliate_antifraud_blacklist_size{type=\"sub_id\"}",
+          "legendFormat": "Sub-ID Blacklist Size",
+          "refId": "B"
+        }
+      ],
+      "title": "动态拦截黑名单容量趋势 (Dynamic Blacklist Size)",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 6 },
+      "id": 5,
+      "title": "⏱️ CTIT (Click-to-Install-Time) 分布与机房代理探测",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "axisCenteredZero": false, "drawStyle": "line", "lineInterpolation": "smooth" }
+        }
+      },
+      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 7 },
+      "id": 6,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } },
+      "targets": [
+        {
+          "expr": "sum(rate(affiliate_antifraud_ctit_seconds_bucket{le=\"3\"}[5m]))",
+          "legendFormat": "< 3s (Click Spam / Fast Conversion)",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(rate(affiliate_antifraud_ctit_seconds_bucket{le=\"15\"}[5m])) - sum(rate(affiliate_antifraud_ctit_seconds_bucket{le=\"3\"}[5m]))",
+          "legendFormat": "3s ~ 15s (Suspiciously Fast)",
+          "refId": "B"
+        },
+        {
+          "expr": "sum(rate(affiliate_antifraud_ctit_seconds_bucket{le=\"3600\"}[5m])) - sum(rate(affiliate_antifraud_ctit_seconds_bucket{le=\"15\"}[5m]))",
+          "legendFormat": "15s ~ 1h (Normal Organic)",
+          "refId": "C"
+        }
+      ],
+      "title": "CTIT 转化时滞区间直方图分布 (CTIT Distribution)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "axisCenteredZero": false, "drawStyle": "line", "lineInterpolation": "smooth" }
+        }
+      },
+      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 7 },
+      "id": 7,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } },
+      "targets": [
+        {
+          "expr": "sum(rate(affiliate_antifraud_datacenter_ip_total[1m]))",
+          "legendFormat": "Datacenter/Cloud IP Blocked",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(rate(affiliate_antifraud_bot_ua_total[1m]))",
+          "legendFormat": "Bot/Puppeteer UA Blocked",
+          "refId": "B"
+        }
+      ],
+      "title": "机房代理与爬虫 UA 实时拦截吞吐 (Bot & Datacenter Intercepts)",
+      "type": "timeseries"
+    }
+  ],
+  "refresh": "5s",
+  "schemaVersion": 38,
+  "style": "dark",
+  "tags": ["affiliate", "antifraud", "risk", "security"],
+  "time": { "from": "now-1h", "to": "now" },
+  "timezone": "browser",
+  "title": "Affiliate Platform - 4D Anti-Fraud & Risk Telemetry Dashboard",
+  "uid": "affiliate-antifraud-telemetry",
+  "version": 1
+}

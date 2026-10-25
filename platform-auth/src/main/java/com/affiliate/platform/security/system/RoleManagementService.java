@@ -7,6 +7,8 @@ import com.affiliate.platform.mapper.RoleDefinitionMapper;
 import com.affiliate.platform.mapper.RoleMenuMapper;
 import com.affiliate.platform.mapper.RolePermissionMapper;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
@@ -24,6 +26,8 @@ import java.util.stream.Collectors;
  */
 @Service
 public class RoleManagementService {
+
+    private static final Logger log = LoggerFactory.getLogger(RoleManagementService.class);
 
     private final RoleDefinitionMapper roleMapper;
     private final RolePermissionMapper rolePermissionMapper;
@@ -54,6 +58,7 @@ public class RoleManagementService {
                     initDefaultRoles();
                 }
             } catch (Exception e) {
+                log.warn("Failed to check database preset roles, using memory fallback: {}", e.getMessage());
                 initDefaultRolesFallbackOnly();
             }
         } else {
@@ -145,7 +150,8 @@ public class RoleManagementService {
                 if (role.menuIds() != null) {
                     assignMenus(role.id(), role.menuIds());
                 }
-            } catch (Exception ignored) {
+            } catch (Exception e) {
+                log.warn("Failed to persist role {} to database: {}, using memory store", role.id(), e.getMessage());
             }
         }
         return role;
@@ -158,7 +164,8 @@ public class RoleManagementService {
                 qw.orderByAsc("created_at");
                 List<RoleDefinitionEntity> list = roleMapper.selectList(qw);
                 return list.stream().map(this::toDomain).toList();
-            } catch (Exception ignored) {
+            } catch (Exception e) {
+                log.warn("Failed to list roles from database: {}, using memory store", e.getMessage());
             }
         }
         return new ArrayList<>(fallbackStore.values());
@@ -169,7 +176,8 @@ public class RoleManagementService {
             try {
                 RoleDefinitionEntity entity = roleMapper.selectById(id);
                 return Optional.ofNullable(entity).map(this::toDomain);
-            } catch (Exception ignored) {
+            } catch (Exception e) {
+                log.warn("Failed to find role {} in database: {}, using memory store", id, e.getMessage());
             }
         }
         return Optional.ofNullable(fallbackStore.get(id));
@@ -195,7 +203,8 @@ public class RoleManagementService {
                 return roleMapper.deleteById(id) > 0;
             } catch (IllegalArgumentException e) {
                 throw e;
-            } catch (Exception ignored) {
+            } catch (Exception e) {
+                log.warn("Failed to delete role {} from database: {}, using memory store", id, e.getMessage());
             }
         }
 
@@ -224,7 +233,8 @@ public class RoleManagementService {
                 return toDomain(role);
             } catch (NoSuchElementException e) {
                 throw e;
-            } catch (Exception ignored) {
+            } catch (Exception e) {
+                log.warn("Failed to assign permissions to role {} in database: {}, using memory store", id, e.getMessage());
             }
         }
 
@@ -253,7 +263,8 @@ public class RoleManagementService {
                 return toDomain(role);
             } catch (NoSuchElementException e) {
                 throw e;
-            } catch (Exception ignored) {
+            } catch (Exception e) {
+                log.warn("Failed to assign menus to role {} in database: {}, using memory store", id, e.getMessage());
             }
         }
 
@@ -273,7 +284,8 @@ public class RoleManagementService {
                 perms = rolePermissionMapper.selectList(pqw).stream()
                         .map(RolePermissionEntity::getPermissionCode)
                         .collect(Collectors.toSet());
-            } catch (Exception ignored) {
+            } catch (Exception e) {
+                log.warn("Failed to query permissions for role {} from database: {}", entity.getId(), e.getMessage());
             }
         }
 
@@ -285,7 +297,8 @@ public class RoleManagementService {
                 menus = roleMenuMapper.selectList(mqw).stream()
                         .map(RoleMenuEntity::getMenuId)
                         .collect(Collectors.toSet());
-            } catch (Exception ignored) {
+            } catch (Exception e) {
+                log.warn("Failed to query menus for role {} from database: {}", entity.getId(), e.getMessage());
             }
         }
 

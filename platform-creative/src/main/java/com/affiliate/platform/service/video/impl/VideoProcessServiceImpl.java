@@ -206,7 +206,9 @@ public class VideoProcessServiceImpl implements VideoProcessService {
             if (Files.exists(path)) {
                 return path;
             }
-        } catch (Exception ignored) {}
+        } catch (Exception e) {
+            log.debug("[VideoProcess] Local path resolution notice: {}", e.getMessage());
+        }
 
         // 若为远程 URL 或模拟文件，在工作目录内生成对应文件
         Path localFile = workDir.resolve(defaultFileName);

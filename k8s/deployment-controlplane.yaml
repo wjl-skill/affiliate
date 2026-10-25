@@ -36,7 +36,7 @@ spec:
         fsGroup: 10001
       containers:
         - name: controlplane
-          image: affiliate-platform:latest
+          image: affiliate-controlplane:0.2.0
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8080

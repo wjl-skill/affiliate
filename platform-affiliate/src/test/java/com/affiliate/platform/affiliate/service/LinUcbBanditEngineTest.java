@@ -25,11 +25,14 @@ class LinUcbBanditEngineTest {
         double[] x = banditEngine.extractFeatureVector(ctx);
 
         assertEquals(LinUcbBanditEngine.FEATURE_DIM, x.length);
+        assertEquals(12, LinUcbBanditEngine.FEATURE_DIM);
         assertEquals(1.0, x[0], 1e-6); // intercept
         assertEquals(0.5, x[1], 1e-6); // 2 / 4.0
         assertTrue(x[5] > 0.9); // sub1 present
         assertEquals(0.35, x[6], 1e-6); // 3.50 / 10.0
         assertEquals(1.0, x[7], 1e-6); // VIP
+        assertEquals(1.0, x[8], 1e-6); // iOS
+        assertEquals(1.0, x[9], 1e-6); // WiFi
     }
 
     @Test
@@ -75,5 +78,27 @@ class LinUcbBanditEngineTest {
 
         String best = banditEngine.selectBestOffer(tenantId, smartLinkId, List.of(offer), ctx);
         assertEquals(offer, best);
+    }
+
+    @Test
+    void testGenerateAbComparisonReport() {
+        String tenantId = "t1";
+        String smartLinkId = "link1";
+        LinUcbBanditEngine.BanditContext ctx = LinUcbBanditEngine.BanditContext.of("US", 2, 12);
+
+        for (int i = 0; i < 60; i++) {
+            banditEngine.updateArm(tenantId, smartLinkId, "offer_a", ctx, i % 2 == 0 ? 3.0 : 0.0);
+            banditEngine.updateArm(tenantId, smartLinkId, "offer_b", ctx, i % 5 == 0 ? 1.0 : 0.0);
+        }
+
+        var report = banditEngine.generateAbComparisonReport(tenantId, smartLinkId);
+        assertNotNull(report);
+        assertEquals(2, report.totalArms());
+        assertEquals(120, report.totalClicksTreatment());
+        assertTrue(report.totalConversionsTreatment() > 0);
+        assertTrue(report.cvrLiftPercent() > 0.0);
+        assertEquals(95.0, report.statisticalConfidence());
+        assertTrue(report.verdict().contains("BANDIT"));
+        assertEquals(2, report.armStats().size());
     }
 }

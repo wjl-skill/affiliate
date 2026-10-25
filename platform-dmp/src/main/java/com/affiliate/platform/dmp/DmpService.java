@@ -12,6 +12,8 @@ import com.affiliate.platform.service.NotFoundException;
 import com.affiliate.platform.tenant.TenantContext;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
@@ -22,6 +24,8 @@ import java.util.concurrent.ConcurrentMap;
 /** DMP 受众分群服务，生产环境的读写统一通过 MyBatis-Plus Mapper。 */
 @Service
 public class DmpService {
+
+    private static final Logger log = LoggerFactory.getLogger(DmpService.class);
     private final EventPublisher events;
     private final AudienceSegmentMapper segmentMapper;
     private final DmpSegmentMemberMapper memberMapper;
@@ -128,7 +132,9 @@ public class DmpService {
             if (redisTemplate != null) {
                 try {
                     redisTemplate.opsForValue().setBit("dmp:seg:bitmap:" + id, offset, true);
-                } catch (Exception ignored) {}
+                } catch (Exception e) {
+                    log.debug("Redis bitmap write failed for segment {}: {}", id, e.getMessage());
+                }
             }
         }
 
@@ -136,7 +142,9 @@ public class DmpService {
         if (redisTemplate != null) {
             try {
                 redisTemplate.opsForSet().add("dmp:seg:members:" + id, anonymousIds.toArray(new String[0]));
-            } catch (Exception ignored) {}
+            } catch (Exception e) {
+                log.debug("Redis set write failed for segment {}: {}", id, e.getMessage());
+            }
         }
 
         AudienceSegment updated = new AudienceSegment(current.id(), current.name(), current.source(), current.taxonomy(), current.expiresAt(), newCount, current.status(), current.createdAt());
@@ -157,7 +165,9 @@ public class DmpService {
                 if (Boolean.TRUE.equals(isBitSet)) {
                     return true;
                 }
-            } catch (Exception ignored) {}
+            } catch (Exception e) {
+                log.debug("Redis bitmap read failed for segment {}: {}", id, e.getMessage());
+            }
         }
 
         // 2. 本地内存 BitSet 命中 (纳秒级)
@@ -172,7 +182,9 @@ public class DmpService {
         if (redisTemplate != null) {
             try {
                 if (Boolean.TRUE.equals(redisTemplate.opsForSet().isMember("dmp:seg:members:" + id, anonymousId))) return true;
-            } catch (Exception ignored) {}
+            } catch (Exception e) {
+                log.debug("Redis set read failed for segment {}: {}", id, e.getMessage());
+            }
         }
 
         // 4. 数据库持久化兜底与本地内存 Set 兜底

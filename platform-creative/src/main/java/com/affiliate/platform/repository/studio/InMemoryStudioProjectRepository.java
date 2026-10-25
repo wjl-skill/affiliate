@@ -6,6 +6,8 @@ import com.affiliate.platform.entity.CreativeStudioProjectEntity;
 import com.affiliate.platform.mapper.CreativeStudioProjectMapper;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Repository;
 
 import java.time.Instant;
@@ -20,6 +22,8 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 @Repository
 public class InMemoryStudioProjectRepository implements StudioProjectRepository {
+
+    private static final Logger log = LoggerFactory.getLogger(InMemoryStudioProjectRepository.class);
 
     private final CreativeStudioProjectMapper projectMapper;
     private final Map<String, StudioProject> storage = new ConcurrentHashMap<>();
@@ -67,7 +71,7 @@ public class InMemoryStudioProjectRepository implements StudioProjectRepository 
                 } else {
                     projectMapper.insert(entity);
                 }
-            } catch (Exception ignored) {}
+            } catch (Exception e) {    log.debug("[InMemoryStudioProjectRepository] Database operation notice: {}", e.getMessage());}
         }
         storage.put(key(project.tenantId(), project.id()), project);
         return project;
@@ -87,7 +91,7 @@ public class InMemoryStudioProjectRepository implements StudioProjectRepository 
                 if (entity != null) {
                     return Optional.of(toDomain(entity));
                 }
-            } catch (Exception ignored) {}
+            } catch (Exception e) {    log.debug("[InMemoryStudioProjectRepository] Database operation notice: {}", e.getMessage());}
         }
         StudioProject found = storage.get(key(tenantId, id));
         if (found != null) {
@@ -110,7 +114,7 @@ public class InMemoryStudioProjectRepository implements StudioProjectRepository 
                 if (list != null && !list.isEmpty()) {
                     return list.stream().map(this::toDomain).toList();
                 }
-            } catch (Exception ignored) {}
+            } catch (Exception e) {    log.debug("[InMemoryStudioProjectRepository] Database operation notice: {}", e.getMessage());}
         }
         return storage.values().stream()
                 .filter(p -> p.tenantId().equals(effectiveTenant))
@@ -130,7 +134,7 @@ public class InMemoryStudioProjectRepository implements StudioProjectRepository 
                     qw.eq("tenant_id", effectiveTenant);
                 }
                 projectMapper.delete(qw);
-            } catch (Exception ignored) {}
+            } catch (Exception e) {    log.debug("[InMemoryStudioProjectRepository] Database operation notice: {}", e.getMessage());}
         }
         return storage.remove(key(tenantId, id)) != null;
     }

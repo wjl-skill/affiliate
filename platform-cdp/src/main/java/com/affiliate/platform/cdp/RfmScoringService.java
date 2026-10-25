@@ -1,5 +1,7 @@
 package com.affiliate.platform.cdp;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
@@ -18,6 +20,8 @@ import java.util.List;
  */
 @Service
 public class RfmScoringService {
+
+    private static final Logger log = LoggerFactory.getLogger(RfmScoringService.class);
 
     public enum CustomerTier {
         /** 核心冠军高净值客户 */
@@ -62,7 +66,9 @@ public class RfmScoringService {
                 if (amountStr != null) {
                     try {
                         totalMonetary = totalMonetary.add(new BigDecimal(amountStr));
-                    } catch (Exception ignored) {}
+                    } catch (Exception ex) {
+                        log.debug("Unparseable purchase amount '{}' on event {}: {}", amountStr, evt.eventId(), ex.getMessage());
+                    }
                 }
             }
         }

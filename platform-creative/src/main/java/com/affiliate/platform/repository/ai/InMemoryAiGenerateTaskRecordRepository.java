@@ -9,6 +9,8 @@ import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Repository;
 
 import java.math.BigDecimal;
@@ -21,6 +23,8 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 @Repository
 public class InMemoryAiGenerateTaskRecordRepository implements AiGenerateTaskRecordRepository {
+
+    private static final Logger log = LoggerFactory.getLogger(InMemoryAiGenerateTaskRecordRepository.class);
 
     private final CreativeAiTaskRecordMapper taskMapper;
     private final ObjectMapper objectMapper = new ObjectMapper();
@@ -79,7 +83,7 @@ public class InMemoryAiGenerateTaskRecordRepository implements AiGenerateTaskRec
                 } else {
                     taskMapper.insert(entity);
                 }
-            } catch (Exception ignored) {}
+            } catch (Exception e) {    log.debug("[InMemoryAiGenerateTaskRecordRepository] Database operation notice: {}", e.getMessage());}
         }
         store.put(record.id(), record);
         return record;
@@ -93,7 +97,7 @@ public class InMemoryAiGenerateTaskRecordRepository implements AiGenerateTaskRec
                 if (entity != null) {
                     return Optional.of(toDomain(entity));
                 }
-            } catch (Exception ignored) {}
+            } catch (Exception e) {    log.debug("[InMemoryAiGenerateTaskRecordRepository] Database operation notice: {}", e.getMessage());}
         }
         return Optional.ofNullable(store.get(id));
     }
@@ -109,7 +113,7 @@ public class InMemoryAiGenerateTaskRecordRepository implements AiGenerateTaskRec
                 if (entity != null) {
                     return Optional.of(toDomain(entity));
                 }
-            } catch (Exception ignored) {}
+            } catch (Exception e) {    log.debug("[InMemoryAiGenerateTaskRecordRepository] Database operation notice: {}", e.getMessage());}
         }
         return store.values().stream()
                 .filter(r -> t.equals(r.tenantId()) && taskNo.equals(r.taskNo()))
@@ -127,7 +131,7 @@ public class InMemoryAiGenerateTaskRecordRepository implements AiGenerateTaskRec
                 if (list != null && !list.isEmpty()) {
                     return list.stream().map(this::toDomain).toList();
                 }
-            } catch (Exception ignored) {}
+            } catch (Exception e) {    log.debug("[InMemoryAiGenerateTaskRecordRepository] Database operation notice: {}", e.getMessage());}
         }
         return store.values().stream()
                 .filter(r -> r.status() == status)
@@ -148,7 +152,7 @@ public class InMemoryAiGenerateTaskRecordRepository implements AiGenerateTaskRec
                 if (list != null && !list.isEmpty()) {
                     return list.stream().map(this::toDomain).toList();
                 }
-            } catch (Exception ignored) {}
+            } catch (Exception e) {    log.debug("[InMemoryAiGenerateTaskRecordRepository] Database operation notice: {}", e.getMessage());}
         }
         return store.values().stream()
                 .filter(r -> t.equals(r.tenantId()))
@@ -185,7 +189,7 @@ public class InMemoryAiGenerateTaskRecordRepository implements AiGenerateTaskRec
                 if (map.get("referenceImageUrls") instanceof List<?> list) {
                     refs = list.stream().map(Object::toString).toList();
                 }
-            } catch (Exception ignored) {}
+            } catch (Exception e) {    log.debug("[InMemoryAiGenerateTaskRecordRepository] Database operation notice: {}", e.getMessage());}
         }
 
         return new AiGenerateTaskRecord(

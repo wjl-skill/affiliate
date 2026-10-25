@@ -4,6 +4,8 @@ import com.affiliate.platform.entity.BillingEntryEntity;
 import com.affiliate.platform.mapper.BillingEntryMapper;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
@@ -18,6 +20,8 @@ import java.util.UUID;
 @Service
 @ConditionalOnProperty(name = "app.infrastructure.database-enabled", havingValue = "true")
 public class JdbcBillingService implements BillingService {
+
+    private static final Logger log = LoggerFactory.getLogger(JdbcBillingService.class);
 
     private final BillingEntryMapper mapper;
 
@@ -109,14 +113,18 @@ public class JdbcBillingService implements BillingService {
         if (e.getDirection() != null) {
             try {
                 direction = EntryDirection.valueOf(e.getDirection());
-            } catch (Exception ignored) {}
+            } catch (Exception ex) {
+                log.debug("Unrecognized direction '{}' on entry {}: {}", e.getDirection(), e.getId(), ex.getMessage());
+            }
         }
 
         EntryType type = fallbackType != null ? fallbackType : EntryType.ADVERTISER_CHARGE;
         if (e.getEntryType() != null) {
             try {
                 type = EntryType.valueOf(e.getEntryType());
-            } catch (Exception ignored) {}
+            } catch (Exception ex) {
+                log.debug("Unrecognized entry type '{}' on entry {}: {}", e.getEntryType(), e.getId(), ex.getMessage());
+            }
         }
 
         String auctionId = e.getAuctionId() != null ? e.getAuctionId() : defaultAuctionId;

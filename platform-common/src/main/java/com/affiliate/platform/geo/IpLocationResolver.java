@@ -252,7 +252,8 @@ public class IpLocationResolver {
                     }
                 }
             }
-        } catch (Exception ignored) {
+        } catch (Exception e) {
+            log.debug("Embedded IP2Location BIN extraction notice: {}", e.getMessage());
         }
 
         return null;

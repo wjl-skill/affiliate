@@ -9,6 +9,8 @@ import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Repository;
 
 import java.time.Instant;
@@ -20,6 +22,8 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 @Repository
 public class InMemoryStudioSceneRepository implements StudioSceneRepository {
+
+    private static final Logger log = LoggerFactory.getLogger(InMemoryStudioSceneRepository.class);
 
     private final CreativeStudioSceneMapper sceneMapper;
     private final ObjectMapper objectMapper = new ObjectMapper();
@@ -75,7 +79,7 @@ public class InMemoryStudioSceneRepository implements StudioSceneRepository {
                 } else {
                     sceneMapper.insert(entity);
                 }
-            } catch (Exception ignored) {}
+            } catch (Exception e) {    log.debug("[InMemoryStudioSceneRepository] Database operation notice: {}", e.getMessage());}
         }
         storage.put(key(scene.tenantId(), scene.id()), scene);
         return scene;
@@ -105,7 +109,7 @@ public class InMemoryStudioSceneRepository implements StudioSceneRepository {
                 if (entity != null) {
                     return Optional.of(toDomain(entity));
                 }
-            } catch (Exception ignored) {}
+            } catch (Exception e) {    log.debug("[InMemoryStudioSceneRepository] Database operation notice: {}", e.getMessage());}
         }
         StudioScene found = storage.get(key(tenantId, id));
         if (found != null) {
@@ -127,7 +131,7 @@ public class InMemoryStudioSceneRepository implements StudioSceneRepository {
                 if (list != null && !list.isEmpty()) {
                     return list.stream().map(this::toDomain).toList();
                 }
-            } catch (Exception ignored) {}
+            } catch (Exception e) {    log.debug("[InMemoryStudioSceneRepository] Database operation notice: {}", e.getMessage());}
         }
         return storage.values().stream()
                 .filter(s -> s.tenantId().equals(effectiveTenant) && s.projectId().equals(projectId))
@@ -143,7 +147,7 @@ public class InMemoryStudioSceneRepository implements StudioSceneRepository {
                 QueryWrapper<CreativeStudioSceneEntity> qw = new QueryWrapper<>();
                 qw.eq("tenant_id", effectiveTenant).eq("project_id", projectId);
                 sceneMapper.delete(qw);
-            } catch (Exception ignored) {}
+            } catch (Exception e) {    log.debug("[InMemoryStudioSceneRepository] Database operation notice: {}", e.getMessage());}
         }
         storage.entrySet().removeIf(e -> {
             StudioScene s = e.getValue();
@@ -170,7 +174,7 @@ public class InMemoryStudioSceneRepository implements StudioSceneRepository {
         if (entity.getSubtitleKeywords() != null && !entity.getSubtitleKeywords().isBlank()) {
             try {
                 keywords = objectMapper.readValue(entity.getSubtitleKeywords(), new TypeReference<List<String>>() {});
-            } catch (Exception ignored) {}
+            } catch (Exception e) {    log.debug("[InMemoryStudioSceneRepository] Database operation notice: {}", e.getMessage());}
         }
 
         return new StudioScene(

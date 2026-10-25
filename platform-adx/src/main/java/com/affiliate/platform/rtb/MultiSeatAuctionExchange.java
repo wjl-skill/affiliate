@@ -1,6 +1,8 @@
 package com.affiliate.platform.rtb;
 
 import org.springframework.beans.factory.annotation.Autowired;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
@@ -20,6 +22,8 @@ import java.util.concurrent.*;
  */
 @Service
 public class MultiSeatAuctionExchange {
+
+    private static final Logger log = LoggerFactory.getLogger(MultiSeatAuctionExchange.class);
 
     private final ExecutorService exchangeExecutor = Executors.newVirtualThreadPerTaskExecutor();
     private final PmpDealMatcher pmpMatcher;
@@ -157,8 +161,8 @@ public class MultiSeatAuctionExchange {
                 }
             } catch (TimeoutException te) {
                 future.cancel(true);
-            } catch (Exception ignored) {
-                // 席位异常降级忽略
+            } catch (Exception e) {
+                log.debug("Seat bidder execution notice during auction: {}", e.getMessage());
             }
         }
 

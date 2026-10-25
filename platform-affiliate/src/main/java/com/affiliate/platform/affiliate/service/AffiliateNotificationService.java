@@ -600,7 +600,11 @@ public class AffiliateNotificationService {
             long delayMs = (long) Math.pow(2, attempt) * 500L;
             try {
                 Thread.sleep(delayMs);
-            } catch (InterruptedException ignored) {}
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+                log.warn("[Webhook] Retry interrupted during backoff wait for endpoint [{}]", endpoint.url());
+                return;
+            }
             executeWebhookDelivery(endpoint, payload, timestamp, signature, eventType, attempt + 1);
         } else {
             log.error("[Webhook] Delivery permanently failed for endpoint [{}] after 3 attempts. Logging dead-letter record.", endpoint.url());

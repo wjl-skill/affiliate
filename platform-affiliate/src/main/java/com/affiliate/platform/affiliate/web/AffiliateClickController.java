@@ -17,6 +17,8 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestParam;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.net.URI;
@@ -27,6 +29,7 @@ import java.time.LocalDate;
  */
 @RestController
 public class AffiliateClickController {
+    private static final Logger log = LoggerFactory.getLogger(AffiliateClickController.class);
 
     private final OfferService offerService;
     private final ClickTrackerService clickTracker;
@@ -140,7 +143,8 @@ public class AffiliateClickController {
                             entity.getCreatedAt()
                     );
                 }
-            } catch (Exception ignored) {
+            } catch (Exception ex) {
+                log.debug("SmartLink query failed for id {}, fallback to tdsRouter: {}", smartLinkId, ex.getMessage());
             }
         }
         return tdsRouter != null ? tdsRouter.findSmartLink(smartLinkId).orElse(null) : null;

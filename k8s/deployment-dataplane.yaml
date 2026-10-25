@@ -48,7 +48,7 @@ spec:
                 topologyKey: "kubernetes.io/hostname"
       containers:
         - name: dataplane
-          image: affiliate-platform:latest
+          image: affiliate-dataplane:0.2.0
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8080

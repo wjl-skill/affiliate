@@ -1,5 +1,7 @@
 package com.affiliate.platform.ssp;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
@@ -21,6 +23,8 @@ import java.util.concurrent.atomic.AtomicLong;
  */
 @Service
 public class HeaderBiddingOrchestrator {
+
+    private static final Logger log = LoggerFactory.getLogger(HeaderBiddingOrchestrator.class);
 
     private final ExecutorService auctionExecutor = Executors.newVirtualThreadPerTaskExecutor();
 
@@ -97,8 +101,8 @@ public class HeaderBiddingOrchestrator {
         );
         try {
             allOf.get(timeoutMs, TimeUnit.MILLISECONDS);
-        } catch (Exception ignored) {
-            // 超时或部分异常截断
+        } catch (Exception e) {
+            log.debug("Header bidding timeout or partial buyer degradation: {}", e.getMessage());
         }
 
         // 4. 统一结算各买家出价，未在超时内完成的判定为超时并断开

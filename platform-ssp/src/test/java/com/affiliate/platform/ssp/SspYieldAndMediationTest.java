@@ -78,7 +78,7 @@ class SspYieldAndMediationTest {
                 new HeaderBiddingOrchestrator.DemandPartnerAdapter() {
                     public String partnerId() { return "SlowBidder"; }
                     public HeaderBiddingOrchestrator.BidOffer requestBid(String slotId) {
-                        try { Thread.sleep(200); } catch (Exception ignored) {}
+                        try { Thread.sleep(200); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); }
                         return new HeaderBiddingOrchestrator.BidOffer("SlowBidder", "cr-3", new BigDecimal("9.99"), "<div>Slow Ad</div>", "USD");
                     }
                 }

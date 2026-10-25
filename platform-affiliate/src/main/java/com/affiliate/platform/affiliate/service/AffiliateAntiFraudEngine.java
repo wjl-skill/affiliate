@@ -7,7 +7,10 @@ import com.affiliate.platform.entity.AntiFraudBlacklistEntity;
 import com.affiliate.platform.mapper.AntiFraudAuditLogMapper;
 import com.affiliate.platform.mapper.AntiFraudBlacklistMapper;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
@@ -27,16 +30,26 @@ import java.util.concurrent.atomic.AtomicLong;
  * 2. 数据中心/云服务商机房 IP 与 Tor/Proxy 识别（AWS/GCP/Azure/DigitalOcean 等）；
  * 3. 爬虫与 Headless 自动化脚本特征过滤；
  * 4. 多维综合风控风险评分 (0-100 分)：输出 APPROVED / SUSPICIOUS_HELD / AUTO_REJECTED；
- * 5. 动态黑白名单持久化与 Java 21 虚拟线程极速异步作弊审计。
+ * 5. 动态黑白名单持久化与 Java 21 虚拟线程极速异步作弊审计；
+ * 6. 支持 4D 风控规则动态参数配置与 Redis Pub/Sub 热同步。
  */
 @Service
 public class AffiliateAntiFraudEngine {
 
+    private static final Logger log = LoggerFactory.getLogger(AffiliateAntiFraudEngine.class);
+
     private final AntiFraudBlacklistMapper blacklistMapper;
     private final AntiFraudAuditLogMapper auditLogMapper;
+    private final StringRedisTemplate stringRedisTemplate;
 
     private static final long DEFAULT_MIN_CTIT_SECONDS = 3;
     private static final long DEFAULT_MAX_CTIT_SECONDS = 30L * 24 * 3600;
+
+    // 动态规则阈值与开关
+    private volatile long minCtitSeconds = DEFAULT_MIN_CTIT_SECONDS;
+    private volatile long maxCtitSeconds = DEFAULT_MAX_CTIT_SECONDS;
+    private volatile boolean enableDatacenterCheck = true;
+    private volatile boolean enableBotUaCheck = true;
 
     // 常见数据中心与自动化测试 IP 常见前缀特征库 (Datacenter CIDRs)
     private static final Set<String> DATACENTER_IP_PREFIXES = Set.of(
@@ -86,17 +99,81 @@ public class AffiliateAntiFraudEngine {
     private final AtomicLong deviceAnomalyCount = new AtomicLong();
 
     public AffiliateAntiFraudEngine() {
-        this(null, null);
+        this(null, null, null);
+    }
+
+    public AffiliateAntiFraudEngine(
+            AntiFraudBlacklistMapper blacklistMapper,
+            AntiFraudAuditLogMapper auditLogMapper
+    ) {
+        this(blacklistMapper, auditLogMapper, null);
     }
 
     @Autowired
     public AffiliateAntiFraudEngine(
             @Autowired(required = false) AntiFraudBlacklistMapper blacklistMapper,
-            @Autowired(required = false) AntiFraudAuditLogMapper auditLogMapper
+            @Autowired(required = false) AntiFraudAuditLogMapper auditLogMapper,
+            @Autowired(required = false) StringRedisTemplate stringRedisTemplate
     ) {
         this.blacklistMapper = blacklistMapper;
         this.auditLogMapper = auditLogMapper;
+        this.stringRedisTemplate = stringRedisTemplate;
         reloadBlacklist();
+    }
+
+    /**
+     * 动态风控规则配置结构
+     */
+    public record AntiFraudRuleConfig(
+            long minCtitSeconds,
+            long maxCtitSeconds,
+            boolean enableDatacenterCheck,
+            boolean enableBotUaCheck
+    ) {}
+
+    public AntiFraudRuleConfig getRuleConfig() {
+        return new AntiFraudRuleConfig(minCtitSeconds, maxCtitSeconds, enableDatacenterCheck, enableBotUaCheck);
+    }
+
+    /**
+     * 更新风控规则配置并通过 Redis Pub/Sub 全局集群热同步
+     */
+    public void updateRuleConfig(AntiFraudRuleConfig config) {
+        if (config == null) return;
+        this.minCtitSeconds = config.minCtitSeconds() > 0 ? config.minCtitSeconds() : DEFAULT_MIN_CTIT_SECONDS;
+        this.maxCtitSeconds = config.maxCtitSeconds() > 0 ? config.maxCtitSeconds() : DEFAULT_MAX_CTIT_SECONDS;
+        this.enableDatacenterCheck = config.enableDatacenterCheck();
+        this.enableBotUaCheck = config.enableBotUaCheck();
+        log.info("[AntiFraudEngine] Updated rule config: minCtit={}, maxCtit={}, datacenter={}, botUa={}",
+                minCtitSeconds, maxCtitSeconds, enableDatacenterCheck, enableBotUaCheck);
+
+        if (stringRedisTemplate != null) {
+            try {
+                String payload = minCtitSeconds + ":" + maxCtitSeconds + ":" + enableDatacenterCheck + ":" + enableBotUaCheck;
+                stringRedisTemplate.convertAndSend("channel:antifraud:rule_sync", payload);
+            } catch (Exception e) {
+                log.warn("[AntiFraudEngine] Failed to publish rule sync to Redis: {}", e.getMessage());
+            }
+        }
+    }
+
+    /**
+     * 接收远端 Redis Pub/Sub 广播并热应用
+     */
+    public void applyRemoteRuleSync(String payload) {
+        if (payload == null || payload.isBlank()) return;
+        try {
+            String[] parts = payload.split(":");
+            if (parts.length >= 4) {
+                this.minCtitSeconds = Long.parseLong(parts[0]);
+                this.maxCtitSeconds = Long.parseLong(parts[1]);
+                this.enableDatacenterCheck = Boolean.parseBoolean(parts[2]);
+                this.enableBotUaCheck = Boolean.parseBoolean(parts[3]);
+                log.info("[AntiFraudEngine] Applied remote Redis rule sync: minCtit={}, maxCtit={}", minCtitSeconds, maxCtitSeconds);
+            }
+        } catch (Exception e) {
+            log.warn("[AntiFraudEngine] Failed to apply remote rule sync payload '{}': {}", payload, e.getMessage());
+        }
     }
 
     /**
@@ -126,17 +203,14 @@ public class AffiliateAntiFraudEngine {
                 ipBlacklist.addAll(freshIps);
                 subIdBlacklist.clear();
                 subIdBlacklist.addAll(freshSubs);
-            } catch (Exception ignored) {}
+            } catch (Exception e) {
+                log.warn("[AntiFraudEngine] Failed to reload anti-fraud blacklist from database: {}", e.getMessage());
+            }
         }
     }
 
     /**
      * 针对转化进行全方位反欺诈安全质检与风险打分
-     *
-     * @param session 点击会话存根
-     * @param txId    广告主交易订单号
-     * @param now     转化发生时间
-     * @return 详细质检评估与打分结果
      */
     public FraudInspectionResult inspectConversion(ClickSession session, String txId, Instant now) {
         return inspectConversion(
@@ -152,14 +226,6 @@ public class AffiliateAntiFraudEngine {
 
     /**
      * 深度多维反欺诈与设备质检分析
-     *
-     * @param session         点击存根
-     * @param txId            交易订单流水号
-     * @param now             转化发生时间
-     * @param convIp          转化上报 IP
-     * @param convUa          转化上报 User-Agent
-     * @param convCountry     转化上报国家代码
-     * @param convDeviceType  转化上报设备类型
      */
     public FraudInspectionResult inspectConversion(
             ClickSession session,
@@ -209,27 +275,27 @@ public class AffiliateAntiFraudEngine {
         Instant clickTime = session.createdAt();
         long ctitSeconds = Duration.between(clickTime, now).toSeconds();
 
-        if (ctitSeconds < DEFAULT_MIN_CTIT_SECONDS) {
-            riskScore += 75; // < 3s: 极高疑似点击注入 (Click Injection)
+        if (ctitSeconds < minCtitSeconds) {
+            riskScore += 75; // 极高疑似点击注入 (Click Injection)
             riskReasons.add("FAST_CONVERSION_CTIT_UNDER_3S");
-        } else if (ctitSeconds < 10) {
+        } else if (ctitSeconds < 10 && minCtitSeconds < 10) {
             riskScore += 25; // 3s~10s: 极快转化速度 (可疑脚本)
             riskReasons.add("SUSPICIOUS_FAST_CONVERSION_UNDER_10S");
         }
 
-        if (ctitSeconds > DEFAULT_MAX_CTIT_SECONDS) {
+        if (ctitSeconds > maxCtitSeconds) {
             riskScore += 75;
             riskReasons.add("EXPIRED_ATTRIBUTION_WINDOW");
         }
 
         // 4. 机房与数据中心 IP 特征识别
-        if (isDatacenterIp(session.ip()) || isDatacenterIp(convIp)) {
+        if (enableDatacenterCheck && (isDatacenterIp(session.ip()) || isDatacenterIp(convIp))) {
             riskScore += 45;
             riskReasons.add("DATACENTER_PROXY_IP_DETECTED");
         }
 
         // 5. User-Agent 异常与自动化爬虫签名校验
-        if (isBotUserAgent(session.userAgent()) || isBotUserAgent(convUa)) {
+        if (enableBotUaCheck && (isBotUserAgent(session.userAgent()) || isBotUserAgent(convUa))) {
             riskScore += 50;
             riskReasons.add("BOT_OR_HEADLESS_USER_AGENT");
         }
@@ -269,7 +335,7 @@ public class AffiliateAntiFraudEngine {
 
         // 9. 累计风控汇总计数
         totalInspections.incrementAndGet();
-        if (riskReasons.contains("FAST_CONVERSION_CTIT_UNDER_3S")) {
+        if (riskReasons.contains("FAST_CONVERSION_CTIT_UNDER_3S") || riskReasons.contains("FAST_CONVERSION_CTIT_UNDER_3S")) {
             ctitAnomalyCount.incrementAndGet();
         }
         if (riskReasons.contains("DATACENTER_PROXY_IP_DETECTED")) datacenterIpCount.incrementAndGet();
@@ -445,6 +511,46 @@ public class AffiliateAntiFraudEngine {
     /**
      * 累计风控汇总指标（服务重启后重新计数）
      */
+    public int getIpBlacklistSize() {
+        return ipBlacklist.size();
+    }
+
+    public int getSubIdBlacklistSize() {
+        return subIdBlacklist.size();
+    }
+
+    public void addToBlacklist(String type, String value) {
+        if (value == null || value.isBlank()) return;
+        String val = value.trim();
+        if ("IP".equalsIgnoreCase(type)) {
+            ipBlacklist.add(val);
+        } else {
+            subIdBlacklist.add(val);
+        }
+        if (blacklistMapper != null) {
+            try {
+                String id = "bl_" + java.util.UUID.randomUUID().toString().replace("-", "").substring(0, 16);
+                var entity = new com.affiliate.platform.entity.AntiFraudBlacklistEntity(
+                        id, "default", type.toUpperCase(), val, "MANUAL_BLOCK",
+                        "system", "ACTIVE", java.time.Instant.now().plus(java.time.Duration.ofDays(30)),
+                        java.time.Instant.now()
+                );
+                blacklistMapper.insert(entity);
+            } catch (Exception e) {
+                log.warn("[AntiFraudEngine] Failed to persist blacklist entry to DB: {}", e.getMessage());
+            }
+        }
+    }
+
+    public Map<String, Object> getMetrics() {
+        Map<String, Object> map = new LinkedHashMap<>();
+        map.putAll(getCumulativeCounters());
+        map.put("ipBlacklistSize", ipBlacklist.size());
+        map.put("subIdBlacklistSize", subIdBlacklist.size());
+        map.put("activeRuleConfig", getRuleConfig());
+        return map;
+    }
+
     public Map<String, Long> getCumulativeCounters() {
         return Map.of(
                 "totalInspections", totalInspections.get(),
@@ -498,7 +604,9 @@ public class AffiliateAntiFraudEngine {
                             Instant.now()
                     );
                     auditLogMapper.insert(logEntity);
-                } catch (Exception ignored) {}
+                } catch (Exception e) {
+                    log.warn("[AntiFraudEngine] Failed to record anti-fraud audit log to database: {}", e.getMessage());
+                }
             });
         }
     }

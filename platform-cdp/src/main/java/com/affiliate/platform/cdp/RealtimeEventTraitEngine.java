@@ -189,8 +189,8 @@ public class RealtimeEventTraitEngine {
         if (identityService != null && !dynamicTraits.isEmpty()) {
             try {
                 identityService.merge(primaryId, Set.of(), Map.of(), dynamicTraits);
-            } catch (Exception ignored) {
-                // 如果画像尚未创建则允许忽略
+            } catch (Exception e) {
+                log.debug("Customer profile not yet ready for primaryId {}: {}", primaryId, e.getMessage());
             }
         }
 

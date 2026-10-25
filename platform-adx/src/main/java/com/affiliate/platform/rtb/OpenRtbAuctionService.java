@@ -11,6 +11,8 @@ import com.affiliate.platform.service.AdSlotService;
 import com.affiliate.platform.service.CreativeService;
 import com.affiliate.platform.tenant.TenantContext;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
@@ -31,6 +33,8 @@ import java.util.UUID;
  */
 @Service
 public class OpenRtbAuctionService {
+
+    private static final Logger log = LoggerFactory.getLogger(OpenRtbAuctionService.class);
 
     // 媒体广告位服务
     private final AdSlotService slots;
@@ -189,8 +193,9 @@ public class OpenRtbAuctionService {
             AdSlot slot;
             try {
                 slot = slots.get(impression.id());
-            } catch (RuntimeException ignored) {
-                continue; // 未知或未配置广告位，跳过
+            } catch (RuntimeException re) {
+                log.debug("Unconfigured ad slot {}: {}", impression.id(), re.getMessage());
+                continue;
             }
             if (!slot.active()) {
                 continue; // 广告位已下线，不参与竞价

@@ -8,6 +8,8 @@ import com.nimbusds.jose.crypto.MACSigner;
 import com.nimbusds.jose.crypto.MACVerifier;
 import com.nimbusds.jwt.JWTClaimsSet;
 import com.nimbusds.jwt.SignedJWT;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
@@ -26,6 +28,8 @@ import java.util.Optional;
  */
 @Service
 public class JwtTokenService {
+
+    private static final Logger log = LoggerFactory.getLogger(JwtTokenService.class);
 
     private final byte[] signingKey;
     private final long ttlSeconds;
@@ -74,6 +78,7 @@ public class JwtTokenService {
             jwt.sign(new MACSigner(signingKey));
             return jwt.serialize();
         } catch (Exception e) {
+            log.error("Failed to sign JWT token for user {}: {}", user.username(), e.getMessage(), e);
             throw new IllegalStateException("JWT 令牌签发失败", e);
         }
     }
@@ -97,6 +102,7 @@ public class JwtTokenService {
                     claims.getExpirationTime().toInstant()
             ));
         } catch (Exception e) {
+            log.debug("JWT parse/verify failed: {}", e.getMessage());
             return Optional.empty();
         }
     }
@@ -109,7 +115,9 @@ public class JwtTokenService {
         if (raw instanceof String json) {
             try {
                 return objectMapper.readValue(json, List.class);
-            } catch (Exception ignored) {}
+            } catch (Exception e) {
+                log.debug("Failed to deserialize JWT roles json: {}", e.getMessage());
+            }
         }
         return List.of();
     }

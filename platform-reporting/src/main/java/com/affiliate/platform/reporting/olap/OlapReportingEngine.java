@@ -39,6 +39,7 @@ public class OlapReportingEngine {
 
     private final ReportDailyMapper reportDailyMapper;
     private final SubIdStatsMapper subIdStatsMapper;
+    private final ClickHouseOlapClient clickHouseClient;
 
     // 内存列式聚合事实分区表：key 为 "tenantId:partitionYYYYMM"
     private final ConcurrentMap<String, OlapPartition> partitions = new ConcurrentHashMap<>();
@@ -51,15 +52,25 @@ public class OlapReportingEngine {
     public OlapReportingEngine() {
         this.reportDailyMapper = null;
         this.subIdStatsMapper = null;
+        this.clickHouseClient = null;
+    }
+
+    public OlapReportingEngine(
+            ReportDailyMapper reportDailyMapper,
+            SubIdStatsMapper subIdStatsMapper
+    ) {
+        this(reportDailyMapper, subIdStatsMapper, null);
     }
 
     @Autowired
     public OlapReportingEngine(
             @Autowired(required = false) ReportDailyMapper reportDailyMapper,
-            @Autowired(required = false) SubIdStatsMapper subIdStatsMapper
+            @Autowired(required = false) SubIdStatsMapper subIdStatsMapper,
+            @Autowired(required = false) ClickHouseOlapClient clickHouseClient
     ) {
         this.reportDailyMapper = reportDailyMapper;
         this.subIdStatsMapper = subIdStatsMapper;
+        this.clickHouseClient = clickHouseClient;
         preloadFromDatabaseOrSeed();
     }
 
@@ -207,6 +218,17 @@ public class OlapReportingEngine {
             String groupByField
     ) {
         String effectiveTenant = (tenantId != null && !tenantId.isBlank()) ? tenantId : "default";
+
+        // 优先路由 ClickHouse 向量化引擎
+        if (clickHouseClient != null && clickHouseClient.isAvailable()) {
+            List<OlapAggregationRow> chRows = clickHouseClient.executeAggregation(
+                    effectiveTenant, fromDate, toDate, groupByField, 500
+            );
+            if (chRows != null && !chRows.isEmpty()) {
+                return chRows;
+            }
+        }
+
         Map<String, AggregationAccumulator> accumulatorMap = new HashMap<>();
 
         for (Map.Entry<String, OlapPartition> entry : partitions.entrySet()) {

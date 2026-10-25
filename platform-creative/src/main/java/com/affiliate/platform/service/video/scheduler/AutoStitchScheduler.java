@@ -4,6 +4,8 @@ import com.affiliate.platform.domain.video.AutoStitchConfig;
 import com.affiliate.platform.domain.video.AutoStitchStatus;
 import com.affiliate.platform.domain.video.VideoProcessTaskRecord;
 import com.affiliate.platform.domain.video.VideoProcessType;
+import com.affiliate.platform.lock.DistributedLock;
+import com.affiliate.platform.lock.RedisDistributedLock;
 import com.affiliate.platform.repository.video.AutoStitchConfigRepository;
 import com.affiliate.platform.service.video.AutoStitchService;
 import com.affiliate.platform.service.video.VideoProcessService;
@@ -12,10 +14,12 @@ import com.affiliate.platform.web.video.dto.AutoStitchTriggerResult;
 import com.affiliate.platform.web.video.dto.VideoProcessRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
 import java.awt.Dimension;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
@@ -23,7 +27,7 @@ import java.util.Map;
 import java.util.Optional;
 
 /**
- * 批量混剪调度器：负责笛卡尔积交叉组合生成、定时触发与单次消费幂等保证
+ * 批量混剪调度器：负责笛卡尔积交叉组合生成、定时触发与单次消费幂等保证 (采用分布式锁加固防重)
  */
 @Service
 public class AutoStitchScheduler {
@@ -33,15 +37,27 @@ public class AutoStitchScheduler {
     private final AutoStitchConfigRepository configRepo;
     private final AutoStitchService autoStitchService;
     private final VideoProcessService videoProcessService;
+    private final DistributedLock distributedLock;
 
     public AutoStitchScheduler(
             AutoStitchConfigRepository configRepo,
             AutoStitchService autoStitchService,
             VideoProcessService videoProcessService
     ) {
+        this(configRepo, autoStitchService, videoProcessService, null);
+    }
+
+    @Autowired
+    public AutoStitchScheduler(
+            AutoStitchConfigRepository configRepo,
+            AutoStitchService autoStitchService,
+            VideoProcessService videoProcessService,
+            @Autowired(required = false) DistributedLock distributedLock
+    ) {
         this.configRepo = configRepo;
         this.autoStitchService = autoStitchService;
         this.videoProcessService = videoProcessService;
+        this.distributedLock = distributedLock != null ? distributedLock : new RedisDistributedLock(null);
     }
 
     /**
@@ -139,23 +155,32 @@ public class AutoStitchScheduler {
     }
 
     /**
-     * 定时轮询调度：每 60 秒检查计划时间到期的批量混剪配置
+     * 定时轮询调度：每 60 秒检查计划时间到期的批量混剪配置 (通过分布式锁保证集群互斥)
      */
     @Scheduled(fixedDelay = 60000)
     public int pollAndTriggerScheduledConfigs() {
-        Instant now = Instant.now();
-        List<AutoStitchConfig> pending = configRepo.findPendingSchedules(now);
-        int triggeredCount = 0;
-
-        for (AutoStitchConfig config : pending) {
-            try {
-                triggerBatchStitch(config.tenantId(), config.id());
-                triggeredCount++;
-            } catch (Exception e) {
-                log.error("Error triggering scheduled auto stitch config {}: {}", config.id(), e.getMessage());
-            }
+        String lockKey = "lock:video:autostitch:scheduler";
+        var lockOpt = distributedLock.tryAcquire(lockKey, Duration.ofSeconds(55));
+        if (lockOpt.isEmpty()) {
+            log.debug("[AutoStitchScheduler] Another instance holds lock {}, skipping scheduled run", lockKey);
+            return 0;
         }
 
-        return triggeredCount;
+        try (var lock = lockOpt.get()) {
+            Instant now = Instant.now();
+            List<AutoStitchConfig> pending = configRepo.findPendingSchedules(now);
+            int triggeredCount = 0;
+
+            for (AutoStitchConfig config : pending) {
+                try {
+                    triggerBatchStitch(config.tenantId(), config.id());
+                    triggeredCount++;
+                } catch (Exception e) {
+                    log.error("Error triggering scheduled auto stitch config {}: {}", config.id(), e.getMessage());
+                }
+            }
+
+            return triggeredCount;
+        }
     }
 }

@@ -10,6 +10,8 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.common.util.concurrent.Striped;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -26,6 +28,8 @@ import java.util.stream.Collectors;
  */
 @Service
 public class ConversionAttributionService {
+
+    private static final Logger log = LoggerFactory.getLogger(ConversionAttributionService.class);
 
     private final TouchPointRepository touchPointRepository;
     private final AttributionResultRepository attributionResultRepository;
@@ -142,7 +146,11 @@ public class ConversionAttributionService {
                     }
                     try {
                         Thread.sleep(30);
-                    } catch (InterruptedException ignored) {}
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        log.debug("Attribution poll sleep interrupted for conversionId {}", conversionId);
+                        break;
+                    }
                 }
             }
 

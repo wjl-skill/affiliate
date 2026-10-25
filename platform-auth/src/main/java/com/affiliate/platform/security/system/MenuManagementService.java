@@ -3,6 +3,8 @@ package com.affiliate.platform.security.system;
 import com.affiliate.platform.entity.SysMenuEntity;
 import com.affiliate.platform.mapper.SysMenuMapper;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
@@ -18,6 +20,8 @@ import java.util.concurrent.ConcurrentMap;
  */
 @Service
 public class MenuManagementService {
+
+    private static final Logger log = LoggerFactory.getLogger(MenuManagementService.class);
 
     private final SysMenuMapper menuMapper;
     private final ConcurrentMap<String, SysMenu> fallbackStore = new ConcurrentHashMap<>();
@@ -44,7 +48,8 @@ public class MenuManagementService {
                         save(def);
                     }
                 }
-            } catch (Exception ignored) {
+            } catch (Exception e) {
+                log.warn("Failed to check database default menus, using memory store: {}", e.getMessage());
             }
         }
     }
@@ -110,7 +115,8 @@ public class MenuManagementService {
                 } else {
                     menuMapper.insert(entity);
                 }
-            } catch (Exception ignored) {
+            } catch (Exception e) {
+                log.warn("Failed to persist menu {} to database: {}, using memory store", menu.id(), e.getMessage());
             }
         }
         return menu;
@@ -121,7 +127,8 @@ public class MenuManagementService {
             try {
                 SysMenuEntity entity = menuMapper.selectById(id);
                 return Optional.ofNullable(entity).map(this::toDomain);
-            } catch (Exception ignored) {
+            } catch (Exception e) {
+                log.warn("Failed to find menu {} in database: {}, using memory store", id, e.getMessage());
             }
         }
         return Optional.ofNullable(fallbackStore.get(id));
@@ -131,7 +138,8 @@ public class MenuManagementService {
         if (menuMapper != null) {
             try {
                 return menuMapper.deleteById(id) > 0;
-            } catch (Exception ignored) {
+            } catch (Exception e) {
+                log.warn("Failed to delete menu {} from database: {}, using memory store", id, e.getMessage());
             }
         }
         return fallbackStore.remove(id) != null;
@@ -144,7 +152,8 @@ public class MenuManagementService {
                 qw.orderByAsc("sort_order");
                 List<SysMenuEntity> list = menuMapper.selectList(qw);
                 return list.stream().map(this::toDomain).toList();
-            } catch (Exception ignored) {
+            } catch (Exception e) {
+                log.warn("Failed to list menus from database: {}, using memory store", e.getMessage());
             }
         }
         List<SysMenu> list = new ArrayList<>(fallbackStore.values());

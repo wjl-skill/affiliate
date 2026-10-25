@@ -1,0 +1,167 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": "-- Grafana --",
+        "enable": true,
+        "hide": true,
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "id": 1,
+      "title": "🚀 Offer 流量补量与归因平台推送总览 (Traffic Supplement & Dispatch)",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "axisCenteredZero": false, "drawStyle": "line", "lineInterpolation": "smooth" },
+          "unit": "reqps"
+        }
+      },
+      "gridPos": { "h": 5, "w": 8, "x": 0, "y": 1 },
+      "id": 2,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } },
+      "targets": [
+        {
+          "expr": "sum by (mmp) (rate(affiliate_supplement_dispatched_clicks_total[1m]))",
+          "legendFormat": "MMP: {{mmp}} Dispatched QPS",
+          "refId": "A"
+        }
+      ],
+      "title": "MMP 归因平台实时推送速率 (Dispatch QPS by MMP)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "axisCenteredZero": false, "drawStyle": "line", "lineInterpolation": "smooth" },
+          "unit": "ms"
+        }
+      },
+      "gridPos": { "h": 5, "w": 8, "x": 8, "y": 1 },
+      "id": 3,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } },
+      "targets": [
+        {
+          "expr": "rate(affiliate_supplement_http_duration_ms_sum[1m]) / (rate(affiliate_supplement_http_duration_ms_count[1m]) + 1e-6)",
+          "legendFormat": "Avg MMP Outbound Latency",
+          "refId": "A"
+        }
+      ],
+      "title": "归因平台 HTTP 推送响应时延 (MMP Network Latency)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "orange", "value": 90.0 },
+              { "color": "green", "value": 98.0 }
+            ]
+          },
+          "unit": "percent"
+        }
+      },
+      "gridPos": { "h": 5, "w": 8, "x": 16, "y": 1 },
+      "id": 4,
+      "options": {
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(affiliate_supplement_dispatched_success_total[5m])) / (sum(rate(affiliate_supplement_dispatched_clicks_total[5m])) + 1e-6) * 100",
+          "legendFormat": "MMP Dispatch Success %",
+          "refId": "A"
+        }
+      ],
+      "title": "推送成功率 (HTTP 200/302 Success Rate)",
+      "type": "gauge"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 6 },
+      "id": 5,
+      "title": "📂 Parquet 设备画像解析与游标推进度量 (Parquet Ingestion & Cursor Tracking)",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "axisCenteredZero": false, "drawStyle": "bars" },
+          "unit": "rows/s"
+        }
+      },
+      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 7 },
+      "id": 6,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } },
+      "targets": [
+        {
+          "expr": "rate(affiliate_supplement_parquet_rows_read_total[1m])",
+          "legendFormat": "Parquet Records Read / Sec",
+          "refId": "A"
+        }
+      ],
+      "title": "Parquet 设备画像文件解析吞吐 (Records Read / sec)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "axisCenteredZero": false, "drawStyle": "line", "lineInterpolation": "linear" }
+        }
+      },
+      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 7 },
+      "id": 7,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } },
+      "targets": [
+        {
+          "expr": "affiliate_supplement_rule_cursor_offset",
+          "legendFormat": "Rule: {{rule_id}} Offset",
+          "refId": "A"
+        }
+      ],
+      "title": "补量规则游标位移推进 (Rule Cursor Offset Progression)",
+      "type": "timeseries"
+    }
+  ],
+  "refresh": "5s",
+  "schemaVersion": 38,
+  "style": "dark",
+  "tags": ["affiliate", "supplement", "attribution", "mmp"],
+  "time": { "from": "now-30m", "to": "now" },
+  "timezone": "browser",
+  "title": "Affiliate Platform - Offer Traffic Supplement & MMP Attribution Telemetry",
+  "uid": "affiliate-supplement-telemetry",
+  "version": 1
+}

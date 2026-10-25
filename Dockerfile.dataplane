@@ -1,0 +1,74 @@
+# ===================================================================
+# Dockerfile.dataplane: 极速数据面物理镜像 (Sub-millisecond RTB & Click Tracking)
+# ===================================================================
+
+FROM maven:3.9.9-eclipse-temurin-21 AS builder
+WORKDIR /workspace
+
+# 预先拷贝 POM 结构充分利用 Docker Layer Cache
+COPY pom.xml ./
+COPY platform-common/pom.xml platform-common/
+COPY platform-infrastructure/pom.xml platform-infrastructure/
+COPY platform-auth/pom.xml platform-auth/
+COPY platform-tenant/pom.xml platform-tenant/
+COPY platform-event/pom.xml platform-event/
+COPY platform-budget/pom.xml platform-budget/
+COPY platform-creative/pom.xml platform-creative/
+COPY platform-ssp/pom.xml platform-ssp/
+COPY platform-dsp/pom.xml platform-dsp/
+COPY platform-dmp/pom.xml platform-dmp/
+COPY platform-cdp/pom.xml platform-cdp/
+COPY platform-adx/pom.xml platform-adx/
+COPY platform-google-ads/pom.xml platform-google-ads/
+COPY platform-google-gam/pom.xml platform-google-gam/
+COPY platform-billing/pom.xml platform-billing/
+COPY platform-reporting/pom.xml platform-reporting/
+COPY platform-affiliate/pom.xml platform-affiliate/
+COPY platform-api/pom.xml platform-api/
+
+# 拷贝子模块源码
+COPY platform-common/src platform-common/src
+COPY platform-infrastructure/src platform-infrastructure/src
+COPY platform-auth/src platform-auth/src
+COPY platform-tenant/src platform-tenant/src
+COPY platform-event/src platform-event/src
+COPY platform-budget/src platform-budget/src
+COPY platform-creative/src platform-creative/src
+COPY platform-ssp/src platform-ssp/src
+COPY platform-dsp/src platform-dsp/src
+COPY platform-dmp/src platform-dmp/src
+COPY platform-cdp/src platform-cdp/src
+COPY platform-adx/src platform-adx/src
+COPY platform-google-ads/src platform-google-ads/src
+COPY platform-google-gam/src platform-google-gam/src
+COPY platform-billing/src platform-billing/src
+COPY platform-reporting/src platform-reporting/src
+COPY platform-affiliate/src platform-affiliate/src
+COPY platform-api/src platform-api/src
+
+RUN mvn clean package -pl platform-api -am -DskipTests
+
+# ===================================================================
+# Runtime: 生产数据面极速运行环境 (ZGC 亚毫秒低延迟调优)
+# ===================================================================
+FROM eclipse-temurin:21-jre-alpine
+
+RUN apk add --no-cache curl && \
+    addgroup -S appgroup && adduser -S appuser -G appgroup
+
+WORKDIR /app
+COPY --from=builder /workspace/platform-api/target/platform-api-*.jar /app/app.jar
+
+RUN chown -R appuser:appgroup /app
+USER appuser
+
+EXPOSE 8080
+
+# 数据面专属 JVM 参数：开启分代 ZGC、预热内存页，消除停顿冲击
+ENV SPRING_PROFILES_ACTIVE="prod,dataplane"
+ENV JAVA_TOOL_OPTIONS="-XX:+UseZGC -XX:+ZGenerational -XX:MaxRAMPercentage=80.0 -XX:+AlwaysPreTouch -XX:+ExitOnOutOfMemoryError"
+
+HEALTHCHECK --interval=15s --timeout=2s --start-period=20s --retries=3 \
+  CMD curl -f http://localhost:8080/actuator/health/readiness || exit 1
+
+ENTRYPOINT ["java", "-jar", "app.jar"]

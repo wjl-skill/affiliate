@@ -10,6 +10,8 @@ import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Repository;
 
 import java.time.Instant;
@@ -21,6 +23,8 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 @Repository
 public class InMemoryVideoProcessTaskRepository implements VideoProcessTaskRepository {
+
+    private static final Logger log = LoggerFactory.getLogger(InMemoryVideoProcessTaskRepository.class);
 
     private final CreativeVideoProcessTaskMapper videoTaskMapper;
     private final ObjectMapper objectMapper = new ObjectMapper();
@@ -72,7 +76,7 @@ public class InMemoryVideoProcessTaskRepository implements VideoProcessTaskRepos
                 } else {
                     videoTaskMapper.insert(entity);
                 }
-            } catch (Exception ignored) {}
+            } catch (Exception e) {    log.debug("[InMemoryVideoProcessTaskRepository] Database operation notice: {}", e.getMessage());}
         }
         storage.put(key(task.tenantId(), task.id()), task);
         return task;
@@ -92,7 +96,7 @@ public class InMemoryVideoProcessTaskRepository implements VideoProcessTaskRepos
                 if (entity != null) {
                     return Optional.of(toDomain(entity));
                 }
-            } catch (Exception ignored) {}
+            } catch (Exception e) {    log.debug("[InMemoryVideoProcessTaskRepository] Database operation notice: {}", e.getMessage());}
         }
         VideoProcessTaskRecord found = storage.get(key(tenantId, id));
         if (found != null) {
@@ -117,7 +121,7 @@ public class InMemoryVideoProcessTaskRepository implements VideoProcessTaskRepos
                 if (entity != null) {
                     return Optional.of(toDomain(entity));
                 }
-            } catch (Exception ignored) {}
+            } catch (Exception e) {    log.debug("[InMemoryVideoProcessTaskRepository] Database operation notice: {}", e.getMessage());}
         }
         return storage.values().stream()
                 .filter(t -> (tenantId == null || tenantId.isBlank() || t.tenantId().equals(effectiveTenant))
@@ -140,7 +144,7 @@ public class InMemoryVideoProcessTaskRepository implements VideoProcessTaskRepos
                 if (list != null && !list.isEmpty()) {
                     return list.stream().map(this::toDomain).toList();
                 }
-            } catch (Exception ignored) {}
+            } catch (Exception e) {    log.debug("[InMemoryVideoProcessTaskRepository] Database operation notice: {}", e.getMessage());}
         }
         return storage.values().stream()
                 .filter(t -> t.tenantId().equals(effectiveTenant) && (status == null || t.status() == status))
@@ -160,7 +164,7 @@ public class InMemoryVideoProcessTaskRepository implements VideoProcessTaskRepos
                 if (list != null && !list.isEmpty()) {
                     return list.stream().map(this::toDomain).toList();
                 }
-            } catch (Exception ignored) {}
+            } catch (Exception e) {    log.debug("[InMemoryVideoProcessTaskRepository] Database operation notice: {}", e.getMessage());}
         }
         return storage.values().stream()
                 .filter(t -> t.tenantId().equals(effectiveTenant))
@@ -195,7 +199,7 @@ public class InMemoryVideoProcessTaskRepository implements VideoProcessTaskRepos
         if (entity.getOperatorParamsJson() != null && !entity.getOperatorParamsJson().isBlank()) {
             try {
                 params = objectMapper.readValue(entity.getOperatorParamsJson(), new TypeReference<Map<String, Object>>() {});
-            } catch (Exception ignored) {}
+            } catch (Exception e) {    log.debug("[InMemoryVideoProcessTaskRepository] Database operation notice: {}", e.getMessage());}
         }
 
         return new VideoProcessTaskRecord(

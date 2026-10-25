@@ -583,14 +583,16 @@ public class AffiliateMacroService {
     private void saveParamQuiet(MacroParam param) {
         try {
             saveParam(param);
-        } catch (Exception ignored) {
+        } catch (Exception e) {
+            log.debug("Silent seed saveParam skipped: {}", e.getMessage());
         }
     }
 
     private void saveMappingQuiet(PlatformMacroMapping mapping) {
         try {
             saveMapping(mapping);
-        } catch (Exception ignored) {
+        } catch (Exception e) {
+            log.debug("Silent seed saveMapping skipped: {}", e.getMessage());
         }
     }
 

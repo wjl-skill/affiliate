@@ -3,6 +3,8 @@ package com.affiliate.platform.tenant.system;
 import com.affiliate.platform.entity.S3StorageConfigEntity;
 import com.affiliate.platform.mapper.S3StorageConfigMapper;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
@@ -18,6 +20,8 @@ import java.util.concurrent.ConcurrentMap;
  */
 @Service
 public class S3StorageConfigService {
+
+    private static final Logger log = LoggerFactory.getLogger(S3StorageConfigService.class);
 
     private final S3StorageConfigMapper s3Mapper;
     private final ConcurrentMap<String, S3StorageConfig> fallbackStore = new ConcurrentHashMap<>();
@@ -44,7 +48,8 @@ public class S3StorageConfigService {
                         saveConfig(seed);
                     }
                 }
-            } catch (Exception ignored) {
+            } catch (Exception e) {
+                log.warn("Failed to check database default S3 configs, using memory store: {}", e.getMessage());
             }
         }
     }
@@ -134,7 +139,8 @@ public class S3StorageConfigService {
                         s3Mapper.updateById(entity);
                     }
                 }
-            } catch (Exception ignored) {
+            } catch (Exception e) {
+                log.warn("Failed to persist S3 storage config {} to database: {}, using memory store", config.id(), e.getMessage());
             }
         }
         return config;
@@ -147,7 +153,8 @@ public class S3StorageConfigService {
                 qw.orderByDesc("is_default").orderByAsc("created_at");
                 List<S3StorageConfigEntity> list = s3Mapper.selectList(qw);
                 return list.stream().map(this::toDomain).map(S3StorageConfig::toMasked).toList();
-            } catch (Exception ignored) {
+            } catch (Exception e) {
+                log.warn("Failed to query S3 storage configs from database: {}, using memory store", e.getMessage());
             }
         }
         return fallbackStore.values().stream().map(S3StorageConfig::toMasked).toList();
@@ -158,7 +165,8 @@ public class S3StorageConfigService {
             try {
                 S3StorageConfigEntity entity = s3Mapper.selectById(id);
                 return Optional.ofNullable(entity).map(this::toDomain);
-            } catch (Exception ignored) {
+            } catch (Exception e) {
+                log.warn("Failed to find S3 config {} in database: {}, using memory store", id, e.getMessage());
             }
         }
         return Optional.ofNullable(fallbackStore.get(id));
@@ -170,7 +178,8 @@ public class S3StorageConfigService {
                 boolean deleted = s3Mapper.deleteById(id) > 0;
                 fallbackStore.remove(id);
                 return deleted;
-            } catch (Exception ignored) {
+            } catch (Exception e) {
+                log.warn("Failed to delete S3 config {} from database: {}, using memory store", id, e.getMessage());
             }
         }
         return fallbackStore.remove(id) != null;
@@ -195,7 +204,8 @@ public class S3StorageConfigService {
                 return toDomain(target).toMasked();
             } catch (NoSuchElementException e) {
                 throw e;
-            } catch (Exception ignored) {
+            } catch (Exception e) {
+                log.warn("Failed to set default S3 config {} in database: {}, using memory store", id, e.getMessage());
             }
         }
 

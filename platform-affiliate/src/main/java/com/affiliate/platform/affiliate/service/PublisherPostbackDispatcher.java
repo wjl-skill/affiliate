@@ -148,7 +148,11 @@ public class PublisherPostbackDispatcher {
                 if (attempt < maxAttempts) {
                     try {
                         Thread.sleep(50L * attempt);
-                    } catch (InterruptedException ignored) {}
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        log.debug("Postback retry backoff interrupted for {}", renderedUrl);
+                        break;
+                    }
                 }
             }
         } else {

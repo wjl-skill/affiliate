@@ -7,6 +7,8 @@ import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Repository;
 
 import java.math.BigDecimal;
@@ -20,6 +22,8 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 @Repository
 public class InMemoryMaterialQualityHistoryRepository implements MaterialQualityHistoryRepository {
+
+    private static final Logger log = LoggerFactory.getLogger(InMemoryMaterialQualityHistoryRepository.class);
 
     private final CreativeQualityTagHistoryMapper historyMapper;
     private final ObjectMapper objectMapper = new ObjectMapper();
@@ -73,7 +77,7 @@ public class InMemoryMaterialQualityHistoryRepository implements MaterialQuality
                 } else {
                     historyMapper.insert(entity);
                 }
-            } catch (Exception ignored) {}
+            } catch (Exception e) {    log.debug("[InMemoryMaterialQualityHistoryRepository] Database operation notice: {}", e.getMessage());}
         }
         store.put(result.id(), result);
         return result;
@@ -90,7 +94,7 @@ public class InMemoryMaterialQualityHistoryRepository implements MaterialQuality
                 if (entity != null) {
                     return Optional.of(toDomain(entity));
                 }
-            } catch (Exception ignored) {}
+            } catch (Exception e) {    log.debug("[InMemoryMaterialQualityHistoryRepository] Database operation notice: {}", e.getMessage());}
         }
         return store.values().stream()
                 .filter(r -> t.equals(r.tenantId()) && creativeId.equals(r.creativeId()))
@@ -109,7 +113,7 @@ public class InMemoryMaterialQualityHistoryRepository implements MaterialQuality
                 if (list != null && !list.isEmpty()) {
                     return list.stream().map(this::toDomain).toList();
                 }
-            } catch (Exception ignored) {}
+            } catch (Exception e) {    log.debug("[InMemoryMaterialQualityHistoryRepository] Database operation notice: {}", e.getMessage());}
         }
         return store.values().stream()
                 .filter(r -> t.equals(r.tenantId()) && creativeId.equals(r.creativeId()))
@@ -134,7 +138,7 @@ public class InMemoryMaterialQualityHistoryRepository implements MaterialQuality
                 if (list != null && !list.isEmpty()) {
                     return list.stream().map(this::toDomain).toList();
                 }
-            } catch (Exception ignored) {}
+            } catch (Exception e) {    log.debug("[InMemoryMaterialQualityHistoryRepository] Database operation notice: {}", e.getMessage());}
         }
         return store.values().stream()
                 .filter(r -> t.equals(r.tenantId()) && d.equals(r.statDate()) && (level == null || level == r.qualityLevel()))
@@ -147,7 +151,7 @@ public class InMemoryMaterialQualityHistoryRepository implements MaterialQuality
         if (entity.getReasonTags() != null && !entity.getReasonTags().isBlank()) {
             try {
                 tags = objectMapper.readValue(entity.getReasonTags(), new TypeReference<List<String>>() {});
-            } catch (Exception ignored) {}
+            } catch (Exception e) {    log.debug("[InMemoryMaterialQualityHistoryRepository] Database operation notice: {}", e.getMessage());}
         }
         MaterialQualityLevel level;
         try {

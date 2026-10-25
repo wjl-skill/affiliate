@@ -6,6 +6,8 @@ import com.affiliate.platform.mapper.CreativeAdLearningRuleMapper;
 import com.affiliate.platform.service.ad.AdLearningRuleEngine;
 import com.affiliate.platform.service.ad.AdLearningStatus;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
@@ -20,6 +22,8 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 @Service
 public class AdLearningRuleEngineImpl implements AdLearningRuleEngine {
+
+    private static final Logger log = LoggerFactory.getLogger(AdLearningRuleEngineImpl.class);
 
     public static final int DEFAULT_TIME_DAYS = 2; // 48 小时
     public static final BigDecimal DEFAULT_COST_THRESHOLD = BigDecimal.valueOf(50.00);
@@ -70,7 +74,8 @@ public class AdLearningRuleEngineImpl implements AdLearningRuleEngine {
         if (learningRuleMapper != null) {
             try {
                 learningRuleMapper.insert(entity);
-            } catch (Exception ignored) {
+            } catch (Exception e) {
+                log.debug("[AdLearningRuleEngine] Failed to insert learning rule: {}", e.getMessage());
             }
         }
     }

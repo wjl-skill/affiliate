@@ -11,6 +11,8 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -41,6 +43,7 @@ import java.util.stream.Collectors;
  */
 @Service
 public class PerformanceReportService {
+    private static final Logger log = LoggerFactory.getLogger(PerformanceReportService.class);
 
     private final S2sPostbackService postbackService;
     private final SubIdAnalyticsService analyticsService;
@@ -651,7 +654,8 @@ public class PerformanceReportService {
                         Instant start = date.atStartOfDay(ZoneId.systemDefault()).toInstant();
                         Instant end = date.plusDays(1).atStartOfDay(ZoneId.systemDefault()).toInstant();
                         qw.ge(ClickSessionEntity::getCreatedAt, start).lt(ClickSessionEntity::getCreatedAt, end);
-                    } catch (Exception ignored) {
+                    } catch (Exception ex) {
+                        log.debug("Failed to parse dimension date {}: {}", dimensionValue, ex.getMessage());
                         return 0L;
                     }
                 }

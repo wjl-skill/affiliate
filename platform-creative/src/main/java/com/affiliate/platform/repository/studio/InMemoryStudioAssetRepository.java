@@ -9,6 +9,8 @@ import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Repository;
 
 import java.time.Instant;
@@ -20,6 +22,8 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 @Repository
 public class InMemoryStudioAssetRepository implements StudioAssetRepository {
+
+    private static final Logger log = LoggerFactory.getLogger(InMemoryStudioAssetRepository.class);
 
     private final CreativeStudioAssetMapper assetMapper;
     private final ObjectMapper objectMapper = new ObjectMapper();
@@ -63,7 +67,7 @@ public class InMemoryStudioAssetRepository implements StudioAssetRepository {
                 } else {
                     assetMapper.insert(entity);
                 }
-            } catch (Exception ignored) {}
+            } catch (Exception e) {    log.debug("[InMemoryStudioAssetRepository] Database operation notice: {}", e.getMessage());}
         }
         storage.put(key(asset.tenantId(), asset.id()), asset);
         return asset;
@@ -93,7 +97,7 @@ public class InMemoryStudioAssetRepository implements StudioAssetRepository {
                 if (entity != null) {
                     return Optional.of(toDomain(entity));
                 }
-            } catch (Exception ignored) {}
+            } catch (Exception e) {    log.debug("[InMemoryStudioAssetRepository] Database operation notice: {}", e.getMessage());}
         }
         StudioAsset found = storage.get(key(tenantId, id));
         if (found != null) {
@@ -115,7 +119,7 @@ public class InMemoryStudioAssetRepository implements StudioAssetRepository {
                 if (list != null && !list.isEmpty()) {
                     return list.stream().map(this::toDomain).toList();
                 }
-            } catch (Exception ignored) {}
+            } catch (Exception e) {    log.debug("[InMemoryStudioAssetRepository] Database operation notice: {}", e.getMessage());}
         }
         return storage.values().stream()
                 .filter(a -> a.tenantId().equals(effectiveTenant) && a.projectId().equals(projectId))
@@ -142,7 +146,7 @@ public class InMemoryStudioAssetRepository implements StudioAssetRepository {
         if (entity.getPromptDataJson() != null && !entity.getPromptDataJson().isBlank()) {
             try {
                 promptData = objectMapper.readValue(entity.getPromptDataJson(), new TypeReference<Map<String, Object>>() {});
-            } catch (Exception ignored) {}
+            } catch (Exception e) {    log.debug("[InMemoryStudioAssetRepository] Database operation notice: {}", e.getMessage());}
         }
 
         return new StudioAsset(

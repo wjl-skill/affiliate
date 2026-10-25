@@ -22,7 +22,7 @@ public final class TraceContext {
             CURRENT_TRACE.set(traceId);
             try {
                 MDC.put(MDC_TRACE_KEY, traceId);
-            } catch (Throwable ignored) {
+            } catch (Throwable t) {
             }
         } else {
             clear();
@@ -46,7 +46,7 @@ public final class TraceContext {
         CURRENT_TRACE.remove();
         try {
             MDC.remove(MDC_TRACE_KEY);
-        } catch (Throwable ignored) {
+        } catch (Throwable t) {
         }
     }
 }

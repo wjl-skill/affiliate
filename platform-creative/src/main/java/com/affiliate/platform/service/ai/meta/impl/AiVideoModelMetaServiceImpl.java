@@ -6,6 +6,8 @@ import com.affiliate.platform.entity.CreativeAiModelMetaEntity;
 import com.affiliate.platform.mapper.CreativeAiModelMetaMapper;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
@@ -19,6 +21,8 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 @Service
 public class AiVideoModelMetaServiceImpl implements AiVideoModelMetaService {
+
+    private static final Logger log = LoggerFactory.getLogger(AiVideoModelMetaServiceImpl.class);
 
     private final CreativeAiModelMetaMapper modelMetaMapper;
     private final Map<String, AiVideoModelMetaDTO> modelRegistry = new ConcurrentHashMap<>();
@@ -186,7 +190,9 @@ public class AiVideoModelMetaServiceImpl implements AiVideoModelMetaService {
                         ));
                     }
                 }
-            } catch (Exception ignored) {}
+            } catch (Exception e) {
+            log.debug("[AiVideoModelMeta] Failed to read database model meta: {}", e.getMessage());
+        }
         }
 
         return Optional.ofNullable(defaultMeta);

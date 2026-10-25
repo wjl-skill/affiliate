@@ -49,7 +49,7 @@ class SspProductionOptimizationTest {
             public String partnerId() { return "Flaky_DSP"; }
             @Override
             public HeaderBiddingOrchestrator.BidOffer requestBid(String slotId) {
-                try { Thread.sleep(150); } catch (Exception ignored) {}
+                try { Thread.sleep(150); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); }
                 return new HeaderBiddingOrchestrator.BidOffer("Flaky_DSP", "cr", new BigDecimal("10.0"), "ad", "USD");
             }
         };

@@ -57,6 +57,17 @@ spring:
       # 保证消息严格不丢失的生产端配置
       acks: all
       retries: 3
+    consumer:
+      group-id: ${KAFKA_CONSUMER_GROUP:affiliate-platform-group}
+      auto-offset-reset: earliest
+      enable-auto-commit: false
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
+      properties:
+        spring.json.trusted.packages: "*"
+    listener:
+      ack-mode: batch
+      concurrency: 3
 
 # ===================================================================
 # MyBatis-Plus 生产环境配置

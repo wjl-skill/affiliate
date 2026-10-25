@@ -3,6 +3,8 @@ package com.affiliate.platform.tenant.system;
 import com.affiliate.platform.entity.TrackingDomainEntity;
 import com.affiliate.platform.mapper.TrackingDomainMapper;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
@@ -18,6 +20,8 @@ import java.util.concurrent.ConcurrentMap;
  */
 @Service
 public class TrackingDomainService {
+
+    private static final Logger log = LoggerFactory.getLogger(TrackingDomainService.class);
 
     private final TrackingDomainMapper domainMapper;
     private final ConcurrentMap<String, TrackingDomain> fallbackStore = new ConcurrentHashMap<>();
@@ -44,7 +48,8 @@ public class TrackingDomainService {
                         saveDomain(seed);
                     }
                 }
-            } catch (Exception ignored) {
+            } catch (Exception e) {
+                log.warn("Failed to check database default tracking domains, using memory store: {}", e.getMessage());
             }
         }
     }
@@ -121,7 +126,8 @@ public class TrackingDomainService {
                 } else {
                     domainMapper.insert(entity);
                 }
-            } catch (Exception ignored) {
+            } catch (Exception e) {
+                log.warn("Failed to persist tracking domain {} to database: {}, using memory store", domain.id(), e.getMessage());
             }
         }
         return domain;
@@ -134,7 +140,8 @@ public class TrackingDomainService {
                 qw.orderByDesc("is_default").orderByAsc("created_at");
                 List<TrackingDomainEntity> list = domainMapper.selectList(qw);
                 return list.stream().map(this::toDomain).toList();
-            } catch (Exception ignored) {
+            } catch (Exception e) {
+                log.warn("Failed to query tracking domains from database: {}, using memory store", e.getMessage());
             }
         }
         return new ArrayList<>(fallbackStore.values());
@@ -145,7 +152,8 @@ public class TrackingDomainService {
             try {
                 TrackingDomainEntity entity = domainMapper.selectById(id);
                 return Optional.ofNullable(entity).map(this::toDomain);
-            } catch (Exception ignored) {
+            } catch (Exception e) {
+                log.warn("Failed to find tracking domain {} in database: {}, using memory store", id, e.getMessage());
             }
         }
         return Optional.ofNullable(fallbackStore.get(id));
@@ -157,7 +165,8 @@ public class TrackingDomainService {
                 boolean deleted = domainMapper.deleteById(id) > 0;
                 fallbackStore.remove(id);
                 return deleted;
-            } catch (Exception ignored) {
+            } catch (Exception e) {
+                log.warn("Failed to delete tracking domain {} from database: {}, using memory store", id, e.getMessage());
             }
         }
         return fallbackStore.remove(id) != null;
@@ -173,7 +182,8 @@ public class TrackingDomainService {
                 return toDomain(entity);
             } catch (NoSuchElementException e) {
                 throw e;
-            } catch (Exception ignored) {
+            } catch (Exception e) {
+                log.warn("Failed to verify DNS for domain {} in database: {}, using memory store", id, e.getMessage());
             }
         }
 
@@ -203,7 +213,8 @@ public class TrackingDomainService {
                 return toDomain(target);
             } catch (NoSuchElementException e) {
                 throw e;
-            } catch (Exception ignored) {
+            } catch (Exception e) {
+                log.warn("Failed to set default tracking domain {} in database: {}, using memory store", id, e.getMessage());
             }
         }
 

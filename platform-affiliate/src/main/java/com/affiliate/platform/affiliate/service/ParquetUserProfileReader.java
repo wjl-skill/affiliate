@@ -385,7 +385,8 @@ public class ParquetUserProfileReader {
             if (Files.exists(localPath) && Files.isRegularFile(localPath)) {
                 return Files.readAllBytes(localPath);
             }
-        } catch (Exception ignored) {
+        } catch (Exception e) {
+            log.debug("[ParquetReader] Local file probe failed for {}: {}", trimmed, e.getMessage());
         }
 
         // 2. 从 S3StorageConfig 对象存储配置拼接远端桶 URL 拉取
@@ -437,7 +438,8 @@ public class ParquetUserProfileReader {
             if (Files.exists(downloadsSample)) {
                 return Files.readAllBytes(downloadsSample);
             }
-        } catch (Exception ignored) {
+        } catch (Exception e) {
+            log.debug("[ParquetReader] Downloads sample probe failed: {}", e.getMessage());
         }
 
         return null;

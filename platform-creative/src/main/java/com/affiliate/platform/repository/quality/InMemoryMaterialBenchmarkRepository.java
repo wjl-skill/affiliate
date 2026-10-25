@@ -5,6 +5,8 @@ import com.affiliate.platform.entity.CreativeBenchmark7dEntity;
 import com.affiliate.platform.mapper.CreativeBenchmark7dMapper;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Repository;
 
 import java.math.BigDecimal;
@@ -20,6 +22,8 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 @Repository
 public class InMemoryMaterialBenchmarkRepository implements MaterialBenchmarkRepository {
+
+    private static final Logger log = LoggerFactory.getLogger(InMemoryMaterialBenchmarkRepository.class);
 
     private final CreativeBenchmark7dMapper benchmarkMapper;
     private final Map<String, MaterialBenchmark7D> store = new ConcurrentHashMap<>();
@@ -69,7 +73,7 @@ public class InMemoryMaterialBenchmarkRepository implements MaterialBenchmarkRep
                 } else {
                     benchmarkMapper.insert(entity);
                 }
-            } catch (Exception ignored) {}
+            } catch (Exception e) {    log.debug("[InMemoryMaterialBenchmarkRepository] Database operation notice: {}", e.getMessage());}
         }
         store.put(key(benchmark.tenantId(), benchmark.statDate()), benchmark);
         return benchmark;
@@ -86,7 +90,7 @@ public class InMemoryMaterialBenchmarkRepository implements MaterialBenchmarkRep
                 if (entity != null) {
                     return Optional.of(toDomain(entity));
                 }
-            } catch (Exception ignored) {}
+            } catch (Exception e) {    log.debug("[InMemoryMaterialBenchmarkRepository] Database operation notice: {}", e.getMessage());}
         }
         return store.values().stream()
                 .filter(b -> t.equals(b.tenantId()))
@@ -105,7 +109,7 @@ public class InMemoryMaterialBenchmarkRepository implements MaterialBenchmarkRep
                 if (entity != null) {
                     return Optional.of(toDomain(entity));
                 }
-            } catch (Exception ignored) {}
+            } catch (Exception e) {    log.debug("[InMemoryMaterialBenchmarkRepository] Database operation notice: {}", e.getMessage());}
         }
         return Optional.ofNullable(store.get(key(tenantId, date)));
     }

@@ -5,6 +5,8 @@ import com.affiliate.platform.entity.CreativeDigitalHumanAvatarEntity;
 import com.affiliate.platform.mapper.CreativeDigitalHumanAvatarMapper;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Repository;
 
 import java.time.Instant;
@@ -16,6 +18,8 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 @Repository
 public class InMemoryDigitalHumanAvatarRepository implements DigitalHumanAvatarRepository {
+
+    private static final Logger log = LoggerFactory.getLogger(InMemoryDigitalHumanAvatarRepository.class);
 
     private final CreativeDigitalHumanAvatarMapper avatarMapper;
     private final Map<String, DigitalHumanAvatar> storage = new ConcurrentHashMap<>();
@@ -78,7 +82,7 @@ public class InMemoryDigitalHumanAvatarRepository implements DigitalHumanAvatarR
                 } else {
                     avatarMapper.insert(entity);
                 }
-            } catch (Exception ignored) {}
+            } catch (Exception e) {    log.debug("[InMemoryDigitalHumanAvatarRepository] Database operation notice: {}", e.getMessage());}
         }
         storage.put(key(avatar.tenantId(), avatar.id()), avatar);
         return avatar;
@@ -98,7 +102,7 @@ public class InMemoryDigitalHumanAvatarRepository implements DigitalHumanAvatarR
                 if (entity != null) {
                     return Optional.of(toDomain(entity));
                 }
-            } catch (Exception ignored) {}
+            } catch (Exception e) {    log.debug("[InMemoryDigitalHumanAvatarRepository] Database operation notice: {}", e.getMessage());}
         }
         DigitalHumanAvatar found = storage.get(key(tenantId, id));
         if (found != null) {
@@ -121,7 +125,7 @@ public class InMemoryDigitalHumanAvatarRepository implements DigitalHumanAvatarR
                 if (list != null && !list.isEmpty()) {
                     return list.stream().map(this::toDomain).toList();
                 }
-            } catch (Exception ignored) {}
+            } catch (Exception e) {    log.debug("[InMemoryDigitalHumanAvatarRepository] Database operation notice: {}", e.getMessage());}
         }
         return storage.values().stream()
                 .filter(a -> (a.tenantId().equals(effectiveTenant) || a.tenantId().equals("public"))
@@ -145,7 +149,7 @@ public class InMemoryDigitalHumanAvatarRepository implements DigitalHumanAvatarR
                 if (rows > 0) {
                     deleted = true;
                 }
-            } catch (Exception ignored) {}
+            } catch (Exception e) {    log.debug("[InMemoryDigitalHumanAvatarRepository] Database operation notice: {}", e.getMessage());}
         }
         DigitalHumanAvatar removed = storage.remove(key(effectiveTenant, id));
         if (removed != null) {

@@ -9,6 +9,8 @@ import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Repository;
 
 import java.time.Instant;
@@ -20,6 +22,8 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 @Repository
 public class InMemoryAutoStitchConfigRepository implements AutoStitchConfigRepository {
+
+    private static final Logger log = LoggerFactory.getLogger(InMemoryAutoStitchConfigRepository.class);
 
     private final CreativeAutoStitchConfigMapper configMapper;
     private final ObjectMapper objectMapper = new ObjectMapper();
@@ -68,7 +72,7 @@ public class InMemoryAutoStitchConfigRepository implements AutoStitchConfigRepos
                 } else {
                     configMapper.insert(entity);
                 }
-            } catch (Exception ignored) {}
+            } catch (Exception e) {    log.debug("[InMemoryAutoStitchConfigRepository] Database operation notice: {}", e.getMessage());}
         }
         storage.put(key(config.tenantId(), config.id()), config);
         return config;
@@ -88,7 +92,7 @@ public class InMemoryAutoStitchConfigRepository implements AutoStitchConfigRepos
                 if (entity != null) {
                     return Optional.of(toDomain(entity));
                 }
-            } catch (Exception ignored) {}
+            } catch (Exception e) {    log.debug("[InMemoryAutoStitchConfigRepository] Database operation notice: {}", e.getMessage());}
         }
         AutoStitchConfig found = storage.get(key(tenantId, id));
         if (found != null) {
@@ -110,7 +114,7 @@ public class InMemoryAutoStitchConfigRepository implements AutoStitchConfigRepos
                 if (list != null && !list.isEmpty()) {
                     return list.stream().map(this::toDomain).toList();
                 }
-            } catch (Exception ignored) {}
+            } catch (Exception e) {    log.debug("[InMemoryAutoStitchConfigRepository] Database operation notice: {}", e.getMessage());}
         }
         return storage.values().stream()
                 .filter(c -> c.tenantId().equals(effectiveTenant))
@@ -132,7 +136,7 @@ public class InMemoryAutoStitchConfigRepository implements AutoStitchConfigRepos
                 if (list != null && !list.isEmpty()) {
                     return list.stream().map(this::toDomain).toList();
                 }
-            } catch (Exception ignored) {}
+            } catch (Exception e) {    log.debug("[InMemoryAutoStitchConfigRepository] Database operation notice: {}", e.getMessage());}
         }
         return storage.values().stream()
                 .filter(c -> c.status() == AutoStitchStatus.PENDING &&
@@ -152,7 +156,7 @@ public class InMemoryAutoStitchConfigRepository implements AutoStitchConfigRepos
                     qw.eq("tenant_id", effectiveTenant);
                 }
                 configMapper.delete(qw);
-            } catch (Exception ignored) {}
+            } catch (Exception e) {    log.debug("[InMemoryAutoStitchConfigRepository] Database operation notice: {}", e.getMessage());}
         }
         return storage.remove(key(tenantId, id)) != null;
     }
@@ -183,14 +187,14 @@ public class InMemoryAutoStitchConfigRepository implements AutoStitchConfigRepos
                 if (map.get("bodyVideoUrls") instanceof List<?> list) {
                     bodies = list.stream().map(Object::toString).toList();
                 }
-            } catch (Exception ignored) {}
+            } catch (Exception e) {    log.debug("[InMemoryAutoStitchConfigRepository] Database operation notice: {}", e.getMessage());}
         }
 
         Map<String, Object> cta = Map.of();
         if (entity.getCtaConfig() != null && !entity.getCtaConfig().isBlank()) {
             try {
                 cta = objectMapper.readValue(entity.getCtaConfig(), new TypeReference<Map<String, Object>>() {});
-            } catch (Exception ignored) {}
+            } catch (Exception e) {    log.debug("[InMemoryAutoStitchConfigRepository] Database operation notice: {}", e.getMessage());}
         }
 
         return new AutoStitchConfig(

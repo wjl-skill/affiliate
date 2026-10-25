@@ -147,11 +147,14 @@ public class MediaProbeServiceImpl implements MediaProbeService {
                 double num = Double.parseDouble(parts[0]);
                 double den = Double.parseDouble(parts[1]);
                 return den != 0 ? num / den : 30.0;
-            } catch (Exception ignored) {}
+            } catch (Exception e) {
+                log.debug("[MediaProbe] Failed to parse frame rate fraction '{}': {}", rFrameRate, e.getMessage());
+            }
         }
         try {
             return Double.parseDouble(rFrameRate);
-        } catch (Exception ignored) {
+        } catch (Exception e) {
+            log.debug("[MediaProbe] Failed to parse frame rate double '{}': {}, fallback to 30.0", rFrameRate, e.getMessage());
             return 30.0;
         }
     }

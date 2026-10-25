@@ -151,7 +151,8 @@ public class ClickTrackerService {
         if (probabilisticEngine != null) {
             try {
                 probabilisticEngine.registerClickFingerprint(session);
-            } catch (Exception ignored) {
+            } catch (Exception e) {
+                log.debug("Failed to register probabilistic click fingerprint: {}", e.getMessage());
             }
         }
 

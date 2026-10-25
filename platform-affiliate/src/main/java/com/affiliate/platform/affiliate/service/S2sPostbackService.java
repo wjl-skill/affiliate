@@ -49,6 +49,7 @@ public class S2sPostbackService {
     private final ProbabilisticAttributionEngine probabilisticEngine;
     private final StringRedisTemplate redisTemplate;
     private final com.affiliate.platform.affiliate.metrics.AffiliateMetrics metrics;
+    private final org.springframework.kafka.core.KafkaTemplate<String, Object> kafkaTemplate;
 
     private final ConcurrentMap<String, Conversion> fallbackConversions = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, AffiliatePartner> fallbackPartners = new ConcurrentHashMap<>();
@@ -95,7 +96,21 @@ public class S2sPostbackService {
             ProbabilisticAttributionEngine probabilisticEngine,
             StringRedisTemplate redisTemplate
     ) {
-        this(clickTracker, offerService, antiFraudEngine, postbackDispatcher, conversionMapper, partnerMapper, probabilisticEngine, redisTemplate, null);
+        this(clickTracker, offerService, antiFraudEngine, postbackDispatcher, conversionMapper, partnerMapper, probabilisticEngine, redisTemplate, null, null);
+    }
+
+    public S2sPostbackService(
+            ClickTrackerService clickTracker,
+            OfferService offerService,
+            AffiliateAntiFraudEngine antiFraudEngine,
+            PublisherPostbackDispatcher postbackDispatcher,
+            ConversionMapper conversionMapper,
+            AffiliatePartnerMapper partnerMapper,
+            ProbabilisticAttributionEngine probabilisticEngine,
+            StringRedisTemplate redisTemplate,
+            com.affiliate.platform.affiliate.metrics.AffiliateMetrics metrics
+    ) {
+        this(clickTracker, offerService, antiFraudEngine, postbackDispatcher, conversionMapper, partnerMapper, probabilisticEngine, redisTemplate, metrics, null);
     }
 
     @Autowired
@@ -108,7 +123,8 @@ public class S2sPostbackService {
             @Autowired(required = false) AffiliatePartnerMapper partnerMapper,
             @Autowired(required = false) ProbabilisticAttributionEngine probabilisticEngine,
             @Autowired(required = false) StringRedisTemplate redisTemplate,
-            @Autowired(required = false) com.affiliate.platform.affiliate.metrics.AffiliateMetrics metrics
+            @Autowired(required = false) com.affiliate.platform.affiliate.metrics.AffiliateMetrics metrics,
+            @Autowired(required = false) org.springframework.kafka.core.KafkaTemplate<String, Object> kafkaTemplate
     ) {
         this.clickTracker = clickTracker;
         this.offerService = offerService;
@@ -119,6 +135,7 @@ public class S2sPostbackService {
         this.probabilisticEngine = probabilisticEngine;
         this.redisTemplate = redisTemplate;
         this.metrics = metrics != null ? metrics : new com.affiliate.platform.affiliate.metrics.AffiliateMetrics();
+        this.kafkaTemplate = kafkaTemplate;
     }
 
     public void registerPartner(AffiliatePartner partner) {
@@ -186,7 +203,9 @@ public class S2sPostbackService {
                 if (entity != null) {
                     return Optional.of(toConversionDomain(entity));
                 }
-            } catch (Exception ignored) {}
+            } catch (Exception e) {
+                log.debug("Database query conversion by txId {} failed: {}", txId, e.getMessage());
+            }
         }
         return fallbackConversions.values().stream()
                 .filter(c -> txId.equalsIgnoreCase(c.txId()))
@@ -380,7 +399,9 @@ public class S2sPostbackService {
             if (redisLocked && redisTemplate != null) {
                 try {
                     redisTemplate.delete(lockKey);
-                } catch (Exception ignored) {}
+                } catch (Exception e) {
+                    log.debug("Failed to release postback redis lock for key {}: {}", lockKey, e.getMessage());
+                }
             }
             inFlightTxIds.remove(txId);
         }
@@ -396,24 +417,31 @@ public class S2sPostbackService {
                 case REJECTED -> metrics.recordConversionRejected();
             }
         }
+        ConversionEntity entity = new ConversionEntity(
+                conv.id(),
+                conv.tenantId(),
+                conv.clickId(),
+                conv.offerId(),
+                conv.affiliateId(),
+                conv.txId(),
+                conv.payout(),
+                conv.revenue(),
+                conv.saleAmount(),
+                conv.status().name(),
+                conv.ctitSeconds(),
+                conv.rejectionReason(),
+                conv.sub1(),
+                conv.postbackStatus().name(),
+                conv.createdAt()
+        );
+        if (kafkaTemplate != null) {
+            try {
+                kafkaTemplate.send("affiliate.events.conversion", conv.id(), entity);
+            } catch (Exception ex) {
+                log.warn("Kafka conversion dispatch failed for {}, falling back to direct db: {}", conv.id(), ex.getMessage());
+            }
+        }
         if (conversionMapper != null) {
-            ConversionEntity entity = new ConversionEntity(
-                    conv.id(),
-                    conv.tenantId(),
-                    conv.clickId(),
-                    conv.offerId(),
-                    conv.affiliateId(),
-                    conv.txId(),
-                    conv.payout(),
-                    conv.revenue(),
-                    conv.saleAmount(),
-                    conv.status().name(),
-                    conv.ctitSeconds(),
-                    conv.rejectionReason(),
-                    conv.sub1(),
-                    conv.postbackStatus().name(),
-                    conv.createdAt()
-            );
             if (conversionMapper.selectById(conv.id()) != null) {
                 conversionMapper.updateById(entity);
             } else {
@@ -463,7 +491,9 @@ public class S2sPostbackService {
         if (e.getPostbackStatus() != null) {
             try {
                 postbackStatus = Conversion.PostbackStatus.valueOf(e.getPostbackStatus());
-            } catch (Exception ignored) {}
+            } catch (Exception ex) {
+                log.debug("Unrecognized postback status '{}' on conversion {}: {}", e.getPostbackStatus(), e.getId(), ex.getMessage());
+            }
         }
         return new Conversion(
                 e.getId(),
@@ -489,7 +519,9 @@ public class S2sPostbackService {
         if (e.getPaymentTerm() != null) {
             try {
                 term = AffiliatePartner.PaymentTerm.valueOf(e.getPaymentTerm());
-            } catch (Exception ignored) {}
+            } catch (Exception ex) {
+                log.debug("Unrecognized payment term '{}' on partner {}: {}", e.getPaymentTerm(), e.getId(), ex.getMessage());
+            }
         }
         return new AffiliatePartner(
                 e.getId(),

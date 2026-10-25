@@ -78,7 +78,7 @@
           <button
             type="button"
             class="px-2.5 py-1 text-xs font-semibold rounded-lg bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-200 transition-colors"
-            @click="openSupplementModal(row)"
+            @click="openSupplementDrawer(row)"
           >
             🚀 补量推送 (AF/Adjust)
           </button>
@@ -159,233 +159,323 @@
       </div>
     </div>
 
-    <!-- 补量点击记录与 MMP 推送日志表 -->
-    <div class="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
-      <div class="px-5 py-4 border-b border-slate-200 flex items-center justify-between">
-        <div>
-          <h4 class="text-sm font-bold text-slate-800">📡 Offer 补量点击会话与 AF/Adjust 归因推送明细 (Supplement Click Logs)</h4>
-          <p class="text-[11px] text-slate-400">每次补量均真实写入 ClickSession (click_id) 并携带设备 IP / User-Agent / IDFA / GADVID 推送至归因平台</p>
-        </div>
-        <span class="text-xs font-mono text-slate-500">最近 {{ supplementLogs.length }} 条点击记录</span>
-      </div>
-      <div v-if="supplementLogs.length > 0" class="overflow-x-auto">
-        <table class="w-full text-left border-collapse text-xs">
-          <thead>
-            <tr class="bg-slate-50 text-slate-500 border-b border-slate-200">
-              <th class="py-2.5 px-4 font-semibold">Click ID / Offer</th>
-              <th class="py-2.5 px-4 font-semibold">归因平台</th>
-              <th class="py-2.5 px-4 font-semibold">设备标识 (IDFA / GADVID)</th>
-              <th class="py-2.5 px-4 font-semibold">客户端 IP / OS</th>
-              <th class="py-2.5 px-4 font-semibold">子媒体 (ds_publisher_id / adx / s)</th>
-              <th class="py-2.5 px-4 font-semibold">参数替换后归因 URL</th>
-              <th class="py-2.5 px-4 font-semibold">HTTP 状态</th>
-            </tr>
-          </thead>
-          <tbody class="divide-y divide-slate-100">
-            <tr v-for="item in supplementLogs" :key="item.id" class="hover:bg-slate-50/70">
-              <td class="py-2.5 px-4 font-mono">
-                <div class="font-bold text-slate-900">{{ item.clickId }}</div>
-                <div class="text-[10px] text-slate-400">Offer: {{ item.offerId }} · Aff: {{ item.affiliateId }}</div>
-              </td>
-              <td class="py-2.5 px-4">
-                <span class="px-2 py-0.5 rounded text-[10px] font-bold bg-indigo-50 text-indigo-700">{{ item.mmpPlatform }}</span>
-              </td>
-              <td class="py-2.5 px-4 font-mono text-[11px] text-slate-700">
-                <div>{{ item.idfa || item.gadvid || item.profileId }}</div>
-                <div class="text-[10px] text-slate-400">m={{ item.modelFlag ?? '-' }}</div>
-              </td>
-              <td class="py-2.5 px-4 font-mono text-[11px]">
-                <div class="text-slate-800">{{ item.ip }}</div>
-                <div class="text-[10px] text-slate-400 uppercase">{{ item.os }}</div>
-              </td>
-              <td class="py-2.5 px-4 font-mono text-[11px]">
-                <div class="text-slate-800 truncate max-w-[160px]" :title="item.dsPublisherId">Pub: {{ item.dsPublisherId }}</div>
-                <div class="text-[10px] text-slate-500">ADX: {{ item.dsAdx }} · s: {{ item.sourceTag }}</div>
-              </td>
-              <td class="py-2.5 px-4 font-mono text-[11px] text-slate-600 max-w-xs truncate" :title="item.targetUrl">
-                {{ item.targetUrl }}
-              </td>
-              <td class="py-2.5 px-4 font-mono">
-                <span
-                  class="px-2 py-0.5 rounded text-[10px] font-bold"
-                  :class="item.success ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'"
-                >
-                  HTTP {{ item.httpStatus }} ({{ item.latencyMs }}ms)
-                </span>
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-      <div v-else class="p-8 text-center text-xs text-slate-400">
-        暂无补量点击记录，请点击任意 Offer 右侧的「🚀 补量推送 (AF/Adjust)」触发补量
-      </div>
-    </div>
-
-    <!-- Offer 补量配置与立即执行弹窗 -->
-    <div v-if="showSuppModal" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-sm p-4 overflow-y-auto">
-      <div class="bg-white rounded-2xl border border-slate-200 shadow-2xl max-w-3xl w-full p-6 space-y-4 my-8">
-        <div class="flex items-center justify-between pb-3 border-b border-slate-100">
-          <div>
-            <h4 class="text-sm font-bold text-slate-900">🚀 Offer 流量补量与归因平台推送 ({{ suppForm.offerId }})</h4>
-            <p class="text-[11px] text-slate-500">从存储桶或本地读取 Parquet 用户画像，自动补充替换 Offer 参数并推送到 AppsFlyer / Adjust</p>
-          </div>
-          <button type="button" class="text-slate-400 hover:text-slate-600" @click="showSuppModal = false">✕</button>
-        </div>
-
-        <div class="space-y-3 text-xs">
-          <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
-            <div>
-              <label class="block font-semibold text-slate-700 mb-1">目标归因平台 (MMP)</label>
-              <select v-model="suppForm.mmpPlatform" class="w-full border border-slate-300 rounded-lg p-2 bg-white font-semibold" @change="applyDefaultTemplateForMmp">
-                <option value="APPSFLYER">AppsFlyer (AF)</option>
-                <option value="ADJUST">Adjust</option>
-                <option value="SINGULAR">Singular</option>
-                <option value="BRANCH">Branch</option>
-                <option value="CUSTOM">自定义宏模板</option>
-              </select>
+    <!-- 补量抽屉组件 (Slide-Over Drawer) -->
+    <div
+      v-if="showSuppDrawer"
+      class="fixed inset-0 z-50 overflow-hidden bg-slate-900/60 backdrop-blur-sm transition-opacity"
+      @click.self="showSuppDrawer = false"
+    >
+      <div class="fixed inset-y-0 right-0 flex max-w-full pl-10">
+        <div class="w-screen max-w-4xl bg-white shadow-2xl flex flex-col">
+          <!-- 抽屉顶部导航 -->
+          <div class="px-6 py-4 border-b border-slate-200 bg-slate-50 flex items-center justify-between">
+            <div class="flex items-center gap-3">
+              <span class="text-xl">🚀</span>
+              <div>
+                <h3 class="text-sm font-bold text-slate-900">Offer 流量补量引擎 ({{ suppForm.offerId }})</h3>
+                <p class="text-[11px] text-slate-500">Parquet 用户画像智能解析 · 宏占位符自动替换 · AppsFlyer/Adjust 批量分发</p>
+              </div>
             </div>
-            <div>
-              <label class="block font-semibold text-slate-700 mb-1">归属渠道客 ID (Affiliate ID)</label>
-              <input v-model="suppForm.affiliateId" type="text" class="w-full font-mono border border-slate-300 rounded-lg p-2" />
-            </div>
-            <div>
-              <label class="block font-semibold text-slate-700 mb-1">设备系统过滤 (OS Filter)</label>
-              <select v-model="suppForm.osFilter" class="w-full border border-slate-300 rounded-lg p-2 bg-white font-mono">
-                <option value="ALL">ALL (全部系统)</option>
-                <option value="ios">ios (仅 iOS / IDFA)</option>
-                <option value="android">android (仅 Android / GADVID)</option>
-              </select>
+            <div class="flex items-center gap-2">
+              <button
+                type="button"
+                class="px-3 py-1.5 text-xs font-semibold rounded-lg border"
+                :class="activeDrawerTab === 'config' ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100'"
+                @click="activeDrawerTab = 'config'"
+              >
+                ⚙️ 补量配置
+              </button>
+              <button
+                type="button"
+                class="px-3 py-1.5 text-xs font-semibold rounded-lg border"
+                :class="activeDrawerTab === 'logs' ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100'"
+                @click="activeDrawerTab = 'logs'"
+              >
+                📡 实时日志流水 ({{ supplementLogs.length }})
+              </button>
+              <button
+                type="button"
+                class="ml-2 text-slate-400 hover:text-slate-600 text-lg font-bold p-1"
+                @click="showSuppDrawer = false"
+              >
+                ✕
+              </button>
             </div>
           </div>
 
-          <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
-            <div>
-              <label class="block font-semibold text-slate-700 mb-1">关联 S3 存储桶配置</label>
-              <select v-model="suppForm.storageConfigId" class="w-full border border-slate-300 rounded-lg p-2 bg-white">
-                <option value="">默认存储桶 / 本地直读</option>
-                <option v-for="cfg in s3Configs" :key="cfg.id" :value="cfg.id">
-                  {{ cfg.name }} ({{ cfg.bucketName }})
-                </option>
-              </select>
+          <!-- 抽屉主体内容 -->
+          <div class="flex-1 overflow-y-auto p-6 space-y-4">
+            <!-- Tab 1: 补量配置 -->
+            <div v-show="activeDrawerTab === 'config'" class="space-y-4 text-xs">
+              <!-- 校验错误汇总警示条 -->
+              <div v-if="validationErrors.length > 0" class="p-3 bg-rose-50 border border-rose-200 rounded-xl text-rose-700 space-y-1">
+                <div class="font-bold flex items-center gap-1.5">
+                  <span>⚠️</span>
+                  <span>参数校验不合规，请修正后重试：</span>
+                </div>
+                <ul class="list-disc list-inside space-y-0.5 text-[11px]">
+                  <li v-for="(err, idx) in validationErrors" :key="idx">{{ err }}</li>
+                </ul>
+              </div>
+
+              <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div>
+                  <label class="block font-semibold text-slate-700 mb-1">目标归因平台 (MMP)</label>
+                  <select v-model="suppForm.mmpPlatform" class="w-full border border-slate-300 rounded-lg p-2 bg-white font-semibold" @change="applyDefaultTemplateForMmp">
+                    <option value="APPSFLYER">AppsFlyer (AF)</option>
+                    <option value="ADJUST">Adjust</option>
+                    <option value="SINGULAR">Singular</option>
+                    <option value="BRANCH">Branch</option>
+                    <option value="CUSTOM">自定义宏模板</option>
+                  </select>
+                </div>
+                <div>
+                  <label class="block font-semibold text-slate-700 mb-1">归属渠道客 ID (Affiliate ID)</label>
+                  <input v-model="suppForm.affiliateId" type="text" class="w-full font-mono border border-slate-300 rounded-lg p-2" />
+                </div>
+                <div>
+                  <label class="block font-semibold text-slate-700 mb-1">设备系统过滤 (OS Filter)</label>
+                  <select v-model="suppForm.osFilter" class="w-full border border-slate-300 rounded-lg p-2 bg-white font-mono">
+                    <option value="ALL">ALL (全部系统)</option>
+                    <option value="ios">ios (仅 iOS / IDFA)</option>
+                    <option value="android">android (仅 Android / GADVID)</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div>
+                  <label class="block font-semibold text-slate-700 mb-1">关联 S3 存储桶配置</label>
+                  <select v-model="suppForm.storageConfigId" class="w-full border border-slate-300 rounded-lg p-2 bg-white">
+                    <option value="">默认存储桶 / 本地直读</option>
+                    <option v-for="cfg in s3Configs" :key="cfg.id" :value="cfg.id">
+                      {{ cfg.name }} ({{ cfg.bucketName }})
+                    </option>
+                  </select>
+                </div>
+                <div class="sm:col-span-2">
+                  <label class="block font-semibold text-slate-700 mb-1">存储桶 Object Key 或本地 Parquet 文件路径</label>
+                  <div class="flex gap-2">
+                    <input
+                      v-model="suppForm.objectKeyOrPath"
+                      type="text"
+                      placeholder="c:\path\to\file.snappy.parquet 或 s3://..."
+                      class="flex-1 font-mono border rounded-lg p-2"
+                      :class="!suppForm.objectKeyOrPath ? 'border-rose-400 bg-rose-50/30' : 'border-slate-300'"
+                    />
+                    <button
+                      type="button"
+                      :disabled="previewing || !suppForm.objectKeyOrPath"
+                      class="px-3 py-2 rounded-lg border border-indigo-200 bg-indigo-50 text-indigo-700 font-semibold hover:bg-indigo-100 whitespace-nowrap disabled:opacity-50"
+                      @click="previewParquet"
+                    >
+                      {{ previewing ? '解析中...' : '🔍 预览 Parquet 画像' }}
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Parquet 预览结果展示 -->
+              <div v-if="previewBatch" class="p-3 rounded-lg bg-slate-900 text-slate-100 space-y-2">
+                <div class="flex items-center justify-between text-[11px] font-mono text-indigo-300">
+                  <span>📊 Parquet 总行数: {{ previewBatch.totalRowsInFile?.toLocaleString() }} 行 · 字段: {{ (previewBatch.columns || []).join(', ') }}</span>
+                  <button type="button" class="text-slate-400 hover:text-white" @click="previewBatch = null">收起预览</button>
+                </div>
+                <div class="overflow-x-auto max-h-40">
+                  <table class="w-full text-left font-mono text-[10px]">
+                    <thead>
+                      <tr class="text-slate-400 border-b border-slate-700">
+                        <th class="py-1 pr-2">idfa / gadvid</th>
+                        <th class="py-1 pr-2">ip</th>
+                        <th class="py-1 pr-2">os</th>
+                        <th class="py-1 pr-2">ds_publisher_id</th>
+                        <th class="py-1 pr-2">ds_adx</th>
+                        <th class="py-1 pr-2">s / m</th>
+                      </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-800">
+                      <tr v-for="(p, idx) in previewBatch.profiles" :key="idx">
+                        <td class="py-1 pr-2 text-emerald-300">{{ p.idfa || p.gadvid || p.id }}</td>
+                        <td class="py-1 pr-2">{{ p.ip }}</td>
+                        <td class="py-1 pr-2">{{ p.os }}</td>
+                        <td class="py-1 pr-2 truncate max-w-[140px]">{{ p.dsPublisherId }}</td>
+                        <td class="py-1 pr-2 text-amber-300">{{ p.dsAdx }}</td>
+                        <td class="py-1 pr-2">{{ p.s }} ({{ p.m }})</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              <div>
+                <div class="flex items-center justify-between mb-1">
+                  <label class="font-semibold text-slate-700">归因追踪链接模板</label>
+                  <button
+                    v-if="!suppForm.trackingUrlTemplate.includes('{click_id}')"
+                    type="button"
+                    class="text-[11px] text-amber-600 hover:text-amber-700 font-bold"
+                    @click="suppForm.trackingUrlTemplate += (suppForm.trackingUrlTemplate.includes('?') ? '&' : '?') + 'click_id={click_id}'"
+                  >
+                    ➕ 一键补充 {click_id}
+                  </button>
+                </div>
+                <textarea
+                  v-model="suppForm.trackingUrlTemplate"
+                  rows="2"
+                  class="w-full font-mono border rounded-lg p-2 text-[11px]"
+                  :class="!suppForm.trackingUrlTemplate.startsWith('http') ? 'border-rose-400 bg-rose-50/20' : 'border-slate-300'"
+                ></textarea>
+                <p class="text-[10px] text-slate-400 mt-1 font-mono">
+                  可用变量: &#123;click_id&#125; &#123;idfa&#125; &#123;gadvid&#125; &#123;ip&#125; &#123;ua&#125; &#123;os&#125; &#123;ds_publisher_id&#125; &#123;ds_adx&#125; &#123;s&#125; &#123;m&#125; &#123;aff_id&#125; &#123;offer_id&#125;
+                </p>
+              </div>
+
+              <div class="grid grid-cols-1 sm:grid-cols-4 gap-3">
+                <div>
+                  <label class="block font-semibold text-slate-700 mb-1">单次补量点击数 (1~10000)</label>
+                  <input
+                    v-model.number="suppForm.batchSize"
+                    type="number"
+                    min="1"
+                    max="10000"
+                    class="w-full font-mono border rounded-lg p-2"
+                    :class="(suppForm.batchSize < 1 || suppForm.batchSize > 10000) ? 'border-rose-400 bg-rose-50' : 'border-slate-300'"
+                  />
+                </div>
+                <div>
+                  <label class="block font-semibold text-slate-700 mb-1">推送速率 (QPS, 1~1000)</label>
+                  <input
+                    v-model.number="suppForm.qpsLimit"
+                    type="number"
+                    min="1"
+                    max="1000"
+                    class="w-full font-mono border rounded-lg p-2"
+                    :class="(suppForm.qpsLimit < 1 || suppForm.qpsLimit > 1000) ? 'border-rose-400 bg-rose-50' : 'border-slate-300'"
+                  />
+                </div>
+                <div>
+                  <label class="block font-semibold text-slate-700 mb-1">Parquet 起始游标</label>
+                  <input
+                    v-model.number="suppForm.startOffset"
+                    type="number"
+                    min="0"
+                    class="w-full font-mono border rounded-lg p-2"
+                    :class="suppForm.startOffset < 0 ? 'border-rose-400 bg-rose-50' : 'border-slate-300'"
+                  />
+                </div>
+                <div>
+                  <label class="block font-semibold text-slate-700 mb-1">定时周期 (分钟, 1~1440)</label>
+                  <input
+                    v-model.number="suppForm.cronIntervalMinutes"
+                    type="number"
+                    min="1"
+                    max="1440"
+                    class="w-full font-mono border rounded-lg p-2"
+                    :class="(suppForm.cronIntervalMinutes < 1 || suppForm.cronIntervalMinutes > 1440) ? 'border-rose-400 bg-rose-50' : 'border-slate-300'"
+                  />
+                </div>
+              </div>
+
+              <label class="inline-flex items-center gap-2 pt-1 cursor-pointer">
+                <input v-model="suppForm.autoEnabled" type="checkbox" class="rounded border-slate-300 text-indigo-600" />
+                <span class="font-semibold text-slate-700">启用后台定时自动补量调度 (加持分布式锁与游标断点续传)</span>
+              </label>
             </div>
-            <div class="sm:col-span-2">
-              <label class="block font-semibold text-slate-700 mb-1">存储桶 Object Key 或本地 Parquet 文件路径</label>
-              <div class="flex gap-2">
-                <input
-                  v-model="suppForm.objectKeyOrPath"
-                  type="text"
-                  placeholder="c:\Users\Administrator\Downloads\part-00000-...snappy.parquet 或 s3://..."
-                  class="flex-1 font-mono border border-slate-300 rounded-lg p-2"
-                />
-                <button
-                  type="button"
-                  :disabled="previewing"
-                  class="px-3 py-2 rounded-lg border border-indigo-200 bg-indigo-50 text-indigo-700 font-semibold hover:bg-indigo-100 whitespace-nowrap"
-                  @click="previewParquet"
-                >
-                  {{ previewing ? '解析中...' : '🔍 预览 Parquet 画像' }}
-                </button>
+
+            <!-- Tab 2: 实时日志流水 (虚拟滚动 Virtual Scrolling) -->
+            <div v-show="activeDrawerTab === 'logs'" class="space-y-3">
+              <div class="flex items-center justify-between gap-3 text-xs">
+                <div class="flex items-center gap-2">
+                  <span class="font-bold text-slate-800">过滤状态:</span>
+                  <select v-model="logFilterStatus" class="border border-slate-300 rounded p-1 text-xs">
+                    <option value="ALL">全部状态</option>
+                    <option value="SUCCESS">仅成功 (HTTP 2xx/3xx)</option>
+                    <option value="FAILED">仅失败</option>
+                  </select>
+                </div>
+                <div class="flex items-center gap-2">
+                  <input
+                    v-model="logSearchQuery"
+                    type="text"
+                    placeholder="按 Click ID / IP 筛选..."
+                    class="border border-slate-300 rounded p-1 text-xs font-mono w-48"
+                  />
+                  <span class="text-slate-400 text-[11px] font-mono">共 {{ filteredLogs.length }} 条流水</span>
+                </div>
+              </div>
+
+              <!-- 虚拟滚动容器 (高度 480px, 每行 52px) -->
+              <div
+                ref="virtualScrollContainer"
+                class="border border-slate-200 rounded-xl bg-slate-50 overflow-y-auto relative"
+                style="height: 480px;"
+                @scroll="handleVirtualScroll"
+              >
+                <!-- 撑开高度的占位盒 -->
+                <div :style="{ height: `${filteredLogs.length * ROW_HEIGHT}px` }" class="w-full relative">
+                  <!-- 实际渲染的窗口切片 -->
+                  <div
+                    class="absolute left-0 right-0 top-0 space-y-1.5 p-2"
+                    :style="{ transform: `translateY(${virtualScrollStartIndex * ROW_HEIGHT}px)` }"
+                  >
+                    <div
+                      v-for="item in visibleLogsSlice"
+                      :key="item.id"
+                      class="bg-white rounded-lg border border-slate-200 p-2.5 shadow-sm text-xs font-mono flex items-center justify-between gap-3 hover:border-indigo-300 transition-colors"
+                      style="height: 46px;"
+                    >
+                      <div class="truncate flex items-center gap-2 min-w-0">
+                        <span
+                          class="px-1.5 py-0.5 rounded text-[10px] font-bold shrink-0"
+                          :class="item.success ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'"
+                        >
+                          {{ item.httpStatus }}
+                        </span>
+                        <span class="font-bold text-slate-800 truncate">{{ item.clickId }}</span>
+                        <span class="text-slate-400 text-[10px]">·</span>
+                        <span class="text-slate-600 text-[11px]">{{ item.ip }}</span>
+                        <span class="text-indigo-600 text-[10px] uppercase font-semibold">[{{ item.os }}]</span>
+                      </div>
+                      <div class="flex items-center gap-3 shrink-0 text-[11px]">
+                        <span class="text-slate-500 truncate max-w-[140px]" :title="item.dsPublisherId">Pub: {{ item.dsPublisherId || '-' }}</span>
+                        <span class="text-slate-400">{{ item.latencyMs }}ms</span>
+                        <span class="px-1.5 py-0.5 rounded text-[10px] bg-slate-100 text-slate-600 font-bold">{{ item.mmpPlatform }}</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
 
-          <!-- Parquet 预览结果展示 -->
-          <div v-if="previewBatch" class="p-3 rounded-lg bg-slate-900 text-slate-100 space-y-2">
-            <div class="flex items-center justify-between text-[11px] font-mono text-indigo-300">
-              <span>📊 Parquet 总行数: {{ previewBatch.totalRowsInFile.toLocaleString() }} 行 · 字段: {{ (previewBatch.columns || []).join(', ') }}</span>
-              <button type="button" class="text-slate-400 hover:text-white" @click="previewBatch = null">收起预览</button>
-            </div>
-            <div class="overflow-x-auto max-h-40">
-              <table class="w-full text-left font-mono text-[10px]">
-                <thead>
-                  <tr class="text-slate-400 border-b border-slate-700">
-                    <th class="py-1 pr-2">idfa / gadvid</th>
-                    <th class="py-1 pr-2">ip</th>
-                    <th class="py-1 pr-2">os</th>
-                    <th class="py-1 pr-2">ds_publisher_id</th>
-                    <th class="py-1 pr-2">ds_adx</th>
-                    <th class="py-1 pr-2">s / m</th>
-                  </tr>
-                </thead>
-                <tbody class="divide-y divide-slate-800">
-                  <tr v-for="(p, idx) in previewBatch.profiles" :key="idx">
-                    <td class="py-1 pr-2 text-emerald-300">{{ p.idfa || p.gadvid || p.id }}</td>
-                    <td class="py-1 pr-2">{{ p.ip }}</td>
-                    <td class="py-1 pr-2">{{ p.os }}</td>
-                    <td class="py-1 pr-2 truncate max-w-[140px]">{{ p.dsPublisherId }}</td>
-                    <td class="py-1 pr-2 text-amber-300">{{ p.dsAdx }}</td>
-                    <td class="py-1 pr-2">{{ p.s }} ({{ p.m }})</td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-          </div>
-
-          <div>
-            <label class="block font-semibold text-slate-700 mb-1">
-              归因追踪链接模板 (支持宏占位符与缺失参数自动补齐)
-            </label>
-            <textarea
-              v-model="suppForm.trackingUrlTemplate"
-              rows="2"
-              class="w-full font-mono border border-slate-300 rounded-lg p-2 text-[11px]"
-            ></textarea>
-            <p class="text-[10px] text-slate-400 mt-1 font-mono">
-              可用画像变量: &#123;click_id&#125; &#123;idfa&#125; &#123;gadvid&#125; &#123;ip&#125; &#123;ua&#125; &#123;os&#125; &#123;ds_publisher_id&#125; &#123;ds_adx&#125; &#123;s&#125; &#123;m&#125; &#123;aff_id&#125; &#123;offer_id&#125;
-            </p>
-          </div>
-
-          <div class="grid grid-cols-1 sm:grid-cols-4 gap-3">
-            <div>
-              <label class="block font-semibold text-slate-700 mb-1">单次补量点击数</label>
-              <input v-model.number="suppForm.batchSize" type="number" min="1" max="1000" class="w-full font-mono border border-slate-300 rounded-lg p-2" />
-            </div>
-            <div>
-              <label class="block font-semibold text-slate-700 mb-1">平滑速率限制 (QPS)</label>
-              <input v-model.number="suppForm.qpsLimit" type="number" min="1" max="500" class="w-full font-mono border border-slate-300 rounded-lg p-2" />
-            </div>
-            <div>
-              <label class="block font-semibold text-slate-700 mb-1">Parquet 起始行游标</label>
-              <input v-model.number="suppForm.startOffset" type="number" min="0" class="w-full font-mono border border-slate-300 rounded-lg p-2" />
-            </div>
-            <div>
-              <label class="block font-semibold text-slate-700 mb-1">定时周期 (分钟)</label>
-              <input v-model.number="suppForm.cronIntervalMinutes" type="number" min="1" max="1440" class="w-full font-mono border border-slate-300 rounded-lg p-2" />
-            </div>
-          </div>
-
-          <label class="inline-flex items-center gap-2 pt-1 cursor-pointer">
-            <input v-model="suppForm.autoEnabled" type="checkbox" class="rounded border-slate-300 text-indigo-600" />
-            <span class="font-semibold text-slate-700">启用后台定时自动补量调度 (按游标顺序循环读取存储桶 Parquet 画像)</span>
-          </label>
-        </div>
-
-        <div class="flex flex-wrap items-center justify-between gap-3 pt-4 border-t border-slate-100">
-          <button
-            type="button"
-            :disabled="savingRule"
-            class="px-4 py-2 text-xs font-semibold rounded-lg border border-indigo-300 bg-indigo-50 hover:bg-indigo-100 text-indigo-700"
-            @click="saveSupplementRule"
-          >
-            {{ savingRule ? '保存中...' : '💾 保存为补量规则' }}
-          </button>
-          <div class="flex items-center gap-2">
+          <!-- 抽屉底部操作条 -->
+          <div class="px-6 py-4 border-t border-slate-200 bg-slate-50 flex items-center justify-between">
             <button
               type="button"
-              class="px-4 py-2 text-xs font-semibold rounded-lg border border-slate-300 hover:bg-slate-50 text-slate-700"
-              @click="showSuppModal = false"
+              :disabled="savingRule || validationErrors.length > 0"
+              class="px-4 py-2 text-xs font-semibold rounded-lg border border-indigo-300 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 disabled:opacity-50"
+              @click="saveSupplementRule"
             >
-              取消
+              {{ savingRule ? '保存中...' : '💾 保存为定时补量规则' }}
             </button>
-            <button
-              type="button"
-              :disabled="executingSupp"
-              class="px-5 py-2 text-xs font-bold rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm"
-              @click="triggerSupplementNow"
-            >
-              {{ executingSupp ? '正在解析并推送...' : '⚡ 立即执行补量并推送归因平台' }}
-            </button>
+            <div class="flex items-center gap-3">
+              <button
+                type="button"
+                class="px-4 py-2 text-xs font-semibold rounded-lg border border-slate-300 hover:bg-slate-100 text-slate-700"
+                @click="showSuppDrawer = false"
+              >
+                关闭
+              </button>
+              <button
+                type="button"
+                :disabled="executingSupp || validationErrors.length > 0"
+                class="px-5 py-2 text-xs font-bold rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm disabled:opacity-50 flex items-center gap-1.5"
+                @click="triggerSupplementNow"
+              >
+                <span>⚡</span>
+                <span>{{ executingSupp ? '正在推送中...' : '立即执行补量' }}</span>
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -394,7 +484,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import CommonTable from '~/components/common/CommonTable.vue'
 import StatusTag from '~/components/common/StatusTag.vue'
 import CopyButton from '~/components/common/CopyButton.vue'
@@ -409,7 +499,8 @@ const s3Configs = ref<any[]>([])
 const supplementRules = ref<any[]>([])
 const supplementLogs = ref<any[]>([])
 
-const showSuppModal = ref(false)
+const showSuppDrawer = ref(false)
+const activeDrawerTab = ref<'config' | 'logs'>('config')
 const previewing = ref(false)
 const savingRule = ref(false)
 const executingSupp = ref(false)
@@ -432,8 +523,74 @@ const suppForm = ref({
   cronIntervalMinutes: 30
 })
 
+// 参数校验与实时反馈
+const validationErrors = computed(() => {
+  const errs: string[] = []
+  if (!suppForm.value.objectKeyOrPath || suppForm.value.objectKeyOrPath.trim() === '') {
+    errs.push('Parquet 存储桶文件路径不能为空')
+  }
+  if (!suppForm.value.trackingUrlTemplate || !suppForm.value.trackingUrlTemplate.startsWith('http')) {
+    errs.push('归因追踪链接模板必须以 http:// 或 https:// 开头')
+  }
+  if (!suppForm.value.trackingUrlTemplate.includes('{click_id}')) {
+    errs.push('归因追踪链接缺少 {click_id} 宏变量，MMP 平台将无法完成转化回传归因')
+  }
+  if (suppForm.value.batchSize < 1 || suppForm.value.batchSize > 10000) {
+    errs.push('单次补量点击数必须在 1 ~ 10,000 之间')
+  }
+  if (suppForm.value.qpsLimit < 1 || suppForm.value.qpsLimit > 1000) {
+    errs.push('QPS 速率限制必须在 1 ~ 1,000 之间')
+  }
+  if (suppForm.value.startOffset < 0) {
+    errs.push('Parquet 起始游标不能小于 0')
+  }
+  if (suppForm.value.cronIntervalMinutes < 1 || suppForm.value.cronIntervalMinutes > 1440) {
+    errs.push('定时调度周期必须在 1 ~ 1,440 分钟之间')
+  }
+  return errs
+})
+
+// 虚拟滚动与日志过滤相关
+const ROW_HEIGHT = 52
+const VISIBLE_COUNT = 12
+const BUFFER_COUNT = 4
+const logFilterStatus = ref('ALL')
+const logSearchQuery = ref('')
+const virtualScrollStartIndex = ref(0)
+const virtualScrollContainer = ref<HTMLElement | null>(null)
+
+const filteredLogs = computed(() => {
+  let list = supplementLogs.value || []
+  if (logFilterStatus.value === 'SUCCESS') {
+    list = list.filter((l: any) => l.success)
+  } else if (logFilterStatus.value === 'FAILED') {
+    list = list.filter((l: any) => !l.success)
+  }
+  const q = logSearchQuery.value.trim().toLowerCase()
+  if (q) {
+    list = list.filter((l: any) =>
+      (l.clickId && l.clickId.toLowerCase().includes(q)) ||
+      (l.ip && l.ip.includes(q)) ||
+      (l.dsPublisherId && l.dsPublisherId.toLowerCase().includes(q))
+    )
+  }
+  return list
+})
+
+const visibleLogsSlice = computed(() => {
+  const start = Math.max(0, virtualScrollStartIndex.value - BUFFER_COUNT)
+  const end = Math.min(filteredLogs.value.length, virtualScrollStartIndex.value + VISIBLE_COUNT + BUFFER_COUNT)
+  return filteredLogs.value.slice(start, end)
+})
+
+const handleVirtualScroll = (e: Event) => {
+  const target = e.target as HTMLElement
+  const scrollTop = target.scrollTop || 0
+  virtualScrollStartIndex.value = Math.floor(scrollTop / ROW_HEIGHT)
+}
+
 const trackingUrl = (offerId: string) =>
-  `${window.location.origin}/affiliate/click?offer_id=${offerId}&aff_id=AFF_ID`
+  `${typeof window !== 'undefined' ? window.location.origin : ''}/affiliate/click?offer_id=${offerId}&aff_id=AFF_ID`
 
 const columns = [
   { key: 'title', label: '推广计划 (Title / ID)' },
@@ -478,14 +635,15 @@ const loadSupplementRules = async () => {
 
 const loadSupplementLogs = async () => {
   try {
-    supplementLogs.value = await fetchApi<any[]>('/api/v1/affiliate/offers/supplement/logs?limit=50') || []
+    supplementLogs.value = await fetchApi<any[]>('/api/v1/affiliate/offers/supplement/logs?limit=500') || []
   } catch (e) {
     supplementLogs.value = []
   }
 }
 
-const openSupplementModal = (offer: any) => {
+const openSupplementDrawer = (offer: any) => {
   previewBatch.value = null
+  activeDrawerTab.value = 'config'
   const baseLanding = offer.landingPageUrl || `https://app.appsflyer.com/${offer.id}`
   suppForm.value = {
     offerId: offer.id,
@@ -503,7 +661,7 @@ const openSupplementModal = (offer: any) => {
     autoEnabled: true,
     cronIntervalMinutes: 30
   }
-  showSuppModal.value = true
+  showSuppDrawer.value = true
 }
 
 const applyDefaultTemplateForMmp = () => {
@@ -537,6 +695,7 @@ const previewParquet = async () => {
 }
 
 const saveSupplementRule = async () => {
+  if (validationErrors.value.length > 0) return
   savingRule.value = true
   try {
     await fetchApi('/api/v1/affiliate/offers/supplement/rules', {
@@ -567,6 +726,7 @@ const saveSupplementRule = async () => {
 }
 
 const triggerSupplementNow = async () => {
+  if (validationErrors.value.length > 0) return
   executingSupp.value = true
   try {
     const res = await fetchApi<any>('/api/v1/affiliate/offers/supplement/trigger', {
@@ -585,7 +745,7 @@ const triggerSupplementNow = async () => {
       }
     })
     showToast(`补量完成！已生成 ${res?.dispatchedCount || 0} 笔点击并推送至 ${res?.mmpPlatform}`, 'success')
-    showSuppModal.value = false
+    activeDrawerTab.value = 'logs'
     await Promise.all([loadSupplementRules(), loadSupplementLogs()])
   } catch (err: any) {
     showToast(`执行补量失败：${err.message || err}`, 'error')

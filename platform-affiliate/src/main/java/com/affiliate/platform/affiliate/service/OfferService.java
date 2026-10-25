@@ -12,6 +12,8 @@ import com.affiliate.platform.mapper.OfferMapper;
 import com.affiliate.platform.mapper.OfferTierPayoutMapper;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -30,6 +32,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  */
 @Service
 public class OfferService {
+    private static final Logger log = LoggerFactory.getLogger(OfferService.class);
     private final OfferMapper offerMapper;
     private final OfferGoalMapper goalMapper;
     private final OfferTierPayoutMapper tierMapper;
@@ -237,7 +240,8 @@ public class OfferService {
         OfferGoal.EventType type;
         try {
             type = OfferGoal.EventType.valueOf(e.getGoalType());
-        } catch (Exception ignored) {
+        } catch (Exception ex) {
+            log.debug("Unrecognized goal type '{}' for goal {}, defaulting to CUSTOM", e.getGoalType(), e.getId());
             type = OfferGoal.EventType.CUSTOM;
         }
         return new OfferGoal(e.getId(), e.getOfferId(), e.getGoalName(), type, e.getPayout(), e.getRevenue(), false, true, 30);
@@ -247,7 +251,8 @@ public class OfferService {
         AffiliatePartner.Tier tier = null;
         try {
             if (e.getTargetTier() != null) tier = AffiliatePartner.Tier.valueOf(e.getTargetTier());
-        } catch (Exception ignored) {
+        } catch (Exception ex) {
+            log.debug("Unrecognized target tier '{}': {}", e.getTargetTier(), ex.getMessage());
         }
         return new OfferTierPayout(e.getOfferId(), e.getAffiliateId(), tier, e.getCustomPayout(), e.getCustomRevenue());
     }

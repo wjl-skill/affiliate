@@ -10,6 +10,8 @@ import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Repository;
 
 import java.time.Instant;
@@ -26,6 +28,8 @@ import java.util.concurrent.atomic.AtomicLong;
 @Repository
 @ConditionalOnProperty(name = "app.infrastructure.database-enabled", havingValue = "true")
 public class PostgresCreativeRepository implements com.affiliate.platform.repository.Repository<Creative> {
+
+    private static final Logger log = LoggerFactory.getLogger(PostgresCreativeRepository.class);
 
     private final CreativeMapper mapper;
     private final ObjectMapper objectMapper;
@@ -126,7 +130,8 @@ public class PostgresCreativeRepository implements com.affiliate.platform.reposi
         if (e.getAuditStatus() != null) {
             try {
                 auditStatus = com.affiliate.platform.domain.Enums.AuditStatus.valueOf(e.getAuditStatus());
-            } catch (Exception ignored) {
+            } catch (Exception ex) {
+                log.debug("Unrecognized auditStatus '{}' on creative {}: {}", e.getAuditStatus(), e.getId(), ex.getMessage());
             }
         }
 
