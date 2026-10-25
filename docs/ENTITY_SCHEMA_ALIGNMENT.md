@@ -10,6 +10,9 @@
 - `OfferEntity` 增加 PostgreSQL `text[]` 和 `integer[]` 类型处理器，国家和设备定向可以持久化并正确回读。
 - `CdpUserTraitEntity.events7dCount` 显式映射到 `events_7d_count`。
 - V10 补充历史数据库缺失的 `dmp_segment_member`、发票周期和支付时间列；V1-V9 不被修改。
+- V20 新增 Offer 流量补量规则与审计日志表（`affiliate_offer_supplement_rule`, `affiliate_offer_supplement_log`）。
+- V21 核心高频业务索引加固调优。
+- V22 新增 PostgreSQL 按月范围分区表与冷数据归档表（`affiliate_click_session_partitioned`, `affiliate_offer_supplement_log_partitioned`, `affiliate_click_session_archive`, `affiliate_offer_supplement_log_archive`），配套 4 个 MyBatis-Plus 实体与 Mapper，保持 88 张表 100% 对齐。
 
 ## 持续审计
 

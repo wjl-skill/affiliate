@@ -1,9 +1,9 @@
 # Affiliate Platform 文档资产全景导航中枢 (Documentation Knowledge Hub)
 
-> **版本**：v0.2.0-PROD  
+> **版本**：v0.3.0-PROD  
 > **更新时间**：2026-10-25  
 > **适用范围**：工程全体开发、架构、算法、运维与业务运营人员  
-> **架构基线**：Java 21 + Spring Boot 3.4.3 (19 个 Maven 模块) + Nuxt 3 (Vue 3/TailwindCSS 23 页面) + PostgreSQL 16 (Flyway V1~V20, 84 张核心表与 84 个 MyBatis-Plus 实体 100% 对齐)
+> **架构基线**：Java 21 + Spring Boot 3.4.3 (19 个 Maven 模块) + Nuxt 3 (Vue 3/TailwindCSS 23 页面) + PostgreSQL 16 (Flyway V1~V22, 88 张核心表与 88 个 MyBatis-Plus 实体 100% 对齐) + ClickHouse 24+ OLAP + Kafka KRaft + Redisson 分布式锁
 
 ---
 
@@ -18,6 +18,7 @@ docs/
 │   ├── ARCHITECTURE.md                                              [系统总体架构与模块Seam设计]
 │   ├── CONTEXT.md (根目录)                                          [统一领域词汇与业务概念定义]
 │   ├── NEXT_GEN_UPGRADE_AND_IMPLEMENTATION_SPECIFICATION.md         [新一代进阶升级算法与功能实施规范]
+│   ├── EVOLUTION_ROADMAP_MILESTONES_IMPLEMENTATION_REPORT.md        [8周四大里程碑演进实施与验收总报告]
 │   └── PRODUCTION_MODULE_OPTIMIZATION_AND_HARDENING_DESIGN.md      [全模块深度优化与漏洞修复加固规范]
 ├── 2. 网盟营销与业务核心 (Affiliate Network & Tracking)
 │   ├── AFFILIATE_BUSINESS_REQUIREMENTS.md                           [网盟营销业务需求规格说明书 BRD]
@@ -38,7 +39,7 @@ docs/
 │       └── CREATIVE_AUTOMATION_BOUNDARY_AND_COMPLETENESS_AUDIT.md   [素材自动化完备性与边界审查报告]
 ├── 5. 数据基础设施与多模持久化 (Data, Storage & Schema)
 │   ├── DATABASE_MIGRATION_GUIDE.md                                  [数据库迁移演进与多级缓存指南]
-│   ├── ENTITY_SCHEMA_ALIGNMENT.md                                   [84张表实体结构对齐与审计规约]
+│   ├── ENTITY_SCHEMA_ALIGNMENT.md                                   [88张表实体结构对齐与审计规约]
 │   └── sql/                                                         [模块独立 DDL 脚本库]
 └── 6. 运维、前端与性能工程 (Operations, Frontend & Benchmark)
     ├── PRODUCTION_DEPLOYMENT_AND_OPERATIONS_GUIDE.md                [K8s 云原生编排与数据面/控制面运维]
@@ -58,6 +59,7 @@ docs/
 | **[`docs/ARCHITECTURE.md`](ARCHITECTURE.md)** | **系统总体分层架构**：19 个 Maven 模块的分层拓扑、依赖原则（`api -> 业务 -> common`）、RTB 纳秒级热路径、多租户上下文隔离与持久化模型总括。 | `platform-common`, `platform-api` |
 | **[`CONTEXT.md`](../CONTEXT.md)** | **全局领域驱动上下文词汇库**：严格界定 Tenant、Advertiser、Publisher、Affiliate、Campaign、Ad Slot、Click Session、Conversion、MMP、Cap 等术语，消除团队认知偏差。 | 全模块 |
 | **[`docs/NEXT_GEN_UPGRADE_AND_IMPLEMENTATION_SPECIFICATION.md`](NEXT_GEN_UPGRADE_AND_IMPLEMENTATION_SPECIFICATION.md)** | **下一代进阶功能实施规范**：LinUCB 上下文多臂老虎机分流算法、Apple SKAdNetwork 4.0 隐私归因解析、营销自治闭环 Agent、分层 OLAP 星型立方体与统一 AI 推理中枢落地规范。 | `platform-affiliate`, `platform-ai`, `platform-creative`, `platform-reporting` |
+| **[`docs/EVOLUTION_ROADMAP_MILESTONES_IMPLEMENTATION_REPORT.md`](EVOLUTION_ROADMAP_MILESTONES_IMPLEMENTATION_REPORT.md)** | **8 周四大里程碑演进总报告**：M1~M4 全部落地复盘，涵盖 129 处异常静默治理、Redisson 分布式锁、Kafka KRaft 消费、PG 范围分区与冷归档、12D LinUCB、4D 风控 Redis Pub/Sub、3 套 Grafana、ClickHouse OLAP、K8s 双面镜像分离。 | 全模块 |
 | **[`docs/PRODUCTION_MODULE_OPTIMIZATION_AND_HARDENING_DESIGN.md`](PRODUCTION_MODULE_OPTIMIZATION_AND_HARDENING_DESIGN.md)** | **全系统优化加固规范**：10 大核心逻辑漏洞修复、资金防超扣、RTB 阻尼出价、双模持久化一致性保障与生产容灾预案。 | `platform-budget`, `platform-billing`, `platform-dsp`, `platform-adx` |
 
 ---
@@ -101,8 +103,8 @@ docs/
 | 文档名称 | 核心内容与阅读指引 | 核心责任模块 |
 |---|---|---|
 | **[`docs/DATABASE_MIGRATION_GUIDE.md`](DATABASE_MIGRATION_GUIDE.md)** | **数据库接入与多级缓存实施指南**：三级缓存架构（Caffeine + Redis + PostgreSQL）、数据流向、双模回退机制与生产演进规范。 | `platform-infrastructure` |
-| **[`docs/ENTITY_SCHEMA_ALIGNMENT.md`](ENTITY_SCHEMA_ALIGNMENT.md)** | **实体与数据库结构对齐规约**：84 张表与 84 个 MyBatis-Plus 实体 100% 双向匹配规范与 `audit-entity-schema.mjs` 门禁说明。 | `platform-infrastructure` |
-| **`platform-infrastructure/src/main/resources/db/migration/`** | **Flyway 增量迁移脚本集 (V1~V20)**：涵盖基础租户/广告交易、网盟全链路、系统权限配置、素材自动化 12 表、进阶 SKAN/Agent 表、AI 中枢表与 V20 流量补量表。 | `platform-infrastructure` |
+| **[`docs/ENTITY_SCHEMA_ALIGNMENT.md`](ENTITY_SCHEMA_ALIGNMENT.md)** | **实体与数据库结构对齐规约**：88 张表与 88 个 MyBatis-Plus 实体 100% 双向匹配规范与 `audit-entity-schema.mjs` 门禁说明。 | `platform-infrastructure` |
+| **`platform-infrastructure/src/main/resources/db/migration/`** | **Flyway 增量迁移脚本集 (V1~V22)**：涵盖基础租户/广告交易、网盟全链路、系统权限配置、素材自动化 12 表、进阶 SKAN/Agent 表、AI 中枢表、V20 流量补量表、V21 索引调优与 V22 范围分区及冷归档表（88 张物理表）。 | `platform-infrastructure` |
 
 ---
 
