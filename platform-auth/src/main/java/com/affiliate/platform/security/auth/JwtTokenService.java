@@ -16,15 +16,17 @@ import org.springframework.stereotype.Service;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.time.Instant;
-import java.util.Date;
-import java.util.List;
-import java.util.Optional;
+import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 
 /**
  * 平台自签发 JWT 令牌服务 (HS256 / Nimbus JOSE)
  * <p>
- * 管理后台登录成功后签发访问令牌，载荷携带用户 ID、用户名、租户与角色集合；
- * 校验仅依赖本地共享密钥，无需外部 OAuth2 授权服务器 (issuer/JWKS)。
+ * 遵循阶段 0-2 认证安全规范：
+ * 1. 签发时注入高熵唯一 jti (JWT ID)，支持精准吊销与黑名单机制；
+ * 2. 载荷携带用户 ID、用户名、租户、角色集合与失效时间；
+ * 3. 校验时同步检查签名、有效期与主动吊销黑名单。
  */
 @Service
 public class JwtTokenService {
@@ -34,6 +36,9 @@ public class JwtTokenService {
     private final byte[] signingKey;
     private final long ttlSeconds;
     private final ObjectMapper objectMapper = new ObjectMapper();
+
+    // 内存态 JTI 吊销黑名单 (jti -> expiresAt)，支持分布式缓存扩展
+    private final ConcurrentMap<String, Instant> revokedJtiStore = new ConcurrentHashMap<>();
 
     public static final String DEFAULT_DEV_SECRET = "affiliate-platform-dev-jwt-secret-change-me-in-prod-0518";
 
@@ -48,7 +53,6 @@ public class JwtTokenService {
                 throw new IllegalStateException("【生产安全阻断】生产环境必须通过环境变量 APP_JWT_SECRET 提供高强度密钥（长度不得少于32位且严禁使用公开默认值）");
             }
         }
-        // HS256 要求 256bit 密钥：对任意长度配置口令做 SHA-256 归一化
         String effectiveSecret = (secret != null && !secret.isBlank()) ? secret : DEFAULT_DEV_SECRET;
         this.signingKey = sha256(effectiveSecret.getBytes(StandardCharsets.UTF_8));
         this.ttlSeconds = Math.max(1, ttlMinutes) * 60;
@@ -64,7 +68,9 @@ public class JwtTokenService {
 
     public String issue(UserAccount user) {
         Instant now = Instant.now();
+        String jti = UUID.randomUUID().toString().replace("-", "");
         JWTClaimsSet claims = new JWTClaimsSet.Builder()
+                .jwtID(jti)
                 .subject(user.username())
                 .claim("uid", user.id())
                 .claim("display_name", user.displayName())
@@ -89,9 +95,18 @@ public class JwtTokenService {
             SignedJWT jwt = SignedJWT.parse(token.trim());
             if (!jwt.verify(new MACVerifier(signingKey))) return Optional.empty();
             JWTClaimsSet claims = jwt.getJWTClaimsSet();
-            if (claims.getExpirationTime() == null || claims.getExpirationTime().toInstant().isBefore(Instant.now())) {
+            Instant expiresAt = claims.getExpirationTime() != null ? claims.getExpirationTime().toInstant() : null;
+            if (expiresAt == null || expiresAt.isBefore(Instant.now())) {
                 return Optional.empty();
             }
+
+            // 检查 JTI 是否在主动吊销黑名单中
+            String jti = claims.getJWTID();
+            if (jti != null && isJtiRevoked(jti)) {
+                log.debug("[JwtTokenService] Token 的 JTI '{}' 已被主动吊销，拒绝访问", jti);
+                return Optional.empty();
+            }
+
             List<String> roles = readRoles(claims.getClaim("roles"));
             return Optional.of(new TokenPrincipal(
                     (String) claims.getClaim("uid"),
@@ -99,11 +114,40 @@ public class JwtTokenService {
                     (String) claims.getClaim("display_name"),
                     (String) claims.getClaim("tenant_id"),
                     roles,
-                    claims.getExpirationTime().toInstant()
+                    expiresAt,
+                    jti
             ));
         } catch (Exception e) {
             log.debug("JWT parse/verify failed: {}", e.getMessage());
             return Optional.empty();
+        }
+    }
+
+    /**
+     * 将目标 Token 的 JTI 登记至主动吊销黑名单
+     */
+    public void revokeJti(String jti, Instant expiresAt) {
+        if (jti == null || jti.isBlank()) return;
+        Instant expiry = expiresAt != null ? expiresAt : Instant.now().plusSeconds(ttlSeconds);
+        revokedJtiStore.put(jti.trim(), expiry);
+        cleanupExpiredBlacklist();
+    }
+
+    public boolean isJtiRevoked(String jti) {
+        if (jti == null) return false;
+        Instant expiry = revokedJtiStore.get(jti);
+        if (expiry == null) return false;
+        if (expiry.isBefore(Instant.now())) {
+            revokedJtiStore.remove(jti);
+            return false;
+        }
+        return true;
+    }
+
+    private void cleanupExpiredBlacklist() {
+        if (revokedJtiStore.size() > 2000) {
+            Instant now = Instant.now();
+            revokedJtiStore.entrySet().removeIf(entry -> entry.getValue().isBefore(now));
         }
     }
 
@@ -136,6 +180,11 @@ public class JwtTokenService {
             String displayName,
             String tenantId,
             List<String> roles,
-            Instant expiresAt
-    ) {}
+            Instant expiresAt,
+            String jti
+    ) {
+        public TokenPrincipal(String userId, String username, String displayName, String tenantId, List<String> roles, Instant expiresAt) {
+            this(userId, username, displayName, tenantId, roles, expiresAt, null);
+        }
+    }
 }

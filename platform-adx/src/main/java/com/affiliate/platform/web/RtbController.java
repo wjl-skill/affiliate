@@ -6,6 +6,7 @@ import com.affiliate.platform.event.EventPublisher;
 import com.affiliate.platform.rtb.HmacTokenService;
 import com.affiliate.platform.rtb.OpenRtb;
 import com.affiliate.platform.rtb.OpenRtbAuctionService;
+import com.affiliate.platform.security.PublicEndpoint;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;
 import org.springframework.http.ResponseEntity;
@@ -25,6 +26,7 @@ import java.util.Map;
  * 4. GET /rtb/click - 点击跳转追踪（发布点击事件并 302 重定向至落地页）。
  */
 @RestController
+@PublicEndpoint(reason = "OpenRTB 2.5 real-time bidding data-plane")
 public class RtbController {
 
     // RTB 拍卖核心引擎

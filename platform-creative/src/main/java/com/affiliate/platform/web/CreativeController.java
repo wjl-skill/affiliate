@@ -5,6 +5,7 @@ import com.affiliate.platform.service.CreativeService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotNull;
 import org.springframework.http.HttpStatus;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -13,6 +14,7 @@ import java.util.List;
  * 广告素材物料管理 REST 控制器 (Creative REST Controller)
  * <p>
  * 提供广告主/代理商素材的注册上传、全量物料列表查询、单个物料详情获取以及投放上下线控制。
+ * 全面集成 Spring Security 方法级细粒度权限管控 (@PreAuthorize)。
  */
 @RestController
 @RequestMapping("/api/v1/creatives")
@@ -30,6 +32,7 @@ public class CreativeController {
      * GET /api/v1/creatives
      */
     @GetMapping
+    @PreAuthorize("@perm.has('creative:read')")
     public List<Creative> list() {
         return service.list();
     }
@@ -40,6 +43,7 @@ public class CreativeController {
      */
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
+    @PreAuthorize("@perm.has('creative:write')")
     public Creative create(@Valid @RequestBody Creative input) {
         return service.create(input);
     }
@@ -49,6 +53,7 @@ public class CreativeController {
      * GET /api/v1/creatives/{id}
      */
     @GetMapping("/{id}")
+    @PreAuthorize("@perm.has('creative:read')")
     public Creative get(@PathVariable String id) {
         return service.get(id);
     }
@@ -58,6 +63,7 @@ public class CreativeController {
      * POST /api/v1/creatives/{id}/active
      */
     @PostMapping("/{id}/active")
+    @PreAuthorize("@perm.has('creative:write')")
     public Creative active(@PathVariable String id, @Valid @RequestBody ActiveRequest request) {
         return service.setActive(id, request.active());
     }

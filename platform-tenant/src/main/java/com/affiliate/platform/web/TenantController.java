@@ -5,6 +5,7 @@ import com.affiliate.platform.tenant.TenantService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotNull;
 import org.springframework.http.HttpStatus;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -13,6 +14,7 @@ import java.util.List;
  * 多租户管理 REST 控制器 (Tenant REST Controller)
  * <p>
  * 提供租户的创建、查询与状态启停等 RESTful 接口。
+ * 全面集成 Spring Security 方法级细粒度权限管控 (@PreAuthorize)。
  */
 @RestController
 @RequestMapping("/api/v1/tenants")
@@ -30,6 +32,7 @@ public class TenantController {
      * GET /api/v1/tenants
      */
     @GetMapping
+    @PreAuthorize("@perm.has('tenant:read')")
     public List<Tenant> list() {
         return service.list();
     }
@@ -40,6 +43,7 @@ public class TenantController {
      */
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
+    @PreAuthorize("@perm.has('tenant:write')")
     public Tenant create(@Valid @RequestBody Tenant input) {
         return service.create(input);
     }
@@ -49,6 +53,7 @@ public class TenantController {
      * POST /api/v1/tenants/{id}/active
      */
     @PostMapping("/{id}/active")
+    @PreAuthorize("@perm.has('tenant:write')")
     public Tenant active(@PathVariable String id, @Valid @RequestBody ActiveRequest request) {
         return service.setActive(id, request.active());
     }

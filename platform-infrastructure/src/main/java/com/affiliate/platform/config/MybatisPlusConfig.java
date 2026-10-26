@@ -11,6 +11,9 @@ import com.baomidou.mybatisplus.extension.plugins.inner.TenantLineInnerIntercept
 import net.sf.jsqlparser.expression.Expression;
 import net.sf.jsqlparser.expression.StringValue;
 import org.mybatis.spring.annotation.MapperScan;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -20,61 +23,38 @@ import java.util.Set;
 /**
  * MyBatis-Plus 核心自动装配与插件配置类 (MyBatis-Plus Configuration for PostgreSQL)
  * <p>
- * 1. 扫描 `com.affiliate.platform.mapper` 包下所有继承自 `BaseMapper` 的 Mapper 接口；
- * 2. 装配 TenantLineInnerInterceptor 实现全系统 SQL 级别的强租户隔离防御；
- * 3. 装配 PostgreSQL 数据库方言的分页拦截器（PaginationInnerInterceptor）与乐观锁拦截器；
- * 4. 装配防全表更新与删除拦截器（BlockAttackInnerInterceptor），防止误全量更新生产数据。
+ * 1. 扫描 `com.affiliate.platform.mapper` 包下所有继承自 `BaseMapper` 的 Mapper 接口。
+ * 2. 装配 TenantLineInnerInterceptor 实现全系统 SQL 级别的强租户隔离防御：
+ *    采用“全表默认隔离 + 全局公用表豁免 (GLOBAL_TABLES)”架构规范。
+ * 3. 严格租户防护模式 (app.tenant.strict-mode)：生产环境杜绝静默回退 "public"，缺失上下文即时阻断。
+ * 4. 装配 PostgreSQL 物理分页拦截器、并发乐观锁与防全表误操作拦截器。
  */
 @Configuration
 @MapperScan("com.affiliate.platform.mapper")
 @ConditionalOnProperty(name = "app.infrastructure.database-enabled", havingValue = "true", matchIfMissing = true)
 public class MybatisPlusConfig {
 
-    private static final Set<String> TENANT_TABLES = Set.of(
-            "affiliate_partner",
-            "affiliate_offer",
-            "affiliate_smart_link",
-            "affiliate_click_session",
-            "affiliate_conversion",
-            "affiliate_invoice",
-            "affiliate_sub_id_stats",
-            "affiliate_offer_goal",
-            "affiliate_offer_tier_payout",
-            "affiliate_skan_postback",
-            "affiliate_antifraud_blacklist",
-            "affiliate_antifraud_audit_log",
-            "billing_entry",
-            "billing_payout_batch",
-            "billing_payout_item",
-            "campaign",
-            "campaign_budget",
-            "creative",
-            "ad_slot",
-            "auction",
-            "partner_connection",
-            "budget_reservation",
-            "dsp_ad_group",
-            "dsp_bid_strategy",
-            "dsp_dynamic_creative_template",
-            "adx_deal",
-            "adx_publisher_app",
-            "adx_supply_endpoint",
-            "adx_consent_audit_log",
-            "attribution_touchpoint",
-            "conversion_attribution_result",
-            "cdp_profile",
-            "cdp_customer_event",
-            "cdp_identity_graph",
-            "cdp_user_trait_state",
-            "dmp_segment",
-            "dmp_segment_member",
-            "report_daily",
-            "report_cohort_acquisition",
-            "report_cohort_activity",
-            "wallet_account",
-            "api_key",
-            "audit_event"
+    private static final Logger log = LoggerFactory.getLogger(MybatisPlusConfig.class);
+
+    /**
+     * 全局公用元数据表白名单（豁免 WHERE tenant_id = ? 自动注入）
+     */
+    private static final Set<String> GLOBAL_TABLES = Set.of(
+            "flyway_schema_history",
+            "sys_menu",
+            "sys_role",
+            "sys_permission",
+            "sys_role_menu",
+            "sys_user_role",
+            "sys_config",
+            "ai_model_config",
+            "ai_prompt_template",
+            "tenant",
+            "tenant_quota"
     );
+
+    @Value("${app.tenant.strict-mode:false}")
+    private boolean strictMode;
 
     /**
      * 注册 MyBatis-Plus 综合拦截器链（支持多租户行级隔离、PostgreSQL 物理分页、并发乐观锁与防全表操作）
@@ -85,12 +65,22 @@ public class MybatisPlusConfig {
     public MybatisPlusInterceptor mybatisPlusInterceptor() {
         MybatisPlusInterceptor interceptor = new MybatisPlusInterceptor();
 
-        // 1. 多租户行级隔离拦截器 (强制在 SQL 注入 WHERE tenant_id = ?)
+        // 1. 多租户行级隔离拦截器 (强制对业务表 SQL 注入 WHERE tenant_id = ?)
         interceptor.addInnerInterceptor(new TenantLineInnerInterceptor(new TenantLineHandler() {
             @Override
             public Expression getTenantId() {
                 String tenant = TenantContext.get();
-                return new StringValue(tenant != null && !tenant.isBlank() ? tenant : "public");
+                if (tenant != null && !tenant.isBlank()) {
+                    return new StringValue(tenant.trim());
+                }
+                if (TenantContext.isSystemExecution()) {
+                    return new StringValue("system");
+                }
+                if (strictMode) {
+                    throw new IllegalStateException("[CRITICAL SECURITY] 当前操作多租户业务表缺失 TenantContext，严格安全模式下禁止默认回退！");
+                }
+                log.warn("[TenantLineHandler] 当前操作未绑定 TenantContext，非严格模式下已降级回退至 'public'");
+                return new StringValue("public");
             }
 
             @Override
@@ -103,9 +93,12 @@ public class MybatisPlusConfig {
                 if (tableName == null) {
                     return true;
                 }
+                if (TenantContext.isSystemExecution()) {
+                    return true;
+                }
                 String lower = tableName.toLowerCase();
-                // 仅对明确含有 tenant_id 的核心业务表应用行级隔离
-                return !TENANT_TABLES.contains(lower);
+                // 仅对明确的全局配置和元数据表进行豁免，其余业务数据表默认 100% 施加隔离
+                return GLOBAL_TABLES.contains(lower);
             }
         }));
 

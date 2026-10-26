@@ -32,8 +32,8 @@ spring:
       connection-test-query: SELECT 1
 
   flyway:
-    # 生产启动时自动执行 SQL 增量版本迁移 (V1, V2...)
-    enabled: ${FLYWAY_ENABLED:false}
+    # 生产启动时自动执行 SQL 增量版本迁移 (V1, V2...)，或由专用 K8s Migration Job 统一触发
+    enabled: ${FLYWAY_ENABLED:true}
 
   data:
     redis:
@@ -64,7 +64,8 @@ spring:
       key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
       value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
       properties:
-        spring.json.trusted.packages: "*"
+        # 收敛反序列化白名单，严格杜绝通配符反序列化安全漏洞
+        spring.json.trusted.packages: "com.affiliate.platform.*,java.util.*,java.lang.*"
     listener:
       ack-mode: batch
       concurrency: 3
@@ -87,10 +88,17 @@ mybatis-plus:
     jdbc-type-for-null: 'null'
 
 app:
+  tenant:
+    # 生产模式开启严格租户模式，缺失上下文直接阻断，杜绝回退 public
+    strict-mode: true
   security:
     # 生产模式强制开启 JWT 鉴权与租户上下文防篡改校验，强制由环境变量注入高强度密钥
     enabled: true
     jwt-secret: ${APP_JWT_SECRET}
+    # 生产模式强制要求 S2S 转化回传鉴权与时间戳防重放
+    postback-auth-required: ${POSTBACK_AUTH_REQUIRED:true}
+    postback-secret: ${POSTBACK_HMAC_SECRET:}
+    postback-ip-whitelist: ${POSTBACK_IP_WHITELIST:}
   infrastructure:
     # 启用真实 PostgreSQL 持久化仓储
     database-enabled: true
@@ -107,4 +115,3 @@ app:
     # 生产物理挂载路径 (支持通过环境变量注入或宿主机挂载)
     bin-path: ${IP2LOCATION_BIN_PATH:/opt/data/geo/IP2LOCATION-LITE-DB5.IPV6.BIN}
     cache-mode: ${IP2LOCATION_CACHE_MODE:MEMORY_MAPPED}
-

@@ -3,6 +3,7 @@ package com.affiliate.platform.affiliate.web;
 import com.affiliate.platform.affiliate.domain.Conversion;
 import com.affiliate.platform.affiliate.service.S2sPostbackService;
 import com.affiliate.platform.affiliate.service.SubIdAnalyticsService;
+import com.affiliate.platform.security.PublicEndpoint;
 import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -24,12 +25,14 @@ import java.util.Set;
  * 广告主 S2S 服务端转化回传接收控制器 (Advertiser S2S Postback Controller)
  */
 @RestController
+@PublicEndpoint(reason = "Public advertiser S2S conversion postback with HMAC verification")
 public class S2sPostbackController {
 
     private static final Logger log = LoggerFactory.getLogger(S2sPostbackController.class);
 
     private final S2sPostbackService postbackService;
     private final SubIdAnalyticsService analyticsService;
+    private final com.affiliate.platform.metrics.SloMetricsCollector metricsCollector;
 
     @Value("${app.security.postback-auth-required:false}")
     private boolean authRequired;
@@ -37,17 +40,30 @@ public class S2sPostbackController {
     @Value("${app.security.postback-secret:affiliate-postback-hmac-secret-default}")
     private String postbackSecret;
 
+    @Value("${app.security.postback-ip-whitelist:}")
+    private String ipWhitelistConfig;
+
     // 受信任的预置广告主 API Key 白名单 (亦支持由数据库/缓存动态扩展)
     private static final Set<String> VALID_API_KEYS = Set.of(
             "adv-key-default", "test_api_key", "prod-advertiser-key-888"
     );
 
+    @org.springframework.beans.factory.annotation.Autowired
+    public S2sPostbackController(
+            S2sPostbackService postbackService,
+            SubIdAnalyticsService analyticsService,
+            @org.springframework.beans.factory.annotation.Autowired(required = false) com.affiliate.platform.metrics.SloMetricsCollector metricsCollector
+    ) {
+        this.postbackService = postbackService;
+        this.analyticsService = analyticsService;
+        this.metricsCollector = metricsCollector;
+    }
+
     public S2sPostbackController(
             S2sPostbackService postbackService,
             SubIdAnalyticsService analyticsService
     ) {
-        this.postbackService = postbackService;
-        this.analyticsService = analyticsService;
+        this(postbackService, analyticsService, null);
     }
 
     @GetMapping("/affiliate/postback")
@@ -57,7 +73,18 @@ public class S2sPostbackController {
             @RequestParam(name = "sale_amount", required = false, defaultValue = "0.00") BigDecimal saleAmount,
             HttpServletRequest request
     ) {
+        String clientIp = resolveClientIp(request);
+        if (!isIpWhitelisted(clientIp)) {
+            recordMetric("IP_FORBIDDEN");
+            log.warn("Postback rejected: client IP {} not in whitelist [{}]", clientIp, ipWhitelistConfig);
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(Map.of(
+                    "status", "FORBIDDEN",
+                    "message", "广告主 IP 未在白名单授权列表中"
+            ));
+        }
+
         if (!authenticateAdvertiser(request, clickId, txId)) {
+            recordMetric("UNAUTHORIZED");
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(Map.of(
                     "status", "UNAUTHORIZED",
                     "message", "广告主身份鉴权失败：缺少有效 API Key 或签名已过期/不匹配"
@@ -73,13 +100,65 @@ public class S2sPostbackController {
             @RequestParam(name = "sale_amount", required = false, defaultValue = "0.00") BigDecimal saleAmount,
             HttpServletRequest request
     ) {
+        String clientIp = resolveClientIp(request);
+        if (!isIpWhitelisted(clientIp)) {
+            recordMetric("IP_FORBIDDEN");
+            log.warn("Postback rejected: client IP {} not in whitelist [{}]", clientIp, ipWhitelistConfig);
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(Map.of(
+                    "status", "FORBIDDEN",
+                    "message", "广告主 IP 未在白名单授权列表中"
+            ));
+        }
+
         if (!authenticateAdvertiser(request, clickId, txId)) {
+            recordMetric("UNAUTHORIZED");
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(Map.of(
                     "status", "UNAUTHORIZED",
                     "message", "广告主身份鉴权失败：缺少有效 API Key 或签名已过期/不匹配"
             ));
         }
         return process(clickId, txId, saleAmount);
+    }
+
+    private String resolveClientIp(HttpServletRequest request) {
+        if (request == null) {
+            return "127.0.0.1";
+        }
+        String[] headers = {
+                "CF-Connecting-IP",
+                "X-Forwarded-For",
+                "X-Real-IP",
+                "Proxy-Client-IP",
+                "WL-Proxy-Client-IP",
+                "HTTP_CLIENT_IP",
+                "HTTP_X_FORWARDED_FOR"
+        };
+        for (String header : headers) {
+            String ip = request.getHeader(header);
+            if (ip != null && !ip.isBlank() && !"unknown".equalsIgnoreCase(ip.trim())) {
+                if (ip.contains(",")) {
+                    ip = ip.split(",")[0].trim();
+                }
+                return ip;
+            }
+        }
+        return request.getRemoteAddr() != null ? request.getRemoteAddr() : "127.0.0.1";
+    }
+
+    private boolean isIpWhitelisted(String clientIp) {
+        if (ipWhitelistConfig == null || ipWhitelistConfig.isBlank()) {
+            return true;
+        }
+        for (String allowed : ipWhitelistConfig.split(",")) {
+            String trimmed = allowed.trim();
+            if (trimmed.equals("*") || trimmed.equalsIgnoreCase(clientIp)) {
+                return true;
+            }
+            if (trimmed.endsWith(".*") && clientIp.startsWith(trimmed.substring(0, trimmed.length() - 1))) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
@@ -167,6 +246,14 @@ public class S2sPostbackController {
                 "rejection_reason", conversion.rejectionReason() == null ? "" : conversion.rejectionReason()
         );
 
+        recordMetric(conversion.status().name());
         return ResponseEntity.ok(response);
+    }
+
+    private void recordMetric(String status) {
+        if (metricsCollector != null) {
+            String tenant = com.affiliate.platform.tenant.TenantContext.get();
+            metricsCollector.recordS2sPostback(tenant != null ? tenant : "default", "CONVERSION", status);
+        }
     }
 }

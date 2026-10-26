@@ -1,5 +1,6 @@
 package com.affiliate.platform.security.auth;
 
+import com.affiliate.platform.security.RbacService;
 import com.affiliate.platform.tenant.TenantContext;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
@@ -11,20 +12,28 @@ import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 
 /**
  * Bearer JWT 认证过滤器 (Jwt Authentication Filter)
  * <p>
- * 解析 Authorization: Bearer 令牌，验签与有效期通过后写入 SecurityContext 主体与角色权限；
+ * 解析 Authorization: Bearer 令牌，验签与有效期通过后写入 SecurityContext 主体与角色及原子权限；
  * 未携带或非法令牌不直接拒绝，由安全过滤链的授权规则统一返回 401。
  */
 public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
     private final JwtTokenService tokenService;
+    private final RbacService rbacService;
 
     public JwtAuthenticationFilter(JwtTokenService tokenService) {
+        this(tokenService, null);
+    }
+
+    public JwtAuthenticationFilter(JwtTokenService tokenService, RbacService rbacService) {
         this.tokenService = tokenService;
+        this.rbacService = rbacService;
     }
 
     @Override
@@ -34,9 +43,21 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         if (header != null && header.regionMatches(true, 0, "Bearer ", 0, 7)
                 && SecurityContextHolder.getContext().getAuthentication() == null) {
             tokenService.parse(header.substring(7)).ifPresent(principal -> {
-                List<SimpleGrantedAuthority> authorities = principal.roles().stream()
-                        .map(role -> new SimpleGrantedAuthority("ROLE_" + role))
-                        .toList();
+                List<SimpleGrantedAuthority> authorities = new ArrayList<>();
+                for (String roleStr : principal.roles()) {
+                    authorities.add(new SimpleGrantedAuthority("ROLE_" + roleStr));
+                    if (rbacService != null) {
+                        try {
+                            RbacService.Role role = RbacService.Role.valueOf(roleStr.toUpperCase());
+                            Set<String> perms = rbacService.getPermissionsForRole(role);
+                            for (String p : perms) {
+                                authorities.add(new SimpleGrantedAuthority(p));
+                            }
+                        } catch (IllegalArgumentException ignored) {
+                        }
+                    }
+                }
+
                 UsernamePasswordAuthenticationToken auth =
                         new UsernamePasswordAuthenticationToken(principal, null, authorities);
                 SecurityContextHolder.getContext().setAuthentication(auth);

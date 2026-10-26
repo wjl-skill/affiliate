@@ -6,6 +6,7 @@ import com.affiliate.platform.reporting.ReportService;
 import com.affiliate.platform.reporting.olap.OlapReportingEngine;
 import com.affiliate.platform.tenant.TenantContext;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
 import java.math.BigDecimal;
@@ -17,6 +18,7 @@ import java.util.Map;
  * 广告报表多维统计 REST 控制器 (Reporting REST Controller)
  * <p>
  * 提供按租户隔离的日期范围多维报表检索、多维动态透视下钻及 Cohort 留存衰减分析端点。
+ * 全面集成 Spring Security 方法级细粒度权限管控 (@PreAuthorize)。
  */
 @RestController
 @RequestMapping("/api/v1/reports")
@@ -48,6 +50,7 @@ public class ReportController {
      * GET /api/v1/reports/daily?from=2026-08-01&to=2026-09-02
      */
     @GetMapping("/daily")
+    @PreAuthorize("@perm.has('report:read')")
     public List<ReportService.DailyReport> daily(@RequestParam LocalDate from, @RequestParam LocalDate to) {
         return service.list(TenantContext.required(), from, to);
     }
@@ -57,6 +60,7 @@ public class ReportController {
      * POST /api/v1/reports/pivot
      */
     @PostMapping("/pivot")
+    @PreAuthorize("@perm.has('report:read')")
     public List<PivotAggregationEngine.PivotRow> pivot(@RequestBody PivotRequest req) {
         return pivotEngine.aggregate(
                 req.records(),
@@ -68,14 +72,11 @@ public class ReportController {
     }
 
     /**
-     * 留存率与 LTV 衰减 Cohort 分析
-     * GET /api/v1/reports/cohort?from=2026-08-01&to=2026-09-02
-     */
-    /**
      * 双引擎 OLAP 高性能多维聚合查询
      * GET /api/v1/reports/olap?from=2026-08-01&to=2026-09-02&groupBy=offerId
      */
     @GetMapping("/olap")
+    @PreAuthorize("@perm.has('report:read')")
     public List<OlapReportingEngine.OlapAggregationRow> olap(
             @RequestParam LocalDate from,
             @RequestParam LocalDate to,
@@ -86,7 +87,12 @@ public class ReportController {
         return engine.queryAggregation(tenant, from, to, groupBy);
     }
 
+    /**
+     * 留存率与 LTV 衰减 Cohort 分析
+     * GET /api/v1/reports/cohort?from=2026-08-01&to=2026-09-02
+     */
     @GetMapping("/cohort")
+    @PreAuthorize("@perm.has('report:read')")
     public CohortAnalysisService.CohortMatrix cohort(
             @RequestParam(required = false) LocalDate from,
             @RequestParam(required = false) LocalDate to
@@ -99,6 +105,7 @@ public class ReportController {
      * GET /api/v1/reports/ai-insights?from=2026-08-01&to=2026-09-02
      */
     @GetMapping("/ai-insights")
+    @PreAuthorize("@perm.has('report:read')")
     public com.affiliate.platform.reporting.AiReportInsightService.ExecutiveInsightReport aiInsights(
             @RequestParam(required = false) LocalDate from,
             @RequestParam(required = false) LocalDate to

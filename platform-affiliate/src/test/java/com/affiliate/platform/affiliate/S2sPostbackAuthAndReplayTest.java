@@ -173,4 +173,54 @@ class S2sPostbackAuthAndReplayTest {
         assertEquals(HttpStatus.OK, validRes.getStatusCode());
         assertEquals("PENDING", validRes.getBody().get("status"));
     }
+
+    @Test
+    void postbackIpWhitelistProtection() {
+        ReflectionTestUtils.setField(controller, "ipWhitelistConfig", "203.0.113.10,198.51.100.*");
+
+        // 1. IP 不在白名单中：直接 403 拦截
+        MockHttpServletRequest blockedReq = new MockHttpServletRequest();
+        blockedReq.setRemoteAddr("192.0.2.1");
+        blockedReq.addHeader("X-API-Key", "adv-key-default");
+
+        ResponseEntity<Map<String, Object>> blockedRes = controller.handleGetPostback(
+                "c_ip_test", "tx_ip_1", BigDecimal.ZERO, blockedReq
+        );
+        assertEquals(HttpStatus.FORBIDDEN, blockedRes.getStatusCode());
+        assertEquals("FORBIDDEN", blockedRes.getBody().get("status"));
+
+        // 2. IP 在通配白名单中 (如 198.51.100.88)：允许通过 IP 检查并继续处理
+        MockHttpServletRequest allowedReq = new MockHttpServletRequest();
+        allowedReq.setRemoteAddr("198.51.100.88");
+        allowedReq.addHeader("X-API-Key", "adv-key-default");
+
+        Offer offer = new Offer(
+                "off-ip-1", "tenant-1", "adv-ip", "IP Offer",
+                "https://example.com?click_id={click_id}", Offer.PayoutType.CPA,
+                new BigDecimal("5.00"), new BigDecimal("10.00"),
+                Offer.Status.ACTIVE, 100, new BigDecimal("1000.00"),
+                null, Set.of("US"), Set.of(1), null, Instant.now()
+        );
+        offerService.save(offer);
+        ClickTrackerService.ClickTrackingResult click = clickTracker.trackClick(
+                offer, "aff-1", "sub1", null, null, null, null,
+                "192.168.1.100", "Mozilla/5.0", "US", 1
+        );
+        com.affiliate.platform.affiliate.domain.ClickSession validSession = new com.affiliate.platform.affiliate.domain.ClickSession(
+                click.clickId(), "tenant-1", offer.id(), "aff-1",
+                "sub1", null, null, null, null,
+                "192.168.1.100", "Mozilla/5.0", "US", 1,
+                Instant.now().minusSeconds(10), Instant.now().plus(java.time.Duration.ofDays(30))
+        );
+        @SuppressWarnings("unchecked")
+        java.util.concurrent.ConcurrentMap<String, com.affiliate.platform.affiliate.domain.ClickSession> store =
+                (java.util.concurrent.ConcurrentMap<String, com.affiliate.platform.affiliate.domain.ClickSession>) ReflectionTestUtils.getField(clickTracker, "sessionStore");
+        store.put(click.clickId(), validSession);
+
+        ResponseEntity<Map<String, Object>> allowedRes = controller.handleGetPostback(
+                click.clickId(), "tx_ip_2", BigDecimal.ZERO, allowedReq
+        );
+        assertEquals(HttpStatus.OK, allowedRes.getStatusCode());
+        assertEquals("PENDING", allowedRes.getBody().get("status"));
+    }
 }

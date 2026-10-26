@@ -16,7 +16,10 @@ public class EventOutboxEntity {
     private Instant occurredAt;
     private Instant publishedAt;
     private Integer attempts;
+    private String lastError;
+
     public EventOutboxEntity() {}
+
     public UUID getId() { return id; }
     public void setId(UUID id) { this.id = id; }
     public String getTenantId() { return tenantId; }
@@ -33,4 +36,6 @@ public class EventOutboxEntity {
     public void setPublishedAt(Instant publishedAt) { this.publishedAt = publishedAt; }
     public Integer getAttempts() { return attempts; }
     public void setAttempts(Integer attempts) { this.attempts = attempts; }
+    public String getLastError() { return lastError; }
+    public void setLastError(String lastError) { this.lastError = lastError; }
 }

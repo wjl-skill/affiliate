@@ -3,9 +3,11 @@ package com.affiliate.platform.affiliate.web;
 import com.affiliate.platform.affiliate.domain.SkanAttributionResult;
 import com.affiliate.platform.affiliate.domain.SkanPostbackPayload;
 import com.affiliate.platform.affiliate.service.SkanAttributionEngine;
+import com.affiliate.platform.security.PublicEndpoint;
 import com.affiliate.platform.tenant.TenantContext;
 import jakarta.validation.Valid;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -30,6 +32,7 @@ public class SkanPostbackController {
      * 接收 Apple 官方规范的 S2S 归因回传
      */
     @PostMapping("/postback")
+    @PublicEndpoint(reason = "Public Apple SKAdNetwork S2S postback")
     public ResponseEntity<Map<String, Object>> receiveSkanPostback(
             @RequestHeader(value = "X-Tenant-ID", required = false) String tenantHeader,
             @Valid @RequestBody SkanPostbackPayload payload
@@ -54,6 +57,7 @@ public class SkanPostbackController {
      * 查询指定广告网络名下的 SKAN 归因记录
      */
     @GetMapping("/reports")
+    @PreAuthorize("@perm.has('report:read')")
     public ResponseEntity<Map<String, Object>> getSkanReports(
             @RequestHeader(value = "X-Tenant-ID", required = false) String tenantHeader,
             @RequestParam(value = "ad_network_id", required = false, defaultValue = "") String adNetworkId

@@ -1,0 +1,72 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: affiliate-db-migration
+  namespace: affiliate-prod
+  labels:
+    app.kubernetes.io/name: affiliate-db-migration
+    app.kubernetes.io/component: db-migration
+    app.kubernetes.io/part-of: affiliate-platform
+  annotations:
+    # ArgoCD / Helm pre-sync hooks: 保证在任何业务 Pod 滚动更新前先执行数据库增量迁移
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: hook-succeeded
+    argocd.argoproj.io/hook: PreSync
+    argocd.argoproj.io/hook-delete-policy: HookSucceeded
+spec:
+  backoffLimit: 3
+  activeDeadlineSeconds: 600
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: affiliate-db-migration
+        app.kubernetes.io/component: db-migration
+    spec:
+      restartPolicy: OnFailure
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+      containers:
+        - name: flyway-migration
+          image: affiliate-admin:0.2.0
+          imagePullPolicy: IfNotPresent
+          command:
+            - "java"
+            - "-jar"
+            - "/app/app.jar"
+            - "--spring.profiles.active=prod"
+            - "--spring.main.web-application-type=none"
+            - "--spring.flyway.enabled=true"
+            - "--spring.flyway.baseline-on-migrate=true"
+          env:
+            - name: DB_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: affiliate-config
+                  key: DB_URL
+            - name: DB_USERNAME
+              valueFrom:
+                configMapKeyRef:
+                  name: affiliate-config
+                  key: DB_USERNAME
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: affiliate-secrets
+                  key: DB_PASSWORD
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: affiliate-secrets
+                  key: JWT_SECRET
+          resources:
+            requests:
+              cpu: 200m
+              memory: 512Mi
+            limits:
+              cpu: 1000m
+              memory: 1024Mi

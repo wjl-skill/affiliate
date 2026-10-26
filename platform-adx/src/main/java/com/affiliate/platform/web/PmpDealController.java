@@ -8,6 +8,7 @@ import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
 import java.math.BigDecimal;
@@ -19,6 +20,7 @@ import java.util.Set;
  * ADX 私有交易市场协议 (PMP Deals) REST 控制器
  * <p>
  * 支持 Programmatic Guaranteed (PG), Preferred Deal, Private Auction 白名单规则与出价底价管理。
+ * 集成方法级细粒度权限控制 (@PreAuthorize)。
  */
 @RestController
 @RequestMapping("/api/v1/adx/deals")
@@ -35,6 +37,7 @@ public class PmpDealController {
      * GET /api/v1/adx/deals
      */
     @GetMapping
+    @PreAuthorize("@perm.has('deal:read')")
     public ResponseEntity<Collection<RegisteredDeal>> listDeals() {
         return ResponseEntity.ok(dealMatcher.getAllDeals());
     }
@@ -44,6 +47,7 @@ public class PmpDealController {
      * GET /api/v1/adx/deals/{dealId}
      */
     @GetMapping("/{dealId}")
+    @PreAuthorize("@perm.has('deal:read')")
     public ResponseEntity<?> getDeal(@PathVariable String dealId) {
         return dealMatcher.getDeal(dealId)
                 .<ResponseEntity<?>>map(ResponseEntity::ok)
@@ -55,6 +59,7 @@ public class PmpDealController {
      * POST /api/v1/adx/deals
      */
     @PostMapping
+    @PreAuthorize("@perm.has('deal:write')")
     public ResponseEntity<RegisteredDeal> createOrUpdateDeal(@Valid @RequestBody DealDto request) {
         RegisteredDeal deal = new RegisteredDeal(
                 request.dealId(),
@@ -73,6 +78,7 @@ public class PmpDealController {
      * DELETE /api/v1/adx/deals/{dealId}
      */
     @DeleteMapping("/{dealId}")
+    @PreAuthorize("@perm.has('deal:write')")
     public ResponseEntity<Map<String, Object>> deleteDeal(@PathVariable String dealId) {
         dealMatcher.removeDeal(dealId);
         return ResponseEntity.ok(Map.of("success", true, "dealId", dealId, "message", "Deal removed successfully"));
@@ -83,6 +89,7 @@ public class PmpDealController {
      * POST /api/v1/adx/deals/match
      */
     @PostMapping("/match")
+    @PreAuthorize("@perm.has('deal:write')")
     public ResponseEntity<PmpDealMatcher.DealMatchResult> matchDeal(@Valid @RequestBody MatchTestRequest request) {
         PmpDealMatcher.DealMatchResult result = dealMatcher.matchDeal(
                 request.dealId(),

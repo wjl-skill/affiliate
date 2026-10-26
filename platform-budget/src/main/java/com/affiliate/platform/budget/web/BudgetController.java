@@ -12,6 +12,7 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
 import java.math.BigDecimal;
@@ -43,6 +44,7 @@ public class BudgetController {
      * GET /api/v1/budget/campaigns/{campaignId}
      */
     @GetMapping("/campaigns/{campaignId}")
+    @PreAuthorize("@perm.has('budget:read')")
     public ResponseEntity<?> getCampaignBudget(@PathVariable String campaignId) {
         String tenantId = TenantContext.get() != null ? TenantContext.get() : "public";
         if (campaignBudgetMapper != null) {
@@ -68,6 +70,7 @@ public class BudgetController {
      * POST /api/v1/budget/campaigns/{campaignId}
      */
     @PostMapping("/campaigns/{campaignId}")
+    @PreAuthorize("@perm.has('budget:write')")
     public ResponseEntity<?> setCampaignBudget(
             @PathVariable String campaignId,
             @Valid @RequestBody SetBudgetRequest request
@@ -82,10 +85,11 @@ public class BudgetController {
     }
 
     /**
-     * 竞价前原子预占扣除
+     * 竞价前原子预占扣款
      * POST /api/v1/budget/reserve
      */
     @PostMapping("/reserve")
+    @PreAuthorize("@perm.has('budget:write')")
     public ResponseEntity<?> reserve(@Valid @RequestBody ReserveRequest request) {
         String tenantId = TenantContext.get() != null ? TenantContext.get() : "public";
         BudgetService.Reservation reservation = budgetService.reserve(
@@ -102,6 +106,7 @@ public class BudgetController {
      * POST /api/v1/budget/confirm
      */
     @PostMapping("/confirm")
+    @PreAuthorize("@perm.has('budget:write')")
     public ResponseEntity<?> confirm(@Valid @RequestBody ConfirmOrReleaseRequest request) {
         String tenantId = TenantContext.get() != null ? TenantContext.get() : "public";
         BudgetService.Reservation reservation = new BudgetService.Reservation(
@@ -120,6 +125,7 @@ public class BudgetController {
      * POST /api/v1/budget/release
      */
     @PostMapping("/release")
+    @PreAuthorize("@perm.has('budget:write')")
     public ResponseEntity<?> release(@Valid @RequestBody ConfirmOrReleaseRequest request) {
         String tenantId = TenantContext.get() != null ? TenantContext.get() : "public";
         BudgetService.Reservation reservation = new BudgetService.Reservation(
@@ -138,6 +144,7 @@ public class BudgetController {
      * POST /api/v1/budget/campaigns/{campaignId}/credit
      */
     @PostMapping("/campaigns/{campaignId}/credit")
+    @PreAuthorize("@perm.has('budget:write')")
     public ResponseEntity<?> creditBudget(
             @PathVariable String campaignId,
             @Valid @RequestBody CreditBudgetRequest request
@@ -148,10 +155,11 @@ public class BudgetController {
     }
 
     /**
-     * 检查并触发预算消耗告警水位
+     * 检查并触发预算消耗告警水线
      * GET /api/v1/budget/campaigns/{campaignId}/alert
      */
     @GetMapping("/campaigns/{campaignId}/alert")
+    @PreAuthorize("@perm.has('budget:read')")
     public ResponseEntity<?> checkAlert(
             @PathVariable String campaignId,
             @RequestParam BigDecimal currentSpend,
@@ -178,8 +186,8 @@ public class BudgetController {
     public record ConfirmOrReleaseRequest(
             @NotBlank String reservationId,
             @NotBlank String campaignId,
-            String userId,
-            @NotNull BigDecimal amount
+            @NotBlank String userId,
+            @NotNull @DecimalMin("0.0001") BigDecimal amount
     ) {}
 
     public record CreditBudgetRequest(

@@ -14,11 +14,30 @@ env:
 
 jobs:
   # ===================================================================
+  # 阶段 0: 静态凭据泄漏防护与代码合规审计 (Gitleaks)
+  # ===================================================================
+  security-and-secret-scan:
+    name: Security & Secret Audit (Gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run Gitleaks Detection
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        continue-on-error: true
+
+  # ===================================================================
   # 阶段 1: 全模块代码编译、单元测试与代码质量验证
   # ===================================================================
   build-and-test:
     name: Build & Verify (19 Modules)
     runs-on: ubuntu-latest
+    needs: security-and-secret-scan
 
     steps:
       - name: Checkout Code

@@ -25,7 +25,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * 生产加固：
  * 1. 采用带 Owner 唯一凭证的分布式租约锁，并通过 Lua 脚本安全释放，防止长任务超时释放后误删其他节点新锁；
  * 2. 具备单机并发防重入（AtomicBoolean）；
- * 3. 投递成功后更新 markPublished，投递失败累加重试计数。
+ * 3. 投递成功后更新 markPublished，投递失败累加重试计数与异常摘要；达到阈值自动沉降至死信表并报警。
  */
 @Component
 @EnableScheduling
@@ -104,13 +104,15 @@ public class OutboxRelayScheduler {
             List<DomainEvent<?>> pending = outbox.pending(100);
             for (DomainEvent<?> event : pending) {
                 String topic = "affiliate." + event.eventType();
+                String messageKey = event.aggregateId();
                 try {
                     // 同步等待至多 3 秒，确保投递成功后再标记发布
-                    kafka.send(topic, event.aggregateId(), event).get(3, TimeUnit.SECONDS);
+                    kafka.send(topic, messageKey, event).get(3, TimeUnit.SECONDS);
                     outbox.markPublished(event.eventId());
                 } catch (Exception ex) {
-                    log.error("Failed to relay outbox event {} to topic {}", event.eventId(), topic, ex);
-                    outbox.recordFailure(event.eventId());
+                    String errorMsg = ex.getMessage() != null ? ex.getMessage() : ex.getClass().getSimpleName();
+                    log.error("Failed to relay outbox event {} to topic {}: {}", event.eventId(), topic, errorMsg);
+                    outbox.recordFailure(event.eventId(), errorMsg);
                 }
             }
         } finally {
