@@ -1,15 +1,105 @@
+# ===================================================================
+# Affiliate Platform Worker 异步后台任务与事件中继应用配置 (Profile: pg 默认激活)
+# ===================================================================
+
 server:
   port: 8084
+  compression:
+    enabled: true
+    mime-types: application/json
 
 spring:
   application:
     name: platform-app-worker
+  profiles:
+    active: ${SPRING_PROFILES_ACTIVE:pg}
   threads:
     virtual:
       enabled: true
+
+  security:
+    filter:
+      dispatcher-types:
+        - async
+        - request
+
+  # Worker 后台调度数据库连接池
+  datasource:
+    driver-class-name: org.postgresql.Driver
+    url: ${DB_URL:jdbc:postgresql://127.0.0.1:5432/postgres?currentSchema=public&reWriteBatchedInserts=true&stringtype=unspecified}
+    username: ${DB_USERNAME:postgres}
+    password: ${DB_PASSWORD:postgres}
+    hikari:
+      pool-name: AffiliateWorkerHikari
+      maximum-pool-size: ${DB_MAX_POOL_SIZE:50}
+      minimum-idle: ${DB_MIN_IDLE:10}
+      connection-timeout: 3000
+      idle-timeout: 600000
+      max-lifetime: 1800000
+      leak-detection-threshold: 5000
+      connection-test-query: SELECT 1
+
+  # 全局 Redis 缓存与分布式锁配置
+  data:
+    redis:
+      host: ${REDIS_HOST:127.0.0.1}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+      database: ${REDIS_DB:0}
+      timeout: ${REDIS_TIMEOUT:3000ms}
+      client-type: lettuce
+      lettuce:
+        pool:
+          max-active: ${REDIS_POOL_MAX_ACTIVE:50}
+          max-idle: ${REDIS_POOL_MAX_IDLE:10}
+          min-idle: ${REDIS_POOL_MIN_IDLE:2}
+          max-wait: ${REDIS_POOL_MAX_WAIT:3000ms}
+
+  flyway:
+    enabled: ${FLYWAY_ENABLED:false}
+    baseline-on-migrate: true
+
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.autoconfigure.kafka.KafkaAutoConfiguration
+
+mybatis-plus:
+  mapper-locations: classpath*:/mapper/**/*.xml
+  type-aliases-package: com.affiliate.platform.entity
+  global-config:
+    banner: false
+    db-config:
+      id-type: assign_id
+      table-underline: true
+      logic-delete-field: deleted
+      logic-delete-value: 1
+      logic-not-delete-value: 0
+  configuration:
+    map-underscore-to-camel-case: true
+    cache-enabled: false
+    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+    jdbc-type-for-null: 'null'
 
 management:
   endpoints:
     web:
       exposure:
         include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true
+
+app:
+  security:
+    enabled: ${APP_SECURITY_ENABLED:true}
+    jwt-secret: ${APP_JWT_SECRET:affiliate-platform-dev-jwt-secret-change-me-in-prod-0518}
+    token-ttl-minutes: ${APP_JWT_TTL_MINUTES:720}
+  infrastructure:
+    database-enabled: true
+    redis-enabled: true
+    kafka-enabled: false
+  ip2location:
+    enabled: ${IP2LOCATION_ENABLED:true}
+    bin-path: ${IP2LOCATION_BIN_PATH:}
+    cache-mode: ${IP2LOCATION_CACHE_MODE:MEMORY_MAPPED}
