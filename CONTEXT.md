@@ -58,7 +58,7 @@
 
 ## 外部产品
 
-- **Google Ads**：广告主投放和报表 API，使用 `platform-google-ads` 连接器。
-- **Google Ad Manager (GAM)**：媒体侧订单、广告位和投放 API，使用 `platform-google-gam` 连接器。
+- **Google Ads / TikTok Ads / Meta Ads**：外部买量平台投放与转化回传 API，使用 `platform-ad-connectors` 连接器。
+- **Google Ad Manager (GAM) / TikTok Pangle / Meta Audience Network**：媒体侧订单、广告位和变现网络 API，使用 `platform-media-connectors` 连接器。
 
 Google Ads 与 GAM 是两个不同产品，凭据、授权范围、速率限制和错误语义不得混用。

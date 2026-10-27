@@ -19,35 +19,18 @@
 
 ## 📚 文档全景导航
 
-完整文档体系收录于 **[`docs/`](docs/README.md)** 知识中枢目录，现存 25 篇权威技术文档与设计规范：
+完整文档体系收录于 **[`docs/`](docs/README.md)** 知识中枢目录，涵盖 6 大权威技术业务手册与数据脚本库：
 
 ```
 docs/
-├── README.md                                                        # [全局文档索引中枢与导航地图]
-├── ARCHITECTURE.md                                                  # 系统分层架构与模块 Seam 隔离设计
-├── NEXT_GEN_UPGRADE_AND_IMPLEMENTATION_SPECIFICATION.md             # 下一代进阶算法(LinUCB/SKAN/Agent)实施规范
-├── EVOLUTION_ROADMAP_MILESTONES_IMPLEMENTATION_REPORT.md            # [最新] 8周四大里程碑架构演进落地与验收总报告
-├── PRODUCTION_MODULE_OPTIMIZATION_AND_HARDENING_DESIGN.md          # 全模块深度优化、10大漏洞修复与加固规范
-├── PRODUCTION_FULL_STACK_OPTIMIZATION_REPORT.md                     # 生产级全链路架构升级与实测基准总报告
-├── PRODUCTION_DEPLOYMENT_AND_OPERATIONS_GUIDE.md                    # Kubernetes/Docker 云原生编排与双面运维
-├── PERFORMANCE_BENCHMARK_REPORT.md                                  # 端到端万级 QPS 压测方法论与实测 152k 基准
-├── ATTRIBUTION_AND_ANTI_FRAUD_GUIDE.md                              # 6大多触点归因算法与商业级 4D 反欺诈指南
-├── AFFILIATE_BUSINESS_REQUIREMENTS.md                               # 网盟商业需求规范 (BRD)
-├── AFFILIATE_TECHNICAL_DESIGN.md                                    # 网盟核心技术架构与链路设计 (TDD)
-├── AFFILIATE_API_INTEGRATION_GUIDE.md                               # 广告主与渠道客 API 对接集成指南
-├── DATABASE_MIGRATION_GUIDE.md                                      # 数据库增量演进与多级缓存指南
-├── ENTITY_SCHEMA_ALIGNMENT.md                                       # 84 表实体双向对齐规约与审计工具
-├── FRONTEND_PRODUCTION_GUIDE.md                                     # Vue 3 / Nuxt 3 管理后台开发规范
-├── CREATIVE_AUTOMATION_SYSTEM_DESIGN.md                             # 素材自动化系统架构设计总纲
-└── creative-automation/                                             # 素材自动化 6 大专题设计与完备性审计
-    ├── README.md                                                    # 素材自动化专题文档总览
-    ├── 01-AI_VIDEO_MULTI_MODEL_ENGINE.md                            # 多模型 AI 视频生成引擎规范
-    ├── 02-LONG_VIDEO_STUDIO_PIPELINE.md                             # 长视频工作台与 6 管线 Prompt 设计
-    ├── 03-VIDEO_PROCESSING_AND_AUTO_STITCH.md                       # 智能混剪、自适应裁切与字幕合成
-    ├── 04-MATERIAL_QUALITY_TAGGING_AND_BENCHMARK.md                 # 7日大盘基准打标与数仓 ETL 规范
-    ├── 05-AD_AUTOMATION_AND_LEARNING_PHASE.md                       # 跨媒体自动建广与学习期监控
-    ├── 06-AI_BILLING_AND_SETTLEMENT.md                              # 算力计费两阶段管控与不可变记账
-    └── CREATIVE_AUTOMATION_BOUNDARY_AND_COMPLETENESS_AUDIT.md       # 素材自动化代码完备性与边界审查报告
+├── README.md                                          # [全局文档索引中枢与导航地图]
+├── ARCHITECTURE.md                                    # 系统分层架构、21个模块拓扑与依赖Seam隔离设计
+├── AFFILIATE_BUSINESS_AND_SYSTEM_MANUAL.md            # [核心业务手册] 网盟业务规范、技术设计、MTA多触点归因与4D反作弊风控指南
+├── AFFILIATE_API_INTEGRATION_GUIDE.md                 # 广告主/渠道客 API 对接手册 (含点击、S2S Postback与多广告/媒体平台连接器)
+├── CREATIVE_AUTOMATION_SYSTEM_GUIDE.md                # AI 创意自动化闭环指南 (多模型引擎、长视频工作台、智能混剪、大盘打标与分账)
+├── DATABASE_AND_MIGRATION_GUIDE.md                    # 数据库持久化、多级缓存架构、88张表实体对齐审计与分区归档实施指南
+├── PRODUCTION_OPERATIONS_AND_DEPLOYMENT_GUIDE.md      # 云原生部署运维、K8s编排、数据面/控制面分离与Nuxt 3前端控制台规范
+└── sql/                                               # 独立模块 DDL 脚本库 (01~17 独立建表语句)
 ```
 
 ---
@@ -107,10 +90,10 @@ docs/
 | **`platform-tenant`** | 1,082 行 / 12 类 | **多租户治理与配置中心**：多租户生命周期管理、合作方连接生命周期、租户配额限流、多云 S3 对象存储配置管理（AWS/Cloudflare R2/MinIO/OSS）。 | `TenantController`<br>`SystemConfigController` |
 | **`platform-common`** | 1,019 行 / 15 类 | **共享内核**：Creative、AdSlot、Auction、PartnerConnection 等共享模型、领域枚举、通用领域异常与仓储抽象端口。 | 共享领域模型 Record |
 | **`platform-ssp`** | 749 行 / 6 类 | **供给方媒体变现系统**：广告位管理、多维动态底价规则与多渠道头部竞价聚合仲裁（Mediation）。 | `AdSlotController` |
-| **`platform-google-ads`** | 698 行 / 5 类 | **Google Ads 连接器**：OAuth 2.0 授权码交换、状态校验与广告计划批量同步。 | `GoogleOAuthController`<br>`GoogleAdsSyncController` |
+| **`platform-ad-connectors`** | 1,850 行 / 15 类 | **通用多广告平台连接器**：Google Ads、TikTok Ads 与 Meta/Facebook Ads 三大渠道 OAuth 2.0、广告计划与效果报表拉取、S2S/CAPI 增强型转化回传。 | `AdPlatformUnifiedController`<br>`GoogleAdsSyncController` |
 | **`platform-dmp`** | 514 行 / 6 类 | **数据管理平台**：匿名 Cookie/设备 ID 受众分群、动态规则圈选引擎与 Jaccard 相似度 Lookalike 人群扩量。 | `DmpController` |
 | **`platform-event`** | 439 行 / 10 类 | **可靠事件总线**：DomainEvent 模型、内存发件箱、PostgreSQL 本地事务 Outbox 与 Kafka 异步消息发布。 | `EventPublisher` |
-| **`platform-google-gam`** | 221 行 / 3 类 | **Google Ad Manager 连接器**：媒体侧订单、广告单元与投放同步适配。 | `PartnerController` |
+| **`platform-media-connectors`** | 1,200 行 / 8 类 | **媒体与变现网络连接器**：Google Ad Manager (GAM/AdMob)、TikTok Pangle 与 Meta Audience Network 媒体广告单元、投放项与变现数据同步适配。 | `PartnerController`<br>`MediaPlatformUnifiedController` |
 | **`platform-api`** | 144 行 / 3 类 | **应用启动与聚合部署入口**：Spring Boot 启动类、全局统一异常处理与探针入口。 | `AffiliatePlatformApplication` |
 | **`platform-frontend`** | 7,781 行 / 39 文件 | **现代化管理控制台**：基于 Nuxt 3 + Vue 3 + TailwindCSS 开发，涵盖 **23 个业务页面**（含登录、网盟 Offer/转化/补量抽屉/防刷、素材 Studio、财务打款、系统安全 RBAC、多租户切换等）。 | 23 个 Nuxt 页面路由 |
 

@@ -61,12 +61,12 @@
         </dependency>
         <dependency>
             <groupId>com.affiliate</groupId>
-            <artifactId>platform-google-ads</artifactId>
+            <artifactId>platform-ad-connectors</artifactId>
             <version>0.2.0</version>
         </dependency>
         <dependency>
             <groupId>com.affiliate</groupId>
-            <artifactId>platform-google-gam</artifactId>
+            <artifactId>platform-media-connectors</artifactId>
             <version>0.2.0</version>
         </dependency>
         <dependency>

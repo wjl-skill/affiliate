@@ -1,5 +1,5 @@
 -- ===================================================================
--- 模块名称：platform-google-ads & platform-google-gam (三方平台连接器)
+-- 模块名称：platform-ad-connectors & platform-google-gam (三方平台连接器)
 -- 适用数据库：PostgreSQL 14+
 -- 包含表结构：
 --   1. partner_sync_job    : 外部媒体与广告主物料/报表异步数据同步作业记录表

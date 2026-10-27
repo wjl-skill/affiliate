@@ -1,4 +1,4 @@
-# ===================================================================
+﻿# ===================================================================
 # Dockerfile.controlplane: 控制管理面物理镜像 (Console Admin, Batch Jobs & OLAP)
 # ===================================================================
 
@@ -18,8 +18,8 @@ COPY platform-dsp/pom.xml platform-dsp/
 COPY platform-dmp/pom.xml platform-dmp/
 COPY platform-cdp/pom.xml platform-cdp/
 COPY platform-adx/pom.xml platform-adx/
-COPY platform-google-ads/pom.xml platform-google-ads/
-COPY platform-google-gam/pom.xml platform-google-gam/
+COPY platform-ad-connectors/pom.xml platform-ad-connectors/
+COPY platform-media-connectors/pom.xml platform-media-connectors/
 COPY platform-billing/pom.xml platform-billing/
 COPY platform-reporting/pom.xml platform-reporting/
 COPY platform-affiliate/pom.xml platform-affiliate/
@@ -37,8 +37,8 @@ COPY platform-dsp/src platform-dsp/src
 COPY platform-dmp/src platform-dmp/src
 COPY platform-cdp/src platform-cdp/src
 COPY platform-adx/src platform-adx/src
-COPY platform-google-ads/src platform-google-ads/src
-COPY platform-google-gam/src platform-google-gam/src
+COPY platform-ad-connectors/src platform-ad-connectors/src
+COPY platform-media-connectors/src platform-media-connectors/src
 COPY platform-billing/src platform-billing/src
 COPY platform-reporting/src platform-reporting/src
 COPY platform-affiliate/src platform-affiliate/src

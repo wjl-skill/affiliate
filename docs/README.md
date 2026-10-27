@@ -1,134 +1,85 @@
 # Affiliate Platform 文档资产全景导航中枢 (Documentation Knowledge Hub)
 
-> **版本**：v0.3.0-PROD  
-> **更新时间**：2026-10-25  
+> **版本**：v3.0.0 Commercial Release  
+> **更新时间**：2026-10-27  
 > **适用范围**：工程全体开发、架构、算法、运维与业务运营人员  
-> **架构基线**：Java 21 + Spring Boot 3.4.3 (19 个 Maven 模块) + Nuxt 3 (Vue 3/TailwindCSS 23 页面) + PostgreSQL 16 (Flyway V1~V22, 88 张核心表与 88 个 MyBatis-Plus 实体 100% 对齐) + ClickHouse 24+ OLAP + Kafka KRaft + Redisson 分布式锁
+> **架构基线**：Java 21 + Spring Boot 3.4.3 (21 个 Maven 模块) + Nuxt 3 (Vue 3/TailwindCSS 23 页面) + PostgreSQL 16 (Flyway V1~V22, 88 张核心表与 88 个 MyBatis-Plus 实体 100% 对齐) + ClickHouse OLAP + Kafka KRaft + Redisson 分布式锁
 
 ---
 
-## 📚 文档资产总览与分级索引
+## 📚 文档资产总览与核心知识域
 
-平台现存 **24 篇权威技术文档与设计规范**，按照架构分层与研发流程划分为六大核心知识域：
+平台经过深度重构与业务文档整合，梳理归集为 **6 大核心权威技术文档与数据脚本库**，按照架构分层与业务闭环严格组织：
 
 ```
 docs/
-├── README.md (本文档 - 全局文档导航与知识中枢)
-├── 1. 架构总纲与系统设计 (Architecture & Core Design)
-│   ├── ARCHITECTURE.md                                              [系统总体架构与模块Seam设计]
-│   ├── CONTEXT.md (根目录)                                          [统一领域词汇与业务概念定义]
-│   ├── NEXT_GEN_UPGRADE_AND_IMPLEMENTATION_SPECIFICATION.md         [新一代进阶升级算法与功能实施规范]
-│   ├── EVOLUTION_ROADMAP_MILESTONES_IMPLEMENTATION_REPORT.md        [8周四大里程碑演进实施与验收总报告]
-│   └── PRODUCTION_MODULE_OPTIMIZATION_AND_HARDENING_DESIGN.md      [全模块深度优化与漏洞修复加固规范]
-├── 2. 网盟营销与业务核心 (Affiliate Network & Tracking)
-│   ├── AFFILIATE_BUSINESS_REQUIREMENTS.md                           [网盟营销业务需求规格说明书 BRD]
-│   ├── AFFILIATE_TECHNICAL_DESIGN.md                                [网盟营销核心技术设计与架构实现 TDD]
-│   └── AFFILIATE_API_INTEGRATION_GUIDE.md                           [广告主/渠道客 API 集成对接指南]
-├── 3. 算法、归因与安全风控 (Attribution, AI & Anti-Fraud)
-│   └── ATTRIBUTION_AND_ANTI_FRAUD_GUIDE.md                          [6大多触点归因算法与商业级反作弊指南]
-├── 4. 素材自动化生产体系 (Creative Automation Subsystem)
-│   ├── CREATIVE_AUTOMATION_SYSTEM_DESIGN.md                         [素材自动化系统总纲与架构全景]
-│   └── creative-automation/
-│       ├── README.md                                                [素材自动化专项文档索引]
-│       ├── 01-AI_VIDEO_MULTI_MODEL_ENGINE.md                        [多模型 AI 视频生成引擎规范]
-│       ├── 02-LONG_VIDEO_STUDIO_PIPELINE.md                         [长视频分镜工作台与 6 管线 Prompt]
-│       ├── 03-VIDEO_PROCESSING_AND_AUTO_STITCH.md                   [视频后处理、自适应混剪与画幅裁切]
-│       ├── 04-MATERIAL_QUALITY_TAGGING_AND_BENCHMARK.md             [7日大盘基准打标与数仓 ETL 规范]
-│       ├── 05-AD_AUTOMATION_AND_LEARNING_PHASE.md                   [跨平台自动建广与广告学习期监控]
-│       ├── 06-AI_BILLING_AND_SETTLEMENT.md                          [算力计费两阶段管控与不可变分录]
-│       └── CREATIVE_AUTOMATION_BOUNDARY_AND_COMPLETENESS_AUDIT.md   [素材自动化完备性与边界审查报告]
-├── 5. 数据基础设施与多模持久化 (Data, Storage & Schema)
-│   ├── DATABASE_MIGRATION_GUIDE.md                                  [数据库迁移演进与多级缓存指南]
-│   ├── ENTITY_SCHEMA_ALIGNMENT.md                                   [88张表实体结构对齐与审计规约]
-│   └── sql/                                                         [模块独立 DDL 脚本库]
-└── 6. 运维、前端与性能工程 (Operations, Frontend & Benchmark)
-    ├── PRODUCTION_DEPLOYMENT_AND_OPERATIONS_GUIDE.md                [K8s 云原生编排与数据面/控制面运维]
-    ├── PERFORMANCE_BENCHMARK_REPORT.md                              [万级 QPS 压测方法论与实测性能基准]
-    ├── PRODUCTION_FULL_STACK_OPTIMIZATION_REPORT.md                 [全链路架构升级与优化实施总报告]
-    └── FRONTEND_PRODUCTION_GUIDE.md                                 [Nuxt 3 前端生产化指南与开发约定]
+├── README.md                                          [本文档 - 全局文档导航与知识中枢]
+├── 1. 系统架构与总纲 (Architecture & Core Seams)
+│   ├── ARCHITECTURE.md                                [系统总体分层架构、21个模块拓扑与依赖Seam设计]
+│   └── CONTEXT.md (工程根目录)                         [全局领域驱动上下文词汇库与统一业务术语]
+├── 2. 网盟营销核心业务与系统设计 (Affiliate Business & System Manual)
+│   ├── AFFILIATE_BUSINESS_AND_SYSTEM_MANUAL.md        [网盟核心业务规范、技术设计、MTA多触点归因与4D反作弊风控手册]
+│   └── AFFILIATE_API_INTEGRATION_GUIDE.md             [外部合作伙伴对接手册: 点击跳转、S2S Postback与多广告/媒体平台连接器 API]
+├── 3. AI 创意自动化生产体系 (Creative Automation Subsystem)
+│   └── CREATIVE_AUTOMATION_SYSTEM_GUIDE.md            [AI 视频多模型引擎、长视频工作台、画幅对齐混剪、大盘打标与算力分账完整指南]
+├── 4. 数据基础设施与多模持久化 (Data, Storage & Schema)
+│   ├── DATABASE_AND_MIGRATION_GUIDE.md                [数据库接入、多级缓存架构、88张表实体对齐审计与分区归档实施指南]
+│   └── sql/                                           [模块独立 DDL 脚本库 (01~17 独立建表语句)]
+└── 5. 运维部署与生产规范 (Operations, Deployment & Frontend)
+    └── PRODUCTION_OPERATIONS_AND_DEPLOYMENT_GUIDE.md  [K8s云原生编排、数据面/控制面物理分离、Prometheus可观测性与Nuxt 3前端控制台规范]
 ```
 
 ---
 
-## 🗂️ 核心文档详细导航
+## 🗂️ 核心文档详细导航与阅读指引
 
-### 第一域：架构总纲与系统设计 (Architecture & Core Design)
+### 第一域：架构总纲与系统设计 (Architecture & Core Seams)
 
 | 文档名称 | 核心内容与阅读指引 | 核心责任模块 |
 |---|---|---|
-| **[`docs/ARCHITECTURE.md`](ARCHITECTURE.md)** | **系统总体分层架构**：19 个 Maven 模块的分层拓扑、依赖原则（`api -> 业务 -> common`）、RTB 纳秒级热路径、多租户上下文隔离与持久化模型总括。 | `platform-common`, `platform-api` |
+| **[`docs/ARCHITECTURE.md`](ARCHITECTURE.md)** | **系统总体分层架构**：21 个 Maven 模块的分层拓扑、依赖原则（`api -> 业务 -> common`）、RTB 纳秒级热路径、多租户上下文隔离与双平面（Data-Plane / Control-Plane）解耦总括。 | `platform-common`, `platform-api` |
 | **[`CONTEXT.md`](../CONTEXT.md)** | **全局领域驱动上下文词汇库**：严格界定 Tenant、Advertiser、Publisher、Affiliate、Campaign、Ad Slot、Click Session、Conversion、MMP、Cap 等术语，消除团队认知偏差。 | 全模块 |
-| **[`docs/NEXT_GEN_UPGRADE_AND_IMPLEMENTATION_SPECIFICATION.md`](NEXT_GEN_UPGRADE_AND_IMPLEMENTATION_SPECIFICATION.md)** | **下一代进阶功能实施规范**：LinUCB 上下文多臂老虎机分流算法、Apple SKAdNetwork 4.0 隐私归因解析、营销自治闭环 Agent、分层 OLAP 星型立方体与统一 AI 推理中枢落地规范。 | `platform-affiliate`, `platform-ai`, `platform-creative`, `platform-reporting` |
-| **[`docs/EVOLUTION_ROADMAP_MILESTONES_IMPLEMENTATION_REPORT.md`](EVOLUTION_ROADMAP_MILESTONES_IMPLEMENTATION_REPORT.md)** | **8 周四大里程碑演进总报告**：M1~M4 全部落地复盘，涵盖 129 处异常静默治理、Redisson 分布式锁、Kafka KRaft 消费、PG 范围分区与冷归档、12D LinUCB、4D 风控 Redis Pub/Sub、3 套 Grafana、ClickHouse OLAP、K8s 双面镜像分离。 | 全模块 |
-| **[`docs/PRODUCTION_MODULE_OPTIMIZATION_AND_HARDENING_DESIGN.md`](PRODUCTION_MODULE_OPTIMIZATION_AND_HARDENING_DESIGN.md)** | **全系统优化加固规范**：10 大核心逻辑漏洞修复、资金防超扣、RTB 阻尼出价、双模持久化一致性保障与生产容灾预案。 | `platform-budget`, `platform-billing`, `platform-dsp`, `platform-adx` |
 
 ---
 
-### 第二域：网盟营销与业务核心 (Affiliate Network & Tracking)
+### 第二域：网盟营销核心业务与系统设计 (Affiliate Business & System Manual)
 
 | 文档名称 | 核心内容与阅读指引 | 核心责任模块 |
 |---|---|---|
-| **[`docs/AFFILIATE_BUSINESS_REQUIREMENTS.md`](AFFILIATE_BUSINESS_REQUIREMENTS.md)** | **网盟商业化需求规范 (BRD)**：涵盖渠道分级管理、Offer 投放与 Cap 配额、智能分流（SmartLink/TDS）、S2S 转化回传、Sub-ID 多维报表、流量补量与周期结算完整商业逻辑。 | `platform-affiliate` |
-| **[`docs/AFFILIATE_TECHNICAL_DESIGN.md`](AFFILIATE_TECHNICAL_DESIGN.md)** | **网盟核心技术实现方案 (TDD)**：点击追踪热路径优化（P95<50ms）、Postback 幂等去重、Redis 预占原子锁、Parquet 用户画像解析、AF/Adjust MMP 推送与 Net-7/15/30 账期结算设计。 | `platform-affiliate`, `platform-infrastructure` |
-| **[`docs/AFFILIATE_API_INTEGRATION_GUIDE.md`](AFFILIATE_API_INTEGRATION_GUIDE.md)** | **外部合作伙伴对接手册**：面向广告主与渠道客的 HTTP 接口规范，包含点击跳转、S2S Postback 接收、Offer 查询、转化状态回调与多语言（Python/Go/Java/Node）集成示例。 | `platform-affiliate`, `platform-api` |
+| **[`docs/AFFILIATE_BUSINESS_AND_SYSTEM_MANUAL.md`](AFFILIATE_BUSINESS_AND_SYSTEM_MANUAL.md)** | **网盟核心业务与系统权威手册**：<br>1. **业务画像与规则**：渠道客生命周期、阶梯分润模型（VIP 佣金上浮）、Offer 定向与容量上限熔断；<br>2. **链路架构**：纳秒级点击跳转、302 重定向、宏替换与 Sub-ID 5 维下钻穿透；<br>3. **转化与归因**：S2S 幂等回传、6 大多触点归因模型（含 Data-Driven MTA 算法公式）与分币平账；<br>4. **4D 动态反作弊**：CTIT 漏斗异常、超音速跨国漂移、设备/系统突变、数据中心机房 IP、分钟级转化泛滥拦截；<br>5. **财务对账**：Net-7/15/30 账期自动化出账、不可变复式记账流水与批量打款。 | `platform-affiliate`, `platform-billing`, `platform-reporting` |
+| **[`docs/AFFILIATE_API_INTEGRATION_GUIDE.md`](AFFILIATE_API_INTEGRATION_GUIDE.md)** | **外部合作伙伴集成与 API 手册**：<br>1. 面向广告主与渠道客的公网端点（点击跳转、S2S Postback 接收、Offer 查询与发票状态）；<br>2. 统一多广告平台连接器（Google Ads、TikTok Ads、Facebook Ads 报表与 CAPI 转化上报）；<br>3. 统一媒体侧变现网络（Google GAM/AdMob、TikTok Pangle、Meta Audience Network 变现收益与库存同步）；<br>4. 多语言（Python/Go/Java/Node/Ruby/PHP）实战调用示例。 | `platform-affiliate`, `platform-ad-connectors`, `platform-media-connectors` |
 
 ---
 
-### 第三域：算法、归因与安全风控 (Attribution, AI & Anti-Fraud)
+### 第三域：AI 创意自动化生产体系 (Creative Automation Subsystem)
 
 | 文档名称 | 核心内容与阅读指引 | 核心责任模块 |
 |---|---|---|
-| **[`docs/ATTRIBUTION_AND_ANTI_FRAUD_GUIDE.md`](ATTRIBUTION_AND_ANTI_FRAUD_GUIDE.md)** | **归因算法与商业级反欺诈**：<br>1. 六大归因模型详解（First/Last/Linear/Time-Decay/U-Shaped/Data-Driven MTA）与精确到分平账机制；<br>2. 4D 反欺诈风控引擎（CTIT 漏斗异常、超音速跨国漂移、设备/系统突变、数据中心爬虫 IP、分钟级转化泛滥拦截）。 | `platform-affiliate`, `platform-cdp`, `platform-ai` |
+| **[`docs/CREATIVE_AUTOMATION_SYSTEM_GUIDE.md`](CREATIVE_AUTOMATION_SYSTEM_GUIDE.md)** | **AI 素材自动化闭环总纲**：<br>1. **多模型引擎**：`ModelMeta + Generator + Provider` 三层解耦、火山引擎 Seedance 2.0 与阿里百炼 DashScope 统一转译；<br>2. **长视频工作台**：7 阶段工程流水线、6 大行业 Prompt 管线、边界关键帧法 ($K_0 \sim K_n$) 与剪映草稿协议导出；<br>3. **智能混剪**：MediaProbe 媒体探针、画幅自适应硬拼接 (Auto-Stitch) 与 5 大原子算子；<br>4. **大盘打标**：7 天滑动窗口 Benchmark 计算 SQL、三重样本门槛与 6 级质量状态机；<br>5. **建广与计费**：Meta/TikTok 批量建广、学习期熔断、算力计费与虚拟钱包预占实扣。 | `platform-creative`, `platform-billing` |
 
 ---
 
-### 第四域：素材自动化生产体系 (Creative Automation Subsystem)
+### 第四域：数据基础设施与多模持久化 (Data, Storage & Schema)
 
 | 文档名称 | 核心内容与阅读指引 | 核心责任模块 |
 |---|---|---|
-| **[`docs/CREATIVE_AUTOMATION_SYSTEM_DESIGN.md`](CREATIVE_AUTOMATION_SYSTEM_DESIGN.md)** | **素材自动化总体架构总纲**：多模型 AI 视频生成、7 阶段长视频流水线、数字人驱动、CapCut 剪映工程草稿微秒级导出、7 日大盘基准打标与算力分账闭环。 | `platform-creative` |
-| **[`docs/creative-automation/README.md`](creative-automation/README.md)** | **素材自动化分册导航索引**：专题深入设计文档目录与架构拓扑。 | `platform-creative` |
-| **[`docs/creative-automation/01-AI_VIDEO_MULTI_MODEL_ENGINE.md`](creative-automation/01-AI_VIDEO_MULTI_MODEL_ENGINE.md)** | **多模型 AI 视频生成引擎**：统一异步任务转译、供应商限流熔断、Java 21 虚拟线程长轮询编排。 | `platform-creative` |
-| **[`docs/creative-automation/02-LONG_VIDEO_STUDIO_PIPELINE.md`](creative-automation/02-LONG_VIDEO_STUDIO_PIPELINE.md)** | **长视频 Studio 工作台**：分镜剧本拆解、6 管线 Prompt 优化、首尾关键帧过渡、CapCut 标准草稿导出。 | `platform-creative` |
-| **[`docs/creative-automation/03-VIDEO_PROCESSING_AND_AUTO_STITCH.md`](creative-automation/03-VIDEO_PROCESSING_AND_AUTO_STITCH.md)** | **视频后处理与混剪**：MediaProbe 媒体嗅探、画幅智能裁切、字幕压制与自适应拼接调度。 | `platform-creative` |
-| **[`docs/creative-automation/04-MATERIAL_QUALITY_TAGGING_AND_BENCHMARK.md`](creative-automation/04-MATERIAL_QUALITY_TAGGING_AND_BENCHMARK.md)** | **质量打标与数仓 ETL**：7 日大盘动态基准线打标（`creative_benchmark_7d`）、高潜素材自动分流。 | `platform-creative` |
-| **[`docs/creative-automation/05-AD_AUTOMATION_AND_LEARNING_PHASE.md`](creative-automation/05-AD_AUTOMATION_AND_LEARNING_PHASE.md)** | **自动化投放与学习期监控**：主流媒体 API 批量建广、冷启动学习期智能监控与自动止损。 | `platform-creative` |
-| **[`docs/creative-automation/06-AI_BILLING_AND_SETTLEMENT.md`](creative-automation/06-AI_BILLING_AND_SETTLEMENT.md)** | **AI 算力计费与分账**：预估冻结、实际扣减、不可变双式记账分录与 AI ROI 商业度量。 | `platform-creative`, `platform-billing` |
-| **[`docs/creative-automation/CREATIVE_AUTOMATION_BOUNDARY_AND_COMPLETENESS_AUDIT.md`](creative-automation/CREATIVE_AUTOMATION_BOUNDARY_AND_COMPLETENESS_AUDIT.md)** | **完备性与边界审查报告**：12 项关键边界问题修复复盘、虚拟线程调度安全与全链路测试验收。 | `platform-creative` |
+| **[`docs/DATABASE_AND_MIGRATION_GUIDE.md`](DATABASE_AND_MIGRATION_GUIDE.md)** | **数据持久化与数据库治理指南**：<br>1. **三级缓存架构**：L1 Caffeine (<1ms) $\rightarrow$ L2 Redis (1~10ms) $\rightarrow$ L3 PostgreSQL，缓存穿透防护与键生成规约；<br>2. **Flyway 演进**：V1~V22 增量迁移脚本与兼容性补列；<br>3. **实体对齐与审计**：88 张核心表与 88 个 MyBatis-Plus 实体 100% 对齐规约，配有 `scripts/audit-entity-schema.mjs` 自动化审计工具；<br>4. **范围分区分表**：PostgreSQL 按月分区表与冷数据定期归档策略。 | `platform-infrastructure`, `platform-common` |
+| **[`docs/sql/`](sql/)** | **模块独立 DDL 脚本库**：包含 `01_platform_tenant.sql` 至 `17_next_gen_olap_and_skan.sql` 等 17 个子模块独立建表与索引脚本，以及本地快速初始化的 `all_modules_schema.sql`。 | `platform-infrastructure` |
 
 ---
 
-### 第五域：数据基础设施与多模持久化 (Data, Storage & Schema)
+### 第五域：运维部署与生产规范 (Operations, Deployment & Frontend)
 
 | 文档名称 | 核心内容与阅读指引 | 核心责任模块 |
 |---|---|---|
-| **[`docs/DATABASE_MIGRATION_GUIDE.md`](DATABASE_MIGRATION_GUIDE.md)** | **数据库接入与多级缓存实施指南**：三级缓存架构（Caffeine + Redis + PostgreSQL）、数据流向、双模回退机制与生产演进规范。 | `platform-infrastructure` |
-| **[`docs/ENTITY_SCHEMA_ALIGNMENT.md`](ENTITY_SCHEMA_ALIGNMENT.md)** | **实体与数据库结构对齐规约**：88 张表与 88 个 MyBatis-Plus 实体 100% 双向匹配规范与 `audit-entity-schema.mjs` 门禁说明。 | `platform-infrastructure` |
-| **`platform-infrastructure/src/main/resources/db/migration/`** | **Flyway 增量迁移脚本集 (V1~V22)**：涵盖基础租户/广告交易、网盟全链路、系统权限配置、素材自动化 12 表、进阶 SKAN/Agent 表、AI 中枢表、V20 流量补量表、V21 索引调优与 V22 范围分区及冷归档表（88 张物理表）。 | `platform-infrastructure` |
+| **[`docs/PRODUCTION_OPERATIONS_AND_DEPLOYMENT_GUIDE.md`](PRODUCTION_OPERATIONS_AND_DEPLOYMENT_GUIDE.md)** | **生产云原生部署与运维实操手册**：<br>1. **双平面物理拓扑**：数据面 (Dataplane, 万级 QPS 热路径) 与控制面 (Controlplane, 批处理管理) 物理分离部署；<br>2. **云原生编排**：Docker 多阶段构建、Kubernetes Ingress 路由、HPA 自动弹性伸缩、PDB 容灾保障；<br>3. **可观测性**：Prometheus 抓取配置、Actuator 三级探针、分布式链路追踪 `X-Trace-Id` 与日志联动；<br>4. **前端运维约定**：Nuxt 3 控制台生产环境变量、API 上下文拦截器、各管理页面写操作约定与发布前检查命令。 | 全系统, `platform-frontend`, `platform-api` |
 
 ---
 
-### 第六域：运维、前端与性能工程 (Operations, Frontend & Benchmark)
+## 🎯 快速上手阅读路径
 
-| 文档名称 | 核心内容与阅读指引 | 核心责任模块 |
-|---|---|---|
-| **[`docs/PRODUCTION_DEPLOYMENT_AND_OPERATIONS_GUIDE.md`](PRODUCTION_DEPLOYMENT_AND_OPERATIONS_GUIDE.md)** | **生产部署与运维操作指南**：数据面（Dataplane，极致低延迟）与控制面（Controlplane，重业务处理）物理隔离部署、Docker Compose、K8s/GitOps 编排、Prometheus 监控探针。 | 全模块, `k8s/` |
-| **[`docs/PERFORMANCE_BENCHMARK_REPORT.md`](PERFORMANCE_BENCHMARK_REPORT.md)** | **端到端高并发压测报告**：k6 万级阶梯压测脚本、实测 152k QPS / P99 2.67ms 延时分布与性能调优要素。 | `perf-tests/` |
-| **[`docs/PRODUCTION_FULL_STACK_OPTIMIZATION_REPORT.md`](PRODUCTION_FULL_STACK_OPTIMIZATION_REPORT.md)** | **生产级架构升级实施总报告**：全模块构建验收、测试覆盖率矩阵与生产演进基准记录。 | 全模块 |
-| **[`docs/FRONTEND_PRODUCTION_GUIDE.md`](FRONTEND_PRODUCTION_GUIDE.md)** | **Vue/Nuxt 3 控制台生产规范**：23 个页面路由契约、多租户 Header 注入、状态管理、生产构建检查清单。 | `platform-frontend` |
-
----
-
-## 🧭 研发人员快速检索路线
-
-```mermaid
-flowchart TD
-    Start([开始使用/开发]) --> Role{你的角色/任务}
-    
-    Role -->|新员工入职 / 全局理解| Path1[1. CONTEXT.md 熟悉词汇<br>2. ARCHITECTURE.md 了解分层<br>3. 根目录 README.md 启动工程]
-    Role -->|网盟业务 / 追踪开发| Path2[1. AFFILIATE_BUSINESS_REQUIREMENTS.md 业务逻辑<br>2. AFFILIATE_TECHNICAL_DESIGN.md 架构设计<br>3. AFFILIATE_API_INTEGRATION_GUIDE.md 接口定义]
-    Role -->|素材自动化 / AI Studio| Path3[1. CREATIVE_AUTOMATION_SYSTEM_DESIGN.md 总体设计<br>2. docs/creative-automation/01~06 专题方案]
-    Role -->|前端开发 (Nuxt 3)| Path4[1. FRONTEND_PRODUCTION_GUIDE.md 约定<br>2. platform-frontend/pages/ 业务页面]
-    Role -->|数据库修改 / 新增实体| Path5[1. V20 增量 Flyway SQL<br>2. platform-infrastructure 增加 Entity/Mapper<br>3. 运行 node scripts/audit-entity-schema.mjs 校验]
-    Role -->|生产发布 / 运维调优| Path6[1. PRODUCTION_DEPLOYMENT_AND_OPERATIONS_GUIDE.md<br>2. PERFORMANCE_BENCHMARK_REPORT.md]
-```
+- **新开发者入职**：阅读 [`CONTEXT.md`](../CONTEXT.md) $\rightarrow$ [`docs/ARCHITECTURE.md`](ARCHITECTURE.md) $\rightarrow$ [`docs/AFFILIATE_BUSINESS_AND_SYSTEM_MANUAL.md`](AFFILIATE_BUSINESS_AND_SYSTEM_MANUAL.md)；
+- **第三方客户/推手对接**：阅读 [`docs/AFFILIATE_API_INTEGRATION_GUIDE.md`](AFFILIATE_API_INTEGRATION_GUIDE.md)；
+- **AI 创意算法与多媒体开发**：阅读 [`docs/CREATIVE_AUTOMATION_SYSTEM_GUIDE.md`](CREATIVE_AUTOMATION_SYSTEM_GUIDE.md)；
+- **DBA 与数仓建模人员**：阅读 [`docs/DATABASE_AND_MIGRATION_GUIDE.md`](DATABASE_AND_MIGRATION_GUIDE.md) 及 [`docs/sql/`](sql/)；
+- **SRE 与 DevOps 运维人员**：阅读 [`docs/PRODUCTION_OPERATIONS_AND_DEPLOYMENT_GUIDE.md`](PRODUCTION_OPERATIONS_AND_DEPLOYMENT_GUIDE.md)。

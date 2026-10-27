@@ -1233,6 +1233,32 @@ Enter test values and click "Send Test Postback" to fire a test notification to 
 
 ---
 
+## 11. Multi-Platform Connectors API (DSP & SSP Ecosystem)
+
+The platform provides unified S2S and reporting integration across major global ad platforms and media monetization networks:
+
+### 11.1 Demand-Side Ad Connectors (`/api/v1/ad-platforms/*`)
+Supported platforms: `GOOGLE_ADS` (or `google`), `TIKTOK` (or `tt`), `FACEBOOK` (or `meta`, `fb`).
+
+- **Trigger Sync**: `POST /api/v1/ad-platforms/{platform}/sync`
+  - Body: `{"accountId":"123-456-7890","accessToken":"..."}`
+- **Query Performance Report**: `GET /api/v1/ad-platforms/{platform}/performance?accountId=...&date=YYYY-MM-DD`
+- **S2S CAPI Conversion Upload**: `POST /api/v1/ad-platforms/{platform}/conversions`
+  - Supports Google Enhanced Conversions, Meta Conversions API (CAPI), and TikTok Events API with SHA-256 hashed emails/phones and click IDs (`gclid`, `fbclid`, `ttclid`).
+- **OAuth 2.0 Flow**:
+  - `GET /api/v1/ad-platforms/{platform}/oauth/authorize`
+  - `GET /api/v1/ad-platforms/{platform}/oauth/callback`
+
+### 11.2 Supply-Side Media Connectors (`/api/v1/media-platforms/*`)
+Supported networks: `GAM` (Google Ad Manager / AdMob), `PANGLE` (TikTok Pangle), `AUDIENCE_NETWORK` (Meta Audience Network / FAN).
+
+- **List Supported Networks**: `GET /api/v1/media-platforms`
+- **Trigger Inventory Sync**: `POST /api/v1/media-platforms/{network}/sync`
+  - Body: `{"appId":"...","networkCode":"...","apiToken":"..."}`
+- **Query Monetization Performance**: `GET /api/v1/media-platforms/{network}/performance?accountId=...&date=YYYY-MM-DD`
+
+---
+
 ## Support
 
 - **Documentation**: https://docs.yournetwork.com

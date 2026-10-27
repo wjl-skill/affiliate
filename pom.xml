@@ -25,7 +25,7 @@
         <module>platform-infrastructure</module><module>platform-auth</module><module>platform-tenant</module><module>platform-event</module>
         <module>platform-budget</module><module>platform-creative</module><module>platform-ssp</module><module>platform-dsp</module>
         <module>platform-dmp</module><module>platform-cdp</module>
-        <module>platform-adx</module><module>platform-google-ads</module><module>platform-google-gam</module><module>platform-billing</module>
+        <module>platform-adx</module><module>platform-ad-connectors</module><module>platform-media-connectors</module><module>platform-billing</module>
         <module>platform-reporting</module><module>platform-affiliate</module><module>platform-ai</module><module>platform-api</module>
         <module>platform-app-tracker</module><module>platform-app-rtb</module><module>platform-app-admin</module><module>platform-app-worker</module>
     </modules>
