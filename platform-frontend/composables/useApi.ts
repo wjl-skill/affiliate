@@ -3,13 +3,20 @@
  * 自动注入当前租户空间与后端地址，统一解析后端错误体并向外抛出可展示的错误信息。
  * 调用失败时始终抛出异常，由页面决定提示与空态展示（不存在演示数据兜底）。
  */
+import { ref, type Ref } from 'vue'
+
 let sharedTenantRef: Ref<string> | null = null
 
 export function useApi() {
   const config = useRuntimeConfig()
   if (!sharedTenantRef) {
-    // 模块级单例：布局中切换租户后，所有页面的请求头同步生效
-    sharedTenantRef = ref(config.public.tenantId || 'tenant-1')
+    let savedTenant = ''
+    try {
+      if (typeof window !== 'undefined' && window.localStorage) {
+        savedTenant = localStorage.getItem('aff_tenant') || ''
+      }
+    } catch { /* 隐私模式 */ }
+    sharedTenantRef = ref(savedTenant || config.public.tenantId || 'tenant-1')
   }
   const currentTenant = sharedTenantRef
 
@@ -34,7 +41,7 @@ export function useApi() {
       if (status === 401 && !url.startsWith('/api/v1/auth/')) {
         // 令牌失效：清理本地登录态并跳转登录页（保留当前路径供登录后回跳）
         clearAuth()
-        if (import.meta.client && window.location.pathname !== '/login') {
+        if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
           const redirect = encodeURIComponent(window.location.pathname + window.location.search)
           window.location.href = `/login?redirect=${redirect}`
         }

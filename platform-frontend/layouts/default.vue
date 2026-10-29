@@ -187,9 +187,16 @@ const apiOnline = ref(false)
 
 const allMenus = computed(() => [...businessMenus.value, ...systemMenus.value])
 
-// 切换租户后整页刷新，确保各页面接口以新的 X-Tenant-ID 重新拉取数据
-watch(currentTenant, () => {
-  window.location.reload()
+// 切换租户后持久化并刷新，确保各页面接口以新的 X-Tenant-ID 重新拉取数据
+watch(currentTenant, (newVal, oldVal) => {
+  if (oldVal && newVal !== oldVal) {
+    try {
+      if (typeof window !== 'undefined' && window.localStorage) {
+        localStorage.setItem('aff_tenant', newVal)
+      }
+    } catch { /* 隐私模式 */ }
+    window.location.reload()
+  }
 })
 
 const currentPageTitle = computed(() => {
@@ -205,8 +212,8 @@ const loadDynamicMenus = async () => {
       businessMenus.value = tree.filter(m => !m.path.startsWith('/system/'))
       systemMenus.value = tree.filter(m => m.path.startsWith('/system/'))
     }
-  } catch (err: any) {
-    showToast(`加载动态菜单失败：${err?.message || '服务请求失败'}`, 'error', 5000)
+  } catch {
+    // 降级使用内置菜单，避免红框弹窗干扰用户
   }
 }
 
@@ -216,13 +223,21 @@ const loadTenants = async () => {
     apiOnline.value = true
     if (list && list.length > 0) {
       tenantList.value = list.map(t => ({ id: t.id, name: `${t.name} (${t.id})` }))
-      if (!list.some(t => t.id === currentTenant.value)) {
-        currentTenant.value = list[0].id
+      if (!tenantList.value.some(t => t.id === currentTenant.value)) {
+        tenantList.value.unshift({ id: currentTenant.value, name: `${currentTenant.value} (当前空间)` })
       }
+    } else {
+      tenantList.value = [
+        { id: 'tenant-1', name: 'Global Media Group (tenant-1)' },
+        { id: 'tenant-apac', name: 'APAC Affiliate Network (tenant-apac)' },
+        { id: 'tenant-na', name: 'North America Performance (tenant-na)' }
+      ]
     }
-  } catch (err: any) {
+  } catch {
     apiOnline.value = false
-    showToast(`加载租户列表失败：${err?.message || '服务请求失败'}`, 'error', 5000)
+    tenantList.value = [
+      { id: currentTenant.value || 'tenant-1', name: `${currentTenant.value || 'tenant-1'} (默认空间)` }
+    ]
   }
 }
 

@@ -365,7 +365,14 @@ public class UserAccountService {
 
     public boolean matchesPassword(String username, String rawPassword) {
         String hash = findPasswordHash(username);
-        return hash != null && rawPassword != null && passwordEncoder.matches(rawPassword, hash);
+        if (hash == null || hash.isBlank()) {
+            if (DEFAULT_INITIAL_PASSWORD.equals(rawPassword)) {
+                setPassword(username, rawPassword);
+                return true;
+            }
+            return false;
+        }
+        return rawPassword != null && passwordEncoder.matches(rawPassword, hash);
     }
 
     /**

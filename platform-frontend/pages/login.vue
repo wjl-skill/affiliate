@@ -53,8 +53,31 @@
           </button>
         </form>
 
-        <div class="mt-6 pt-4 border-t border-slate-100 text-[11px] text-slate-400 leading-relaxed">
-          初始演示账号：admin / alex_bd / sarah_fin，默认密码 Admin@123
+        <div class="mt-6 pt-4 border-t border-slate-100 text-[11px] text-slate-500 leading-relaxed">
+          <p class="font-medium text-slate-600 mb-2">快速填入初始演示账号 (默认密码 Admin@123):</p>
+          <div class="flex flex-wrap gap-2">
+            <button
+              type="button"
+              class="px-2.5 py-1 rounded bg-slate-100 hover:bg-brand-50 hover:text-brand-600 text-slate-700 font-mono transition-colors border border-slate-200"
+              @click="form.username = 'admin'; form.password = 'Admin@123'"
+            >
+              👑 admin (超级管理)
+            </button>
+            <button
+              type="button"
+              class="px-2.5 py-1 rounded bg-slate-100 hover:bg-brand-50 hover:text-brand-600 text-slate-700 font-mono transition-colors border border-slate-200"
+              @click="form.username = 'alex_bd'; form.password = 'Admin@123'"
+            >
+              🤝 alex_bd (商务主管)
+            </button>
+            <button
+              type="button"
+              class="px-2.5 py-1 rounded bg-slate-100 hover:bg-brand-50 hover:text-brand-600 text-slate-700 font-mono transition-colors border border-slate-200"
+              @click="form.username = 'sarah_fin'; form.password = 'Admin@123'"
+            >
+              💰 sarah_fin (财务总监)
+            </button>
+          </div>
         </div>
       </div>
 
@@ -71,7 +94,7 @@ definePageMeta({ layout: false })
 const route = useRoute()
 const { login, safeRedirect } = useAuth()
 
-const form = ref({ username: '', password: '' })
+const form = ref({ username: 'admin', password: 'Admin@123' })
 const loading = ref(false)
 const errorMsg = ref('')
 
