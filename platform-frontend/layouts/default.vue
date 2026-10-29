@@ -143,12 +143,16 @@ const handleLogout = async () => {
 // 本地导航配置：接口不可用时保证侧边栏可正常浏览（数据页面均会展示真实错误空态）
 const defaultBusinessMenus = [
   { id: 'm-dash', title: '监控大盘', path: '/', icon: '📊' },
+  { id: 'm-live', title: '实时动态大屏', path: '/monitoring/live', icon: '⚡' },
   { id: 'm-off', title: 'Offer 推广计划', path: '/offers', icon: '🎯' },
+  { id: 'm-supp', title: 'Offer 流量补量', path: '/offers/supplement', icon: '🚀' },
   { id: 'm-smart', title: 'SmartLink 分流', path: '/smartlinks', icon: '⚡' },
   { id: 'm-aff', title: '渠道客管理', path: '/affiliates', icon: '🤝' },
   { id: 'm-conv', title: '转化与 S2S 归因', path: '/conversions', icon: '🔄' },
+  { id: 'm-skan', title: 'SKAN 隐私归因', path: '/analytics/skan', icon: '🍎' },
   { id: 'm-fraud', title: '4D反作弊风控', path: '/affiliate/anti-fraud', icon: '🛡️' },
   { id: 'm-fin', title: '财务出账结算', path: '/finance', icon: '💰' },
+  { id: 'm-ledger', title: '复式记账明细', path: '/finance/ledger', icon: '⚖️' },
   { id: 'm-payout', title: '批量打款与结汇', path: '/billing/payouts', icon: '💳' },
   { id: 'm-rep', title: 'Sub-ID 多维报表', path: '/analytics', icon: '📈' },
   { id: 'm-cohort', title: 'Cohort留存与LTV', path: '/analytics/cohort', icon: '🧬' },
@@ -165,7 +169,8 @@ const defaultSystemMenus = [
   { id: 'm-perm', title: '权限字典', path: '/system/permissions', icon: '🔑' },
   { id: 'm-s3', title: 'S3 存储配置', path: '/system/s3', icon: '🗄️' },
   { id: 'm-dom', title: '域名池管理', path: '/system/domains', icon: '🌐' },
-  { id: 'm-ai', title: 'AI 模型配置', path: '/system/ai', icon: '🤖' }
+  { id: 'm-ai', title: 'AI 模型配置', path: '/system/ai', icon: '🤖' },
+  { id: 'm-outbox', title: '发件箱死信重放', path: '/system/outbox', icon: '📬' }
 ]
 
 const businessMenus = ref<any[]>(defaultBusinessMenus)

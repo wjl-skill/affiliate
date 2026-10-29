@@ -56,29 +56,34 @@ public class MenuManagementService {
 
     private List<SysMenu> buildDefaultMenuDefinitions() {
         return List.of(
-                // 业务中心菜单 (1-14)
+                // 业务中心菜单 (1-18)
                 new SysMenu("menu-dashboard", "0", "监控大盘", "📊", "/", "pages/index.vue", null, 1, true, SysMenu.Status.ACTIVE),
-                new SysMenu("menu-offers", "0", "Offer 推广计划", "🎯", "/offers", "pages/offers/index.vue", "offer:read", 2, true, SysMenu.Status.ACTIVE),
-                new SysMenu("menu-smartlinks", "0", "SmartLink 分流", "⚡", "/smartlinks", "pages/smartlinks/index.vue", "smartlink:manage", 3, true, SysMenu.Status.ACTIVE),
-                new SysMenu("menu-affiliates", "0", "渠道客管理", "🤝", "/affiliates", "pages/affiliates/index.vue", "affiliate:read", 4, true, SysMenu.Status.ACTIVE),
-                new SysMenu("menu-conversions", "0", "转化与 S2S 归因", "🔄", "/conversions", "pages/conversions/index.vue", "conversion:audit", 5, true, SysMenu.Status.ACTIVE),
-                new SysMenu("menu-antifraud", "0", "4D反作弊风控", "🛡️", "/affiliate/anti-fraud", "pages/affiliate/anti-fraud.vue", "affiliate:antifraud:read", 6, true, SysMenu.Status.ACTIVE),
-                new SysMenu("menu-finance", "0", "财务出账结算", "💰", "/finance", "pages/finance/index.vue", "finance:settle", 7, true, SysMenu.Status.ACTIVE),
-                new SysMenu("menu-payouts", "0", "批量打款与结汇", "💳", "/billing/payouts", "pages/billing/payouts.vue", "finance:settle", 8, true, SysMenu.Status.ACTIVE),
-                new SysMenu("menu-analytics", "0", "Sub-ID 多维报表", "📈", "/analytics", "pages/analytics/index.vue", "report:analytics", 9, true, SysMenu.Status.ACTIVE),
-                new SysMenu("menu-cohort", "0", "Cohort留存与LTV", "🧬", "/analytics/cohort", "pages/analytics/cohort.vue", "report:analytics", 10, true, SysMenu.Status.ACTIVE),
+                new SysMenu("menu-live-monitor", "0", "实时动态大屏", "⚡", "/monitoring/live", "pages/monitoring/live.vue", "report:analytics", 2, true, SysMenu.Status.ACTIVE),
+                new SysMenu("menu-offers", "0", "Offer 推广计划", "🎯", "/offers", "pages/offers/index.vue", "offer:read", 3, true, SysMenu.Status.ACTIVE),
+                new SysMenu("menu-supplement", "0", "Offer 流量补量", "🚀", "/offers/supplement", "pages/offers/supplement.vue", "offer:manage", 4, true, SysMenu.Status.ACTIVE),
+                new SysMenu("menu-smartlinks", "0", "SmartLink 分流", "⚡", "/smartlinks", "pages/smartlinks/index.vue", "smartlink:manage", 5, true, SysMenu.Status.ACTIVE),
+                new SysMenu("menu-affiliates", "0", "渠道客管理", "🤝", "/affiliates", "pages/affiliates/index.vue", "affiliate:read", 6, true, SysMenu.Status.ACTIVE),
+                new SysMenu("menu-conversions", "0", "转化与 S2S 归因", "🔄", "/conversions", "pages/conversions/index.vue", "conversion:audit", 7, true, SysMenu.Status.ACTIVE),
+                new SysMenu("menu-skan", "0", "SKAN 隐私归因", "🍎", "/analytics/skan", "pages/analytics/skan.vue", "conversion:audit", 8, true, SysMenu.Status.ACTIVE),
+                new SysMenu("menu-antifraud", "0", "4D反作弊风控", "🛡️", "/affiliate/anti-fraud", "pages/affiliate/anti-fraud.vue", "affiliate:antifraud:read", 9, true, SysMenu.Status.ACTIVE),
+                new SysMenu("menu-finance", "0", "财务出账结算", "💰", "/finance", "pages/finance/index.vue", "finance:settle", 10, true, SysMenu.Status.ACTIVE),
+                new SysMenu("menu-ledger", "0", "复式记账明细", "⚖️", "/finance/ledger", "pages/finance/ledger.vue", "finance:settle", 11, true, SysMenu.Status.ACTIVE),
+                new SysMenu("menu-payouts", "0", "批量打款与结汇", "💳", "/billing/payouts", "pages/billing/payouts.vue", "finance:settle", 12, true, SysMenu.Status.ACTIVE),
+                new SysMenu("menu-analytics", "0", "Sub-ID 多维报表", "📈", "/analytics", "pages/analytics/index.vue", "report:analytics", 13, true, SysMenu.Status.ACTIVE),
+                new SysMenu("menu-cohort", "0", "Cohort留存与LTV", "🧬", "/analytics/cohort", "pages/analytics/cohort.vue", "report:analytics", 14, true, SysMenu.Status.ACTIVE),
                 buildMacrosMenu(),
-                new SysMenu("menu-adx-deals", "0", "ADX 私有交易 (PMP)", "🏛️", "/adx/deals", "pages/adx/deals.vue", "adx:deal:manage", 12, true, SysMenu.Status.ACTIVE),
-                new SysMenu("menu-dsp-campaigns", "0", "DSP 预算与控频", "🎯", "/dsp/campaigns", "pages/dsp/campaigns.vue", "dsp:campaign:manage", 13, true, SysMenu.Status.ACTIVE),
-                new SysMenu("menu-creative-studio", "0", "AI 创意与智能混剪", "🎬", "/creative/studio", "pages/creative/studio.vue", "creative:studio:manage", 14, true, SysMenu.Status.ACTIVE),
-                // 系统管理中心菜单 (20-26)
+                new SysMenu("menu-adx-deals", "0", "ADX 私有交易 (PMP)", "🏛️", "/adx/deals", "pages/adx/deals.vue", "adx:deal:manage", 16, true, SysMenu.Status.ACTIVE),
+                new SysMenu("menu-dsp-campaigns", "0", "DSP 预算与控频", "🎯", "/dsp/campaigns", "pages/dsp/campaigns.vue", "dsp:campaign:manage", 17, true, SysMenu.Status.ACTIVE),
+                new SysMenu("menu-creative-studio", "0", "AI 创意与智能混剪", "🎬", "/creative/studio", "pages/creative/studio.vue", "creative:studio:manage", 18, true, SysMenu.Status.ACTIVE),
+                // 系统管理中心菜单 (20-27)
                 new SysMenu("menu-sys-users", "0", "用户管理", "👥", "/system/users", "pages/system/users.vue", "system:user:read", 20, true, SysMenu.Status.ACTIVE),
                 new SysMenu("menu-sys-roles", "0", "角色管理", "🛡️", "/system/roles", "pages/system/roles.vue", "system:role:read", 21, true, SysMenu.Status.ACTIVE),
                 new SysMenu("menu-sys-menus", "0", "菜单管理", "📑", "/system/menus", "pages/system/menus.vue", "system:menu:manage", 22, true, SysMenu.Status.ACTIVE),
                 new SysMenu("menu-sys-perms", "0", "权限字典", "🔑", "/system/permissions", "pages/system/permissions.vue", "system:role:read", 23, true, SysMenu.Status.ACTIVE),
                 new SysMenu("menu-sys-s3", "0", "S3 存储配置", "🗄️", "/system/s3", "pages/system/s3.vue", "system:s3:read", 24, true, SysMenu.Status.ACTIVE),
                 new SysMenu("menu-sys-domains", "0", "域名池管理", "🌐", "/system/domains", "pages/system/domains.vue", "system:domain:read", 25, true, SysMenu.Status.ACTIVE),
-                buildAiMenu()
+                buildAiMenu(),
+                new SysMenu("menu-sys-outbox", "0", "发件箱死信重放", "📬", "/system/outbox", "pages/system/outbox.vue", "system:config:manage", 27, true, SysMenu.Status.ACTIVE)
         );
     }
 
@@ -89,7 +94,7 @@ public class MenuManagementService {
 
     private SysMenu buildMacrosMenu() {
         return new SysMenu("menu-macros", "0", "宏参数与映射", "🧩", "/affiliate/macros",
-                "pages/affiliate/macros.vue", "affiliate:macro:manage", 11, true, SysMenu.Status.ACTIVE);
+                "pages/affiliate/macros.vue", "affiliate:macro:manage", 15, true, SysMenu.Status.ACTIVE);
     }
 
     public SysMenu save(SysMenu menu) {
