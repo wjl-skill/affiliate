@@ -227,16 +227,12 @@ const loadTenants = async () => {
         tenantList.value.unshift({ id: currentTenant.value, name: `${currentTenant.value} (当前空间)` })
       }
     } else {
-      tenantList.value = [
-        { id: 'tenant-1', name: 'Global Media Group (tenant-1)' },
-        { id: 'tenant-apac', name: 'APAC Affiliate Network (tenant-apac)' },
-        { id: 'tenant-na', name: 'North America Performance (tenant-na)' }
-      ]
+      tenantList.value = [{ id: currentTenant.value || 'tenant-1', name: currentTenant.value || 'tenant-1' }]
     }
   } catch {
     apiOnline.value = false
     tenantList.value = [
-      { id: currentTenant.value || 'tenant-1', name: `${currentTenant.value || 'tenant-1'} (默认空间)` }
+      { id: currentTenant.value || 'tenant-1', name: currentTenant.value || 'tenant-1' }
     ]
   }
 }

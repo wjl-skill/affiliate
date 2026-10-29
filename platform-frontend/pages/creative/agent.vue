@@ -332,41 +332,14 @@ const loadData = async () => {
 
     // 2. 获取自治动作列表
     const res = await fetchApi<any[]>('/api/v1/creative/agent/actions')
-    if (res && Array.isArray(res) && res.length > 0) {
-      actions.value = res
-    } else {
-      actions.value = generateMockActions()
-    }
+    actions.value = Array.isArray(res) ? res : []
   } catch (err: any) {
-    showToast(`获取自治巡检列表失败: ${err.message || '网络异常'}`, 'warning')
-    actions.value = generateMockActions()
+    showToast(`获取自治巡检列表失败: ${err.message || '网络异常'}`, 'error')
+    actions.value = []
   } finally {
     loading.value = false
   }
 }
-
-const generateMockActions = () => [
-  {
-    actionId: 'act-agent-908123',
-    materialId: 'mat_rpg_hero_0921',
-    refinedOpeningHook: '你以为这是普通卡牌？开箱直接爆出全服唯一金色巨龙！',
-    refinedCta: '点击立即领取首发百连抽礼包，战力直接破千万！',
-    status: 'COMPLETED',
-    newProjectId: 'proj_remix_9081',
-    capCutDraftPath: 'capcut_draft_hero_v2.json',
-    createdAt: new Date().toISOString()
-  },
-  {
-    actionId: 'act-agent-807012',
-    materialId: 'mat_slg_city_0811',
-    refinedOpeningHook: '警报！敌军只剩10秒攻破主城，极限反打召集百万弓手！',
-    refinedCta: '建立你的专属帝国，限时上线免费体验！',
-    status: 'COMPLETED',
-    newProjectId: 'proj_remix_8070',
-    capCutDraftPath: 'capcut_draft_slg_v3.json',
-    createdAt: new Date(Date.now() - 3600000 * 2).toISOString()
-  }
-]
 
 const submitTriggerAgent = async () => {
   triggering.value = true
@@ -384,41 +357,20 @@ const submitTriggerAgent = async () => {
       method: 'POST',
       body: payload
     })
-    latestResult.value = res || {
-      actionId: `act-${Date.now().toString(36)}`,
-      materialId: payload.materialId,
-      refinedOpeningHook: '强视觉冲击悬念：0氪玩家开局爆出UR神宠，全场震惊！',
-      refinedCta: '点击下方直通游戏内神秘宝库，免费带走十万元宝！',
-      newProjectId: `proj_${Date.now().toString(36)}`,
-      capcutDraftPath: 'capcut_draft_refined.json'
+    if (res) {
+      latestResult.value = res
+      actions.value.unshift({
+        actionId: res.actionId,
+        materialId: payload.materialId,
+        refinedOpeningHook: res.refinedOpeningHook,
+        refinedCta: res.refinedCta,
+        status: res.status || 'COMPLETED',
+        createdAt: new Date().toISOString()
+      })
+      showToast(`AI 自治 Agent 调优重构完成！已派生剪映草稿工程`, 'success')
     }
-    actions.value.unshift({
-      actionId: latestResult.value.actionId,
-      materialId: payload.materialId,
-      refinedOpeningHook: latestResult.value.refinedOpeningHook,
-      refinedCta: latestResult.value.refinedCta,
-      status: 'COMPLETED',
-      createdAt: new Date().toISOString()
-    })
-    showToast(`AI 自治 Agent 调优重构完成！已派生剪映草稿工程`, 'success')
   } catch (err: any) {
-    latestResult.value = {
-      actionId: `act-${Date.now().toString(36)}`,
-      materialId: triggerForm.value.materialId,
-      refinedOpeningHook: '【爆款重塑Hook】：开局只有一把生锈铁剑，通关试炼瞬间觉醒神级龙魂！',
-      refinedCta: '点击即刻踏上封神征途，限时登录礼包先到先得！',
-      newProjectId: `proj_${Date.now().toString(36)}`,
-      capcutDraftPath: 'capcut_draft_refined.json'
-    }
-    actions.value.unshift({
-      actionId: latestResult.value.actionId,
-      materialId: triggerForm.value.materialId,
-      refinedOpeningHook: latestResult.value.refinedOpeningHook,
-      refinedCta: latestResult.value.refinedCta,
-      status: 'COMPLETED',
-      createdAt: new Date().toISOString()
-    })
-    showToast(`AI 自治 Agent 调优完成 (演示模式)`, 'success')
+    showToast(`AI 自治 Agent 调优请求失败: ${err.message || '接口调用异常'}`, 'error')
   } finally {
     triggering.value = false
   }

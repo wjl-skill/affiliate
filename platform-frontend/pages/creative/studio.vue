@@ -197,7 +197,7 @@
               <select v-model="createForm.adType" class="w-full border border-slate-300 rounded-lg p-2.5 bg-white focus:ring-1 focus:ring-indigo-500 font-semibold">
                 <option value="COMMERCE_UNBOXING">跨境电商开箱带货</option>
                 <option value="SKINCARE_HERO">美妆护肤功效种草</option>
-                <option value="APP_PROMO">应用/SaaS 实操演示</option>
+                <option value="APP_PROMO">应用/SaaS 产品功能实操展示</option>
                 <option value="MINI_DRAMA">短剧反转高光集锦</option>
               </select>
             </div>
@@ -343,15 +343,13 @@ const loadAgentActions = async () => {
 
 const loadModels = async () => {
   try {
-    const models = await fetchApi<any[]>('/api/v1/creative/ai/models') || []
-    aiModels.value = models
-  } catch (err: any) {
-    aiModels.value = [
-      { modelCode: 'ark_seedance_2_0', displayName: 'Seedance 2.0' },
-      { modelCode: 'dashscope_wan_2_1', displayName: 'Wan 2.1' },
-      { modelCode: 'kling_v1', displayName: 'Kling v1' },
-      { modelCode: 'local_mock_video', displayName: 'Local Mock' }
-    ]
+    const models = await fetchApi<any[]>('/api/v1/creative/ai/models')
+    aiModels.value = Array.isArray(models) ? models.map(m => ({
+      modelCode: m.modelCode,
+      displayName: m.modelName || m.displayName || m.modelCode
+    })) : []
+  } catch {
+    aiModels.value = []
   }
 }
 

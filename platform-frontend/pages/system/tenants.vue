@@ -272,10 +272,7 @@ const toggleTenantStatus = async (row: any) => {
     row.active = nextActive
     showToast(`租户 [${row.name}] 状态已变更为: ${nextActive ? '正常激活' : '已冻结'}`, 'success')
   } catch (err: any) {
-    // 离线交互响应
-    row.status = nextActive ? 'ACTIVE' : 'SUSPENDED'
-    row.active = nextActive
-    showToast(`租户状态已变更: ${nextActive ? '激活' : '冻结'} (演示回显)`, 'info')
+    showToast(`租户状态变更失败: ${err.message || '网络或接口异常'}`, 'error')
   } finally {
     togglingId.value = null
   }
@@ -299,17 +296,7 @@ const submitCreateTenant = async () => {
     showCreateModal.value = false
     createForm.value = { id: '', name: '', status: 'ACTIVE' }
   } catch (err: any) {
-    // 离线交互响应
-    const fallback = {
-      id: createForm.value.id.trim(),
-      name: createForm.value.name.trim(),
-      status: createForm.value.status,
-      createdAt: new Date().toISOString()
-    }
-    tenants.value.unshift(fallback)
-    showToast(`新租户 [${fallback.name}] 创建完成 (演示模式)`, 'success')
-    showCreateModal.value = false
-    createForm.value = { id: '', name: '', status: 'ACTIVE' }
+    showToast(`创建租户失败: ${err.message || '接口调用异常'}`, 'error')
   } finally {
     creating.value = false
   }

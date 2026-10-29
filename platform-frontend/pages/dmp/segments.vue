@@ -358,51 +358,14 @@ const loadSegments = async () => {
   loading.value = true
   try {
     const res = await fetchApi<any[]>('/api/v1/dmp/segments')
-    if (res && Array.isArray(res) && res.length > 0) {
-      segments.value = res
-    } else {
-      segments.value = generateMockSegments()
-    }
+    segments.value = Array.isArray(res) ? res : []
   } catch (err: any) {
-    showToast(`获取受众分群列表失败: ${err.message || '网络异常'}`, 'warning')
-    segments.value = generateMockSegments()
+    showToast(`获取受众分群列表失败: ${err.message || '网络异常'}`, 'error')
+    segments.value = []
   } finally {
     loading.value = false
   }
 }
-
-const generateMockSegments = () => [
-  {
-    id: 'seg-lookalike-high-ltv',
-    name: 'Top 1% 高 LTV 转化相似种子受众',
-    source: 'LOOKALIKE',
-    taxonomy: ['finance/crypto', 'games/midcore'],
-    expiresAt: new Date(Date.now() + 86400000 * 30).toISOString(),
-    memberCount: 452800,
-    status: 'ACTIVE',
-    createdAt: new Date().toISOString()
-  },
-  {
-    id: 'seg-3p-ecommerce-buyers',
-    name: '近30天跨境电商高频购买者 (3P Data)',
-    source: 'THIRD_PARTY',
-    taxonomy: ['shopping/apparel', 'shopping/electronics'],
-    expiresAt: new Date(Date.now() + 86400000 * 45).toISOString(),
-    memberCount: 1289000,
-    status: 'ACTIVE',
-    createdAt: new Date().toISOString()
-  },
-  {
-    id: 'seg-2p-gamers-pangle',
-    name: 'Pangle 媒体重度网游玩家置换',
-    source: 'SECOND_PARTY',
-    taxonomy: ['gaming/rpg', 'gaming/action'],
-    expiresAt: new Date(Date.now() + 86400000 * 15).toISOString(),
-    memberCount: 890400,
-    status: 'ACTIVE',
-    createdAt: new Date().toISOString()
-  }
-]
 
 const toggleActive = async (row: any) => {
   const nextActive = row.status !== 'ACTIVE'
@@ -414,8 +377,7 @@ const toggleActive = async (row: any) => {
     row.status = updated?.status || (nextActive ? 'ACTIVE' : 'ARCHIVED')
     showToast(`分群状态已切换为: ${nextActive ? '正常生效' : '已冻结'}`, 'success')
   } catch (err: any) {
-    row.status = nextActive ? 'ACTIVE' : 'ARCHIVED'
-    showToast(`分群状态已切换为: ${nextActive ? '正常生效' : '已冻结'} (演示模式)`, 'info')
+    showToast(`分群状态切换失败: ${err.message || '接口调用异常'}`, 'error')
   }
 }
 
@@ -438,9 +400,7 @@ const submitImportMembers = async () => {
     showToast(`成功向分群导入 ${tokens.length} 台匿名设备！`, 'success')
     showImportModal.value = false
   } catch (err: any) {
-    selectedSegment.value.memberCount += tokens.length
-    showToast(`成功导入 ${tokens.length} 台匿名设备 (演示模式)`, 'success')
-    showImportModal.value = false
+    showToast(`导入匿名设备失败: ${err.message || '接口调用异常'}`, 'error')
   } finally {
     importing.value = false
   }
@@ -452,7 +412,6 @@ const runProbe = async () => {
   const startTime = Date.now()
   const target = probeInput.value.trim()
   try {
-    // 探测当前已激活的分群
     const activeSegs = segments.value.filter(s => s.status === 'ACTIVE')
     const matched = []
     for (const seg of activeSegs) {
@@ -460,23 +419,20 @@ const runProbe = async () => {
         const has = await fetchApi<boolean>(`/api/v1/dmp/segments/${seg.id}/contains?anonymousId=${encodeURIComponent(target)}`)
         if (has) matched.push(seg)
       } catch {
-        // 演示模式随机命中
+        // 单个分群校验无匹配或异常
       }
-    }
-    if (matched.length === 0 && activeSegs.length > 0) {
-      // 演示时若无真实后端则命中最优的一个分群
-      matched.push(activeSegs[0])
     }
     probeResult.value = {
       target,
-      latencyMs: Date.now() - startTime + 12,
+      latencyMs: Math.max(1, Date.now() - startTime),
       matchedSegments: matched
     }
   } catch (err: any) {
+    showToast(`画像探测请求失败: ${err.message || '接口调用异常'}`, 'error')
     probeResult.value = {
       target,
-      latencyMs: 15,
-      matchedSegments: segments.value.slice(0, 1)
+      latencyMs: Math.max(1, Date.now() - startTime),
+      matchedSegments: []
     }
   } finally {
     probing.value = false
@@ -506,20 +462,7 @@ const submitCreateSegment = async () => {
     showCreateModal.value = false
     createForm.value = { name: '', source: 'LOOKALIKE', validDays: 30, taxonomyStr: '' }
   } catch (err: any) {
-    const tags = createForm.value.taxonomyStr.split(',').map(t => t.trim()).filter(Boolean)
-    const fallback = {
-      id: `seg-${Date.now().toString(36)}`,
-      name: createForm.value.name.trim(),
-      source: createForm.value.source,
-      taxonomy: tags,
-      expiresAt: new Date(Date.now() + 86400000 * 30).toISOString(),
-      memberCount: 0,
-      status: 'ACTIVE',
-      createdAt: new Date().toISOString()
-    }
-    segments.value.unshift(fallback)
-    showToast(`新受众分群 [${fallback.name}] 创建成功 (演示模式)`, 'success')
-    showCreateModal.value = false
+    showToast(`创建受众分群失败: ${err.message || '接口调用异常'}`, 'error')
   } finally {
     creating.value = false
   }

@@ -377,83 +377,70 @@ const loadConnections = async () => {
   loading.value = true
   try {
     const res = await fetchApi<any[]>('/api/v1/partners')
-    if (res && Array.isArray(res) && res.length > 0) {
-      connections.value = res
-    } else {
-      connections.value = generateMockConnections()
-    }
+    connections.value = Array.isArray(res) ? res : []
   } catch (err: any) {
-    showToast(`获取连接器列表失败: ${err.message || '网络异常'}`, 'warning')
-    connections.value = generateMockConnections()
+    showToast(`获取连接器列表失败: ${err.message || '网络异常'}`, 'error')
+    connections.value = []
   } finally {
     loading.value = false
   }
 }
 
-const generateMockConnections = () => [
-  {
-    id: 'conn-google-search',
-    name: 'Google Ads Main Search Account',
-    type: 'DSP',
-    endpoint: 'https://googleads.googleapis.com/v17/customers/890-123-4567',
-    settings: { accountId: '890-123-4567' },
-    status: 'ACTIVE',
-    updatedAt: new Date(Date.now() - 3600000).toISOString()
-  },
-  {
-    id: 'conn-meta-capi',
-    name: 'Meta CAPI (Facebook/Instagram Pixel)',
-    type: 'DSP',
-    endpoint: 'https://graph.facebook.com/v20.0/198234812398/events',
-    settings: { pixelId: '198234812398' },
-    status: 'ACTIVE',
-    updatedAt: new Date(Date.now() - 7200000).toISOString()
-  },
-  {
-    id: 'conn-tiktok-events',
-    name: 'TikTok For Business Events API',
-    type: 'DSP',
-    endpoint: 'https://business-api.tiktok.com/open_api/v1.3/pixel/track/',
-    settings: { advertiserId: 'adv_90812' },
-    status: 'ACTIVE',
-    updatedAt: new Date(Date.now() - 14400000).toISOString()
-  },
-  {
-    id: 'conn-unity-monetize',
-    name: 'Unity Ads SSP Monetization',
-    type: 'SSP',
-    endpoint: 'https://monetization.api.unity.com/v1/organizations/org_321',
-    settings: { orgId: 'org_321' },
-    status: 'PAUSED',
-    updatedAt: new Date(Date.now() - 86400000).toISOString()
-  }
-]
-
 const triggerSync = async (row: any) => {
   syncingId.value = row.id
   try {
-    const res = await fetchApi<any>(`/api/v1/partners/${row.id}/sync`, { method: 'POST' })
+    await fetchApi<any>(`/api/v1/partners/${row.id}/sync`, { method: 'POST' })
     row.updatedAt = new Date().toISOString()
     showToast(`渠道 [${row.name}] 数据异步同步成功！已写入最新指标`, 'success')
   } catch (err: any) {
-    row.updatedAt = new Date().toISOString()
-    showToast(`渠道 [${row.name}] 数据同步已完成 (演示响应)`, 'info')
+    showToast(`渠道 [${row.name}] 同步失败: ${err.message || '接口调用异常'}`, 'error')
   } finally {
     syncingId.value = null
   }
 }
 
-const viewPerformance = (row: any) => {
+const viewPerformance = async (row: any) => {
   selectedConn.value = row
-  perfReport.value = {
-    spend: (Math.random() * 4500 + 500).toFixed(2),
-    impressions: Math.floor(Math.random() * 120000 + 10000),
-    clicks: Math.floor(Math.random() * 4500 + 500),
-    conversions: Math.floor(Math.random() * 280 + 30),
-    ctr: '3.62%',
-    cvr: '7.85%',
-    roas: '2.45x',
-    reportDate: new Date().toISOString()
+  try {
+    const today = new Date().toISOString().slice(0, 10)
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10)
+    const reports = await fetchApi<any[]>(`/api/v1/reports/daily?from=${thirtyDaysAgo}&to=${today}`).catch(() => [])
+    let spend = 0
+    let impressions = 0
+    let clicks = 0
+    let conversions = 0
+    if (Array.isArray(reports) && reports.length > 0) {
+      for (const r of reports) {
+        spend += Number(r.spend || r.payout || 0)
+        impressions += Number(r.impressions || 0)
+        clicks += Number(r.clicks || 0)
+        conversions += Number(r.conversions || 0)
+      }
+    }
+    const ctr = impressions > 0 ? ((clicks / impressions) * 100).toFixed(2) + '%' : '0.00%'
+    const cvr = clicks > 0 ? ((conversions / clicks) * 100).toFixed(2) + '%' : '0.00%'
+    const roas = spend > 0 ? ((conversions * 15) / spend).toFixed(2) + 'x' : '0.00x'
+    perfReport.value = {
+      spend: spend.toFixed(2),
+      impressions,
+      clicks,
+      conversions,
+      ctr,
+      cvr,
+      roas,
+      reportDate: new Date().toISOString()
+    }
+  } catch {
+    perfReport.value = {
+      spend: '0.00',
+      impressions: 0,
+      clicks: 0,
+      conversions: 0,
+      ctr: '0.00%',
+      cvr: '0.00%',
+      roas: '0.00x',
+      reportDate: new Date().toISOString()
+    }
   }
   showPerfModal.value = true
 }
@@ -461,15 +448,13 @@ const viewPerformance = (row: any) => {
 const toggleStatus = async (row: any) => {
   const nextStatus = row.status === 'ACTIVE' ? 'PAUSED' : 'ACTIVE'
   try {
-    await fetchApi<any>(`/api/v1/partners/${row.id}/active`, {
-      method: 'POST',
-      body: { status: nextStatus }
+    await fetchApi<any>(`/api/v1/partners/${row.id}/status/${nextStatus}`, {
+      method: 'POST'
     })
     row.status = nextStatus
     showToast(`连接状态已切换为: ${nextStatus === 'ACTIVE' ? '正常启用' : '已暂停'}`, 'success')
   } catch (err: any) {
-    row.status = nextStatus
-    showToast(`连接状态已切换为: ${nextStatus === 'ACTIVE' ? '正常启用' : '已暂停'} (演示模式)`, 'info')
+    showToast(`连接状态切换失败: ${err.message || '接口调用异常'}`, 'error')
   }
 }
 
@@ -477,39 +462,24 @@ const submitCreateConnection = async () => {
   creating.value = true
   try {
     const payload = {
-      id: `conn-${Date.now().toString(36)}`,
       name: createForm.value.name.trim(),
       type: createForm.value.type,
       endpoint: createForm.value.endpoint.trim(),
       settings: {
         accountId: createForm.value.accountId,
-        token: createForm.value.accessToken ? '••••' : ''
-      },
-      status: 'ACTIVE',
-      updatedAt: new Date().toISOString()
+        token: createForm.value.accessToken || ''
+      }
     }
     const created = await fetchApi<any>('/api/v1/partners', {
       method: 'POST',
       body: payload
     })
-    connections.value.unshift(created || payload)
-    showToast(`新渠道连接 [${payload.name}] 已成功创建！`, 'success')
+    connections.value.unshift(created)
+    showToast(`新渠道连接 [${created.name || payload.name}] 已成功接入！`, 'success')
     showCreateModal.value = false
     createForm.value = { name: '', type: 'DSP', accountId: '', endpoint: '', accessToken: '' }
   } catch (err: any) {
-    const fallback = {
-      id: `conn-${Date.now().toString(36)}`,
-      name: createForm.value.name.trim(),
-      type: createForm.value.type,
-      endpoint: createForm.value.endpoint.trim(),
-      settings: { accountId: createForm.value.accountId },
-      status: 'ACTIVE',
-      updatedAt: new Date().toISOString()
-    }
-    connections.value.unshift(fallback)
-    showToast(`新渠道连接 [${fallback.name}] 创建成功 (演示模式)`, 'success')
-    showCreateModal.value = false
-    createForm.value = { name: '', type: 'DSP', accountId: '', endpoint: '', accessToken: '' }
+    showToast(`渠道连接接入失败: ${err.message || '接口调用异常'}`, 'error')
   } finally {
     creating.value = false
   }

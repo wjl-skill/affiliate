@@ -250,62 +250,14 @@ const loadAuditEvents = async () => {
   try {
     const tenantParam = encodeURIComponent(currentTenant.value || 'tenant-1')
     const res = await fetchApi<any[]>(`/api/v1/system/audit-events?tenantId=${tenantParam}&limit=${limitCount.value}`)
-    if (res && Array.isArray(res) && res.length > 0) {
-      events.value = res
-    } else {
-      // 离线兜底事件
-      events.value = generateMockAuditEvents()
-    }
+    events.value = Array.isArray(res) ? res : []
   } catch (err: any) {
-    showToast(`拉取审计流水失败: ${err.message || '网络异常'}`, 'warning')
-    events.value = generateMockAuditEvents()
+    showToast(`拉取审计流水失败: ${err.message || '网络异常'}`, 'error')
+    events.value = []
   } finally {
     loading.value = false
   }
 }
-
-const generateMockAuditEvents = () => [
-  {
-    id: 'ae-91a0c441-2a1e-4501',
-    tenantId: currentTenant.value,
-    actorId: 'admin_master',
-    action: 'SAVE_ROLE',
-    resourceType: 'ROLE_DEFINITION',
-    resourceId: 'ROLE_FINANCE_AUDITOR',
-    payload: JSON.stringify({ roleName: '财务复核审计员', permissions: ['finance:settle', 'billing:read'] }),
-    createdAt: new Date().toISOString()
-  },
-  {
-    id: 'ae-82b1d332-1b2c-4612',
-    tenantId: currentTenant.value,
-    actorId: 'dev_ops',
-    action: 'REPLAY_OUTBOX',
-    resourceType: 'OUTBOX_MESSAGE',
-    resourceId: 'outbox-conv-90812',
-    payload: JSON.stringify({ topic: 'affiliate-conversion-events', retryCount: 1, status: 'REPLAYED' }),
-    createdAt: new Date(Date.now() - 120000).toISOString()
-  },
-  {
-    id: 'ae-73c2e223-0c3d-4723',
-    tenantId: currentTenant.value,
-    actorId: 'admin_master',
-    action: 'SAVE_USER',
-    resourceType: 'SYS_USER',
-    resourceId: 'usr-jerry',
-    payload: JSON.stringify({ username: 'jerry_aff', roles: ['AFFILIATE_MANAGER'], status: 'ACTIVE' }),
-    createdAt: new Date(Date.now() - 480000).toISOString()
-  },
-  {
-    id: 'ae-64d3f114-9d4e-4834',
-    tenantId: currentTenant.value,
-    actorId: 'system',
-    action: 'SYSTEM_BOOT_VERIFY',
-    resourceType: 'RBAC_ENGINE',
-    resourceId: 'rbac-core',
-    payload: JSON.stringify({ status: 'VERIFIED', checkRules: 12, memoryStoreAligned: true }),
-    createdAt: new Date(Date.now() - 3600000).toISOString()
-  }
-]
 
 onMounted(() => {
   loadAuditEvents()
