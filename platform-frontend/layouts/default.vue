@@ -157,16 +157,21 @@ const defaultBusinessMenus = [
   { id: 'm-rep', title: 'Sub-ID 多维报表', path: '/analytics', icon: '📈' },
   { id: 'm-cohort', title: 'Cohort留存与LTV', path: '/analytics/cohort', icon: '🧬' },
   { id: 'm-macro', title: '宏参数与映射', path: '/affiliate/macros', icon: '🧩' },
+  { id: 'm-conn', title: '生态渠道连接器', path: '/connectors', icon: '🔌' },
+  { id: 'm-dmp', title: 'DMP 受众分群', path: '/dmp/segments', icon: '👥' },
   { id: 'm-adx', title: 'ADX 私有交易 (PMP)', path: '/adx/deals', icon: '🏛️' },
   { id: 'm-budget', title: 'DSP 预算与控频', path: '/dsp/campaigns', icon: '🎯' },
-  { id: 'm-creative', title: 'AI 创意与智能混剪', path: '/creative/studio', icon: '🎬' }
+  { id: 'm-creative', title: 'AI 创意与智能混剪', path: '/creative/studio', icon: '🎬' },
+  { id: 'm-agent', title: 'AI 创意自治 Agent', path: '/creative/agent', icon: '🤖' }
 ]
 
 const defaultSystemMenus = [
+  { id: 'm-tenant', title: '多租户管理', path: '/system/tenants', icon: '🏢' },
   { id: 'm-user', title: '用户管理', path: '/system/users', icon: '👥' },
   { id: 'm-role', title: '角色管理', path: '/system/roles', icon: '🛡️' },
   { id: 'm-menu', title: '菜单管理', path: '/system/menus', icon: '📑' },
   { id: 'm-perm', title: '权限字典', path: '/system/permissions', icon: '🔑' },
+  { id: 'm-audit', title: '安全审计流水', path: '/system/audit', icon: '📜' },
   { id: 'm-s3', title: 'S3 存储配置', path: '/system/s3', icon: '🗄️' },
   { id: 'm-dom', title: '域名池管理', path: '/system/domains', icon: '🌐' },
   { id: 'm-ai', title: 'AI 模型配置', path: '/system/ai', icon: '🤖' },

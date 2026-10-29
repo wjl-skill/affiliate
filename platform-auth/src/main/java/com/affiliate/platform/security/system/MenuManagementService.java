@@ -56,7 +56,7 @@ public class MenuManagementService {
 
     private List<SysMenu> buildDefaultMenuDefinitions() {
         return List.of(
-                // 业务中心菜单 (1-18)
+                // 业务中心菜单 (1-21)
                 new SysMenu("menu-dashboard", "0", "监控大盘", "📊", "/", "pages/index.vue", null, 1, true, SysMenu.Status.ACTIVE),
                 new SysMenu("menu-live-monitor", "0", "实时动态大屏", "⚡", "/monitoring/live", "pages/monitoring/live.vue", "report:analytics", 2, true, SysMenu.Status.ACTIVE),
                 new SysMenu("menu-offers", "0", "Offer 推广计划", "🎯", "/offers", "pages/offers/index.vue", "offer:read", 3, true, SysMenu.Status.ACTIVE),
@@ -72,24 +72,29 @@ public class MenuManagementService {
                 new SysMenu("menu-analytics", "0", "Sub-ID 多维报表", "📈", "/analytics", "pages/analytics/index.vue", "report:analytics", 13, true, SysMenu.Status.ACTIVE),
                 new SysMenu("menu-cohort", "0", "Cohort留存与LTV", "🧬", "/analytics/cohort", "pages/analytics/cohort.vue", "report:analytics", 14, true, SysMenu.Status.ACTIVE),
                 buildMacrosMenu(),
-                new SysMenu("menu-adx-deals", "0", "ADX 私有交易 (PMP)", "🏛️", "/adx/deals", "pages/adx/deals.vue", "adx:deal:manage", 16, true, SysMenu.Status.ACTIVE),
-                new SysMenu("menu-dsp-campaigns", "0", "DSP 预算与控频", "🎯", "/dsp/campaigns", "pages/dsp/campaigns.vue", "dsp:campaign:manage", 17, true, SysMenu.Status.ACTIVE),
-                new SysMenu("menu-creative-studio", "0", "AI 创意与智能混剪", "🎬", "/creative/studio", "pages/creative/studio.vue", "creative:studio:manage", 18, true, SysMenu.Status.ACTIVE),
-                // 系统管理中心菜单 (20-27)
-                new SysMenu("menu-sys-users", "0", "用户管理", "👥", "/system/users", "pages/system/users.vue", "system:user:read", 20, true, SysMenu.Status.ACTIVE),
-                new SysMenu("menu-sys-roles", "0", "角色管理", "🛡️", "/system/roles", "pages/system/roles.vue", "system:role:read", 21, true, SysMenu.Status.ACTIVE),
-                new SysMenu("menu-sys-menus", "0", "菜单管理", "📑", "/system/menus", "pages/system/menus.vue", "system:menu:manage", 22, true, SysMenu.Status.ACTIVE),
-                new SysMenu("menu-sys-perms", "0", "权限字典", "🔑", "/system/permissions", "pages/system/permissions.vue", "system:role:read", 23, true, SysMenu.Status.ACTIVE),
-                new SysMenu("menu-sys-s3", "0", "S3 存储配置", "🗄️", "/system/s3", "pages/system/s3.vue", "system:s3:read", 24, true, SysMenu.Status.ACTIVE),
-                new SysMenu("menu-sys-domains", "0", "域名池管理", "🌐", "/system/domains", "pages/system/domains.vue", "system:domain:read", 25, true, SysMenu.Status.ACTIVE),
+                new SysMenu("menu-connectors", "0", "生态渠道连接器", "🔌", "/connectors", "pages/connectors/index.vue", "deal:read", 16, true, SysMenu.Status.ACTIVE),
+                new SysMenu("menu-dmp-segments", "0", "DMP 受众分群", "👥", "/dmp/segments", "pages/dmp/segments.vue", "deal:read", 17, true, SysMenu.Status.ACTIVE),
+                new SysMenu("menu-adx-deals", "0", "ADX 私有交易 (PMP)", "🏛️", "/adx/deals", "pages/adx/deals.vue", "adx:deal:manage", 18, true, SysMenu.Status.ACTIVE),
+                new SysMenu("menu-dsp-campaigns", "0", "DSP 预算与控频", "🎯", "/dsp/campaigns", "pages/dsp/campaigns.vue", "dsp:campaign:manage", 19, true, SysMenu.Status.ACTIVE),
+                new SysMenu("menu-creative-studio", "0", "AI 创意与智能混剪", "🎬", "/creative/studio", "pages/creative/studio.vue", "creative:studio:manage", 20, true, SysMenu.Status.ACTIVE),
+                new SysMenu("menu-creative-agent", "0", "AI 创意自治 Agent", "🤖", "/creative/agent", "pages/creative/agent.vue", "creative:studio:manage", 21, true, SysMenu.Status.ACTIVE),
+                // 系统管理中心菜单 (22-31)
+                new SysMenu("menu-sys-tenants", "0", "多租户管理", "🏢", "/system/tenants", "pages/system/tenants.vue", "system:user:read", 22, true, SysMenu.Status.ACTIVE),
+                new SysMenu("menu-sys-users", "0", "用户管理", "👥", "/system/users", "pages/system/users.vue", "system:user:read", 23, true, SysMenu.Status.ACTIVE),
+                new SysMenu("menu-sys-roles", "0", "角色管理", "🛡️", "/system/roles", "pages/system/roles.vue", "system:role:read", 24, true, SysMenu.Status.ACTIVE),
+                new SysMenu("menu-sys-menus", "0", "菜单管理", "📑", "/system/menus", "pages/system/menus.vue", "system:menu:manage", 25, true, SysMenu.Status.ACTIVE),
+                new SysMenu("menu-sys-perms", "0", "权限字典", "🔑", "/system/permissions", "pages/system/permissions.vue", "system:role:read", 26, true, SysMenu.Status.ACTIVE),
+                new SysMenu("menu-sys-audit", "0", "安全审计流水", "📜", "/system/audit", "pages/system/audit.vue", "system:user:read", 27, true, SysMenu.Status.ACTIVE),
+                new SysMenu("menu-sys-s3", "0", "S3 存储配置", "🗄️", "/system/s3", "pages/system/s3.vue", "system:s3:read", 28, true, SysMenu.Status.ACTIVE),
+                new SysMenu("menu-sys-domains", "0", "域名池管理", "🌐", "/system/domains", "pages/system/domains.vue", "system:domain:read", 29, true, SysMenu.Status.ACTIVE),
                 buildAiMenu(),
-                new SysMenu("menu-sys-outbox", "0", "发件箱死信重放", "📬", "/system/outbox", "pages/system/outbox.vue", "system:config:manage", 27, true, SysMenu.Status.ACTIVE)
+                new SysMenu("menu-sys-outbox", "0", "发件箱死信重放", "📬", "/system/outbox", "pages/system/outbox.vue", "system:config:manage", 31, true, SysMenu.Status.ACTIVE)
         );
     }
 
     private SysMenu buildAiMenu() {
         return new SysMenu("menu-sys-ai", "0", "AI 模型配置", "🤖", "/system/ai",
-                "pages/system/ai.vue", "system:ai:read", 26, true, SysMenu.Status.ACTIVE);
+                "pages/system/ai.vue", "system:ai:read", 30, true, SysMenu.Status.ACTIVE);
     }
 
     private SysMenu buildMacrosMenu() {
