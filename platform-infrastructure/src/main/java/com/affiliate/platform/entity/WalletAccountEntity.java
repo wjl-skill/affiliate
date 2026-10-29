@@ -3,6 +3,7 @@ package com.affiliate.platform.entity;
 import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
+import com.baomidou.mybatisplus.annotation.Version;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -24,11 +25,20 @@ public class WalletAccountEntity {
     private String currency;
     private Instant updatedAt;
 
+    @Version
+    private Long version;
+
     public WalletAccountEntity() {}
 
     public WalletAccountEntity(String accountId, String tenantId, BigDecimal cashBalance,
                                BigDecimal creditLimit, BigDecimal frozenAmount, String currency,
                                Instant updatedAt) {
+        this(accountId, tenantId, cashBalance, creditLimit, frozenAmount, currency, updatedAt, 0L);
+    }
+
+    public WalletAccountEntity(String accountId, String tenantId, BigDecimal cashBalance,
+                               BigDecimal creditLimit, BigDecimal frozenAmount, String currency,
+                               Instant updatedAt, Long version) {
         this.accountId = accountId;
         this.tenantId = tenantId;
         this.cashBalance = cashBalance;
@@ -36,6 +46,7 @@ public class WalletAccountEntity {
         this.frozenAmount = frozenAmount;
         this.currency = currency;
         this.updatedAt = updatedAt;
+        this.version = version;
     }
 
     public String getAccountId() { return accountId; }
@@ -58,4 +69,7 @@ public class WalletAccountEntity {
 
     public Instant getUpdatedAt() { return updatedAt; }
     public void setUpdatedAt(Instant updatedAt) { this.updatedAt = updatedAt; }
+
+    public Long getVersion() { return version; }
+    public void setVersion(Long version) { this.version = version; }
 }

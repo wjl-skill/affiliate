@@ -39,6 +39,16 @@ public class S2sPostbackService {
     public void setTdsRouter(TdsRouter tdsRouter) { this.tdsRouter = tdsRouter; }
     public TdsRouter getTdsRouter() { return this.tdsRouter; }
 
+    @Autowired(required = false)
+    private AiFraudInvestigationService aiFraudInvestigationService;
+
+    public void setAiFraudInvestigationService(AiFraudInvestigationService aiFraudInvestigationService) {
+        this.aiFraudInvestigationService = aiFraudInvestigationService;
+    }
+    public AiFraudInvestigationService getAiFraudInvestigationService() {
+        return this.aiFraudInvestigationService;
+    }
+
     private final ClickTrackerService clickTracker;
     private final OfferService offerService;
     private final AffiliateAntiFraudEngine antiFraudEngine;
@@ -363,6 +373,27 @@ public class S2sPostbackService {
             );
 
             saveConversion(conversion);
+
+            // 异步触发 AI 作弊异常调查取证 (通过 Java 21 虚拟线程执行，不阻塞主归因链响应)
+            if (aiFraudInvestigationService != null && (conversion.status() == Conversion.Status.FRAUD_SUSPECTED || conversion.status() == Conversion.Status.REJECTED)) {
+                final String fTenantId = session.tenantId();
+                final String fClickId = session.clickId();
+                final String fReason = fraudRes.rejectionReason();
+                final Map<String, Object> telemetry = Map.of(
+                        "ctit", ctit,
+                        "ip", ip != null ? ip : "unknown",
+                        "userAgent", userAgent != null ? userAgent : "unknown",
+                        "txId", txId,
+                        "deviceType", deviceType
+                );
+                Thread.ofVirtual().name("ai-fraud-investigation-", 0).start(() -> {
+                    try {
+                        aiFraudInvestigationService.investigateAnomaly(fTenantId, fClickId, fReason, telemetry);
+                    } catch (Exception ex) {
+                        log.warn("[S2sPostback] Async AI fraud investigation failed: {}", ex.getMessage());
+                    }
+                });
+            }
 
             // 在线更新 LinUCB 多臂老虎机学习反馈
             if (tdsRouter != null && session != null && conversion.status() == Conversion.Status.APPROVED) {

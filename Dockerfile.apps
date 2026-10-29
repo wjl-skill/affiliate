@@ -1,0 +1,91 @@
+# ===================================================================
+# Dockerfile.apps: Affiliate Platform 微服务统一多阶段构建镜像
+# 支持通过 --build-arg APP_MODULE=<platform-app-rtb|platform-app-tracker|platform-app-admin|platform-app-worker> 动态构建
+# ===================================================================
+
+ARG APP_MODULE=platform-app-admin
+ARG APP_PORT=8080
+
+FROM maven:3.9.9-eclipse-temurin-21 AS builder
+ARG APP_MODULE
+WORKDIR /workspace
+
+# 1. 复制所有模块 POM 结构
+COPY pom.xml ./
+COPY platform-common/pom.xml platform-common/
+COPY platform-infrastructure/pom.xml platform-infrastructure/
+COPY platform-auth/pom.xml platform-auth/
+COPY platform-tenant/pom.xml platform-tenant/
+COPY platform-event/pom.xml platform-event/
+COPY platform-budget/pom.xml platform-budget/
+COPY platform-creative/pom.xml platform-creative/
+COPY platform-ssp/pom.xml platform-ssp/
+COPY platform-dsp/pom.xml platform-dsp/
+COPY platform-dmp/pom.xml platform-dmp/
+COPY platform-cdp/pom.xml platform-cdp/
+COPY platform-adx/pom.xml platform-adx/
+COPY platform-ad-connectors/pom.xml platform-ad-connectors/
+COPY platform-media-connectors/pom.xml platform-media-connectors/
+COPY platform-billing/pom.xml platform-billing/
+COPY platform-reporting/pom.xml platform-reporting/
+COPY platform-affiliate/pom.xml platform-affiliate/
+COPY platform-ai/pom.xml platform-ai/
+COPY platform-api/pom.xml platform-api/
+COPY platform-app-tracker/pom.xml platform-app-tracker/
+COPY platform-app-rtb/pom.xml platform-app-rtb/
+COPY platform-app-admin/pom.xml platform-app-admin/
+COPY platform-app-worker/pom.xml platform-app-worker/
+
+# 2. 复制源码
+COPY platform-common/src platform-common/src
+COPY platform-infrastructure/src platform-infrastructure/src
+COPY platform-auth/src platform-auth/src
+COPY platform-tenant/src platform-tenant/src
+COPY platform-event/src platform-event/src
+COPY platform-budget/src platform-budget/src
+COPY platform-creative/src platform-creative/src
+COPY platform-ssp/src platform-ssp/src
+COPY platform-dsp/src platform-dsp/src
+COPY platform-dmp/src platform-dmp/src
+COPY platform-cdp/src platform-cdp/src
+COPY platform-adx/src platform-adx/src
+COPY platform-ad-connectors/src platform-ad-connectors/src
+COPY platform-media-connectors/src platform-media-connectors/src
+COPY platform-billing/src platform-billing/src
+COPY platform-reporting/src platform-reporting/src
+COPY platform-affiliate/src platform-affiliate/src
+COPY platform-ai/src platform-ai/src
+COPY platform-api/src platform-api/src
+COPY platform-app-tracker/src platform-app-tracker/src
+COPY platform-app-rtb/src platform-app-rtb/src
+COPY platform-app-admin/src platform-app-admin/src
+COPY platform-app-worker/src platform-app-worker/src
+
+# 3. 编译打包指定模块及依赖
+RUN mvn clean package -pl ${APP_MODULE} -am -DskipTests
+
+# ===================================================================
+# Runtime 阶段
+# ===================================================================
+FROM eclipse-temurin:21-jre-alpine
+ARG APP_MODULE
+ARG APP_PORT=8080
+
+RUN apk add --no-cache curl && \
+    addgroup -S appgroup && adduser -S appuser -G appgroup
+
+WORKDIR /app
+COPY --from=builder /workspace/${APP_MODULE}/target/${APP_MODULE}-*.jar /app/app.jar
+
+RUN chown -R appuser:appgroup /app
+USER appuser
+
+EXPOSE ${APP_PORT}
+
+ENV SPRING_PROFILES_ACTIVE="prod"
+ENV JAVA_TOOL_OPTIONS="-XX:+UseZGC -XX:+ZGenerational -XX:MaxRAMPercentage=80.0 -XX:+AlwaysPreTouch -XX:+ExitOnOutOfMemoryError"
+
+HEALTHCHECK --interval=20s --timeout=3s --start-period=30s --retries=3 \
+  CMD curl -f http://localhost:${APP_PORT}/actuator/health || exit 1
+
+ENTRYPOINT ["java", "-jar", "app.jar"]

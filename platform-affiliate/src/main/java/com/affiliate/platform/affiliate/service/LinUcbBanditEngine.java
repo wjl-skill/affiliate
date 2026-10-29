@@ -1,10 +1,16 @@
 package com.affiliate.platform.affiliate.service;
 
+import com.affiliate.platform.entity.AffiliateBanditArmEntity;
+import com.affiliate.platform.mapper.AffiliateBanditArmMapper;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
@@ -13,54 +19,93 @@ import java.util.concurrent.locks.ReentrantLock;
 
 /**
  * 生产级 TDS 上下文多臂老虎机分流引擎 (Contextual Multi-Armed Bandit Engine - LinUCB + Thompson Sampling)
- * <p>
- * 解决网盟 SmartLink 智能分流中的冷启动与动态探索/利用平衡难题：
- * 1. LinUCB 算法：每个候选 Offer 对应一个臂 (Arm)，维护 d 维上下文特征空间的岭回归逆协方差矩阵 A^-1 与收益向量 b；
- * 2. Sherman-Morrison 逆矩阵增量公式：在线反馈时以 O(d^2) 复杂度完成秩 1 增量更新，杜绝 O(d^3) 矩阵重算；
- * 3. 冷启动与探索保护：样本数不足（< 5 次）时平滑切换至 Thompson Sampling (Beta 采样)；
- * 4. 收益钳位防冲击：转化佣金收益进行 [0.0, 10.0] 规范化，杜绝偶发大单拉偏权重；
- * 5. 线程安全：高并发读路径无锁向量乘法，写路径轻量级细粒度分臂锁定。
  */
 @Component
 public class LinUcbBanditEngine {
 
     private static final Logger log = LoggerFactory.getLogger(LinUcbBanditEngine.class);
 
-    // 上下文特征空间维度
     public static final int FEATURE_DIM = 12;
-    // 默认探索系数 alpha
     public static final double DEFAULT_ALPHA = 0.50;
-    // 岭回归 L2 正则化系数 lambda (A_0 = lambda * I)
+    public static final double DEFAULT_ALPHA_MIN = 0.05;
+    public static final double DEFAULT_BETA_DECAY = 0.005;
     public static final double DEFAULT_LAMBDA = 1.0;
-    // 冷启动门槛（点击/样本数）
     public static final int COLD_START_THRESHOLD = 5;
-    // 最大收益钳位上限
     public static final double MAX_REWARD_CLAMP = 10.0;
 
-    // 模型存储：key 为 "tenantId:smartLinkId:offerId"
     private final ConcurrentMap<String, BanditArmModel> armModels = new ConcurrentHashMap<>();
 
     private final double alpha;
     private final double lambda;
+    private final AffiliateBanditArmMapper banditArmMapper;
+    private final StringRedisTemplate redisTemplate;
+    private final ObjectMapper objectMapper;
 
     public LinUcbBanditEngine() {
-        this(DEFAULT_ALPHA, DEFAULT_LAMBDA);
+        this(DEFAULT_ALPHA, DEFAULT_LAMBDA, null, null, null);
     }
 
     public LinUcbBanditEngine(double alpha, double lambda) {
-        this.alpha = alpha > 0 ? alpha : DEFAULT_ALPHA;
-        this.lambda = lambda > 0 ? lambda : DEFAULT_LAMBDA;
+        this(alpha, lambda, null, null, null);
     }
 
-    /**
-     * 针对访客上下文，对一组候选 Offer 进行 LinUCB 置信上限评分，评选最优 Offer
-     *
-     * @param tenantId      租户 ID
-     * @param smartLinkId   智能分流链接 ID
-     * @param candidateOfferIds 候选 Offer ID 列表
-     * @param context       访客上下文
-     * @return 胜出的最优 Offer ID（候选为空则返回 null）
-     */
+    @Autowired
+    public LinUcbBanditEngine(
+            @Autowired(required = false) AffiliateBanditArmMapper banditArmMapper,
+            @Autowired(required = false) StringRedisTemplate redisTemplate,
+            @Autowired(required = false) ObjectMapper objectMapper
+    ) {
+        this(DEFAULT_ALPHA, DEFAULT_LAMBDA, banditArmMapper, redisTemplate, objectMapper);
+    }
+
+    public LinUcbBanditEngine(
+            double alpha,
+            double lambda,
+            AffiliateBanditArmMapper banditArmMapper,
+            StringRedisTemplate redisTemplate,
+            ObjectMapper objectMapper
+    ) {
+        this.alpha = alpha > 0 ? alpha : DEFAULT_ALPHA;
+        this.lambda = lambda > 0 ? lambda : DEFAULT_LAMBDA;
+        this.banditArmMapper = banditArmMapper;
+        this.redisTemplate = redisTemplate;
+        this.objectMapper = objectMapper != null ? objectMapper : new ObjectMapper();
+        initFromDatabase();
+    }
+
+    private void initFromDatabase() {
+        if (banditArmMapper == null) {
+            return;
+        }
+        try {
+            List<AffiliateBanditArmEntity> entities = banditArmMapper.selectList(null);
+            if (entities != null && !entities.isEmpty()) {
+                for (AffiliateBanditArmEntity e : entities) {
+                    if (e.getArmKey() == null || e.getAInvJson() == null || e.getBVecJson() == null) {
+                        continue;
+                    }
+                    try {
+                        double[][] aInv = objectMapper.readValue(e.getAInvJson(), double[][].class);
+                        double[] b = objectMapper.readValue(e.getBVecJson(), double[].class);
+                        int samples = e.getSampleCount() != null ? e.getSampleCount() : 0;
+                        int clk = e.getClicks() != null ? e.getClicks() : 0;
+                        int conv = e.getConversions() != null ? e.getConversions() : 0;
+                        double rew = e.getTotalReward() != null ? e.getTotalReward().doubleValue() : 0.0;
+
+                        BanditArmModel arm = new BanditArmModel(FEATURE_DIM, lambda);
+                        arm.loadState(aInv, b, samples, clk, conv, rew);
+                        armModels.put(e.getArmKey(), arm);
+                    } catch (Exception parseEx) {
+                        log.warn("Failed to parse bandit arm JSON for key {}: {}", e.getArmKey(), parseEx.getMessage());
+                    }
+                }
+                log.info("[LinUcbBanditEngine] Successfully preloaded {} bandit arms from PostgreSQL", armModels.size());
+            }
+        } catch (Exception ex) {
+            log.warn("[LinUcbBanditEngine] Database preload skipped or failed: {}", ex.getMessage());
+        }
+    }
+
     public String selectBestOffer(
             String tenantId,
             String smartLinkId,
@@ -92,15 +137,6 @@ public class LinUcbBanditEngine {
         return bestOfferId;
     }
 
-    /**
-     * 增量在线更新手臂反馈（点击、转化发生后回传）
-     *
-     * @param tenantId    租户 ID
-     * @param smartLinkId 智能分流链接 ID
-     * @param offerId     推广计划 ID
-     * @param context     发生点击时的上下文
-     * @param reward      实际收益（转化佣金或期望收益），0 代表点击未转化
-     */
     public void updateArm(
             String tenantId,
             String smartLinkId,
@@ -117,11 +153,42 @@ public class LinUcbBanditEngine {
         double[] x = extractFeatureVector(context);
         double clampedReward = Math.max(0.0, Math.min(reward, MAX_REWARD_CLAMP));
         arm.update(x, clampedReward);
+
+        if (redisTemplate != null) {
+            try {
+                String redisKey = "bandit:arm:" + key;
+                redisTemplate.opsForHash().increment(redisKey, "samples", 1);
+                redisTemplate.opsForHash().increment(redisKey, "conversions", 1);
+            } catch (Exception rex) {
+                log.debug("[LinUcbBanditEngine] Redis bandit arm increment skipped: {}", rex.getMessage());
+            }
+        }
+
+        if (banditArmMapper != null) {
+            Thread.ofVirtual().name("bandit-arm-sync-", 0).start(() -> {
+                try {
+                    AffiliateBanditArmEntity entity = new AffiliateBanditArmEntity(
+                            key,
+                            tenantId != null ? tenantId : "default",
+                            smartLinkId != null ? smartLinkId : "global",
+                            offerId,
+                            FEATURE_DIM,
+                            objectMapper.writeValueAsString(arm.getAInv()),
+                            objectMapper.writeValueAsString(arm.getB()),
+                            arm.getSampleCount(),
+                            arm.getClicks(),
+                            arm.getConversions(),
+                            BigDecimal.valueOf(arm.getTotalReward()).setScale(6, java.math.RoundingMode.HALF_UP),
+                            Instant.now()
+                    );
+                    banditArmMapper.upsert(entity);
+                } catch (Exception ex) {
+                    log.warn("[LinUcbBanditEngine] Non-blocking DB upsert failed for arm {}: {}", key, ex.getMessage());
+                }
+            });
+        }
     }
 
-    /**
-     * 将业务环境提取为 d=8 维实数特征向量
-     */
     public double[] extractFeatureVector(BanditContext ctx) {
         double[] x = new double[FEATURE_DIM];
         if (ctx == null) {
@@ -129,45 +196,31 @@ public class LinUcbBanditEngine {
             return x;
         }
 
-        // 1. 偏置截距
         x[0] = 1.0;
 
-        // 2. 归一化设备类型 (1=Desktop, 2=Mobile, 3=Tablet, 其他归一)
         int device = ctx.deviceType() > 0 ? ctx.deviceType() : 1;
         x[1] = Math.min(device / 4.0, 1.0);
 
-        // 3. 周期性时段编码 (Hour Sine)
         int hour = Math.max(0, Math.min(ctx.hourOfDay(), 23));
         x[2] = Math.sin(2.0 * Math.PI * hour / 24.0);
-
-        // 4. 周期性时段编码 (Hour Cosine)
         x[3] = Math.cos(2.0 * Math.PI * hour / 24.0);
 
-        // 5. 国家哈希投影归一化
         String country = ctx.country() != null ? ctx.country().toUpperCase() : "US";
         x[4] = ((country.hashCode() & 0x7FFF) % 1000) / 1000.0;
 
-        // 6. Sub-ID 特征指示符
         x[5] = (ctx.sub1() != null && !ctx.sub1().isBlank()) ? 1.0 : 0.0;
 
-        // 7. 先验基准 EPC 归一化 (截断到 10.0 美元)
         double priorEpc = ctx.priorEpc() != null ? ctx.priorEpc().doubleValue() : 0.0;
         x[6] = Math.max(0.0, Math.min(priorEpc / 10.0, 1.0));
 
-        // 8. 渠道权重
         x[7] = ctx.isVipAffiliate() ? 1.0 : 0.5;
 
-        // 9. 设备操作系统权重 (iOS / Android / Desktop)
         x[8] = parseOsWeight(ctx.os());
-
-        // 10. 网络连接类型 (WiFi vs Cellular)
         x[9] = parseConnectionWeight(ctx.connectionType());
 
-        // 11. 星期周期特征 (Day of Week Sine)
         int dow = ctx.dayOfWeek() >= 1 && ctx.dayOfWeek() <= 7 ? ctx.dayOfWeek() : 3;
         x[10] = Math.sin(2.0 * Math.PI * dow / 7.0);
 
-        // 12. 历史转化倾向率特征
         x[11] = Math.max(0.0, Math.min(ctx.conversionPropensity(), 1.0));
 
         return x;
@@ -201,9 +254,6 @@ public class LinUcbBanditEngine {
         armModels.clear();
     }
 
-    /**
-     * 生成 LinUCB 上下文多臂老虎机 A/B 测试对比报表 (Bandit vs Control Group)
-     */
     public BanditAbTestReport generateAbComparisonReport(String tenantId, String smartLinkId) {
         String prefix = buildArmKey(tenantId, smartLinkId, "");
         List<BanditAbTestReport.ArmStat> armStats = new ArrayList<>();
@@ -228,13 +278,11 @@ public class LinUcbBanditEngine {
             }
         }
 
-        // Treatment (LinUCB) 指标
         double cvrTreatment = totalClicks > 0 ? (double) totalConvs / totalClicks : 0.0;
         BigDecimal eepcTreatment = totalClicks > 0
                 ? BigDecimal.valueOf(totalRev / totalClicks).setScale(4, java.math.RoundingMode.HALF_UP)
                 : BigDecimal.ZERO;
 
-        // Control (静态分流基准对照组): 模拟无上下文时的基线表现 (通常落后 15%~30%)
         long clicksControl = totalClicks;
         long convsControl = Math.round(totalConvs * 0.78);
         double revControl = totalRev * 0.78;
@@ -311,13 +359,11 @@ public class LinUcbBanditEngine {
                 double meanRewardPerClick
         ) {}
     }
+
     public int getTrainedArmCount() {
         return armModels.size();
     }
 
-    /**
-     * 访客上下文数据传输载体
-     */
     public record BanditContext(
             String country,
             int deviceType,
@@ -343,14 +389,9 @@ public class LinUcbBanditEngine {
         }
     }
 
-    /**
-     * 单个臂（Offer）的参数模型，支持在线增量更新
-     */
     public static class BanditArmModel {
         private final int d;
-        // 逆协方差矩阵 A^-1 (d x d)
         private final double[][] aInv;
-        // 收益向量 b (d x 1)
         private final double[] b;
         private final ReentrantLock lock = new ReentrantLock();
 
@@ -369,19 +410,36 @@ public class LinUcbBanditEngine {
             }
         }
 
-        /**
-         * 计算 LinUCB 分数，若冷启动则融合 Thompson Sampling Beta 采样
-         */
-        public double calculateScore(double[] x, double alpha) {
+        public void loadState(double[][] loadedAInv, double[] loadedB, int samples, int clks, int convs, double reward) {
+            lock.lock();
+            try {
+                if (loadedAInv != null && loadedAInv.length == d) {
+                    for (int i = 0; i < d; i++) {
+                        System.arraycopy(loadedAInv[i], 0, this.aInv[i], 0, Math.min(d, loadedAInv[i].length));
+                    }
+                }
+                if (loadedB != null) {
+                    System.arraycopy(loadedB, 0, this.b, 0, Math.min(d, loadedB.length));
+                }
+                this.sampleCount = samples;
+                this.clicks = clks;
+                this.conversions = convs;
+                this.totalReward = reward;
+            } finally {
+                lock.unlock();
+            }
+        }
+
+        public double calculateScore(double[] x, double baseAlpha) {
             if (sampleCount < COLD_START_THRESHOLD) {
-                // 冷启动：Thompson Sampling Beta 采样作为基线 + 探索加权
                 double alphaBeta = 1.0 + conversions;
                 double betaBeta = 1.0 + Math.max(0, clicks - conversions);
                 double sampledRate = sampleBeta(alphaBeta, betaBeta);
                 return sampledRate * 5.0 + ThreadLocalRandom.current().nextDouble(0.1, 0.5);
             }
 
-            // theta = A^-1 * b
+            double effectiveAlpha = Math.max(DEFAULT_ALPHA_MIN, baseAlpha / Math.sqrt(1.0 + DEFAULT_BETA_DECAY * sampleCount));
+
             double[] theta = new double[d];
             for (int i = 0; i < d; i++) {
                 double sum = 0.0;
@@ -391,13 +449,11 @@ public class LinUcbBanditEngine {
                 theta[i] = sum;
             }
 
-            // expectedReward = x^T * theta
             double expectedReward = 0.0;
             for (int i = 0; i < d; i++) {
                 expectedReward += x[i] * theta[i];
             }
 
-            // confidenceBound = alpha * sqrt(x^T * A^-1 * x)
             double xAx = 0.0;
             for (int i = 0; i < d; i++) {
                 double rowSum = 0.0;
@@ -407,19 +463,13 @@ public class LinUcbBanditEngine {
                 xAx += rowSum * x[i];
             }
 
-            double confidence = alpha * Math.sqrt(Math.max(0.0, xAx));
+            double confidence = effectiveAlpha * Math.sqrt(Math.max(0.0, xAx));
             return expectedReward + confidence;
         }
 
-        /**
-         * 基于 Sherman-Morrison 公式以 O(d^2) 执行在线增量更新：
-         * A_new^-1 = A^-1 - (A^-1 * x * x^T * A^-1) / (1 + x^T * A^-1 * x)
-         * b_new = b + reward * x
-         */
         public void update(double[] x, double reward) {
             lock.lock();
             try {
-                // v = A^-1 * x (d x 1)
                 double[] v = new double[d];
                 for (int i = 0; i < d; i++) {
                     double sum = 0.0;
@@ -429,7 +479,6 @@ public class LinUcbBanditEngine {
                     v[i] = sum;
                 }
 
-                // denom = 1 + x^T * v
                 double denom = 1.0;
                 for (int i = 0; i < d; i++) {
                     denom += x[i] * v[i];
@@ -459,7 +508,6 @@ public class LinUcbBanditEngine {
         }
 
         private double sampleBeta(double alphaVal, double betaVal) {
-            // Gamma 变量采样变换为 Beta 变量
             double gammaA = sampleGamma(alphaVal, 1.0);
             double gammaB = sampleGamma(betaVal, 1.0);
             double sum = gammaA + gammaB;
@@ -467,7 +515,6 @@ public class LinUcbBanditEngine {
         }
 
         private double sampleGamma(double shape, double scale) {
-            // Marsaglia and Tsang 算法快速生成 Gamma 分布
             if (shape < 1.0) {
                 return sampleGamma(shape + 1.0, scale) * Math.pow(ThreadLocalRandom.current().nextDouble(), 1.0 / shape);
             }
@@ -491,20 +538,33 @@ public class LinUcbBanditEngine {
             }
         }
 
-        public int getSampleCount() {
-            return sampleCount;
+        public double[][] getAInv() {
+            lock.lock();
+            try {
+                double[][] copy = new double[d][d];
+                for (int i = 0; i < d; i++) {
+                    System.arraycopy(aInv[i], 0, copy[i], 0, d);
+                }
+                return copy;
+            } finally {
+                lock.unlock();
+            }
         }
 
-        public int getClicks() {
-            return clicks;
+        public double[] getB() {
+            lock.lock();
+            try {
+                double[] copy = new double[d];
+                System.arraycopy(b, 0, copy, 0, d);
+                return copy;
+            } finally {
+                lock.unlock();
+            }
         }
 
-        public int getConversions() {
-            return conversions;
-        }
-
-        public double getTotalReward() {
-            return totalReward;
-        }
+        public int getSampleCount() { return sampleCount; }
+        public int getClicks() { return clicks; }
+        public int getConversions() { return conversions; }
+        public double getTotalReward() { return totalReward; }
     }
 }

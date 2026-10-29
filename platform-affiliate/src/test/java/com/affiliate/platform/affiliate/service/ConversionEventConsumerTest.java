@@ -13,6 +13,7 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.Mockito.*;
 
 class ConversionEventConsumerTest {
@@ -29,21 +30,21 @@ class ConversionEventConsumerTest {
     }
 
     @Test
-    void testConsumeBatchInsertNewConversion() {
+    void testConsumeBatchUpsertSuccess() {
         ConversionEntity entity = new ConversionEntity(
                 "conv_101", "tenant_a", "clk_101", "off_101", "aff_101",
                 "tx_101", BigDecimal.valueOf(15.00), BigDecimal.valueOf(25.00),
                 BigDecimal.valueOf(100.00), "APPROVED", 12L, null, "sub1_tiktok",
                 "PENDING", Instant.now()
         );
-        when(conversionMapper.selectById("conv_101")).thenReturn(null);
+        when(conversionMapper.upsertBatch(anyList())).thenReturn(1);
 
         ConsumerRecord<String, ConversionEntity> record =
                 new ConsumerRecord<>("affiliate.events.conversion", 0, 0L, "conv_101", entity);
 
         consumer.consumeBatch(List.of(record));
 
-        verify(conversionMapper, times(1)).insert(entity);
+        verify(conversionMapper, times(1)).upsertBatch(anyList());
         verify(analyticsService, times(1)).recordConversion(
                 eq("aff_101"), eq("sub1_tiktok"),
                 eq(BigDecimal.valueOf(15.00)), eq(BigDecimal.valueOf(25.00))
@@ -51,13 +52,14 @@ class ConversionEventConsumerTest {
     }
 
     @Test
-    void testConsumeBatchUpdateExistingConversion() {
+    void testConsumeBatchFallbackWhenUpsertFails() {
         ConversionEntity entity = new ConversionEntity(
                 "conv_102", "tenant_a", "clk_102", "off_101", "aff_101",
                 "tx_102", BigDecimal.valueOf(10.00), BigDecimal.valueOf(20.00),
                 BigDecimal.valueOf(50.00), "REJECTED", 2L, "CTIT_TOO_FAST", "sub1_fb",
                 "FAILED", Instant.now()
         );
+        when(conversionMapper.upsertBatch(anyList())).thenThrow(new RuntimeException("DB upsert unsupported or locked"));
         when(conversionMapper.selectById("conv_102")).thenReturn(entity);
 
         ConsumerRecord<String, ConversionEntity> record =
@@ -65,6 +67,7 @@ class ConversionEventConsumerTest {
 
         consumer.consumeBatch(List.of(record));
 
+        verify(conversionMapper, times(1)).selectById("conv_102");
         verify(conversionMapper, times(1)).updateById(entity);
         verifyNoInteractions(analyticsService);
     }

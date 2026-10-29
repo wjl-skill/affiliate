@@ -223,4 +223,43 @@ class S2sPostbackAuthAndReplayTest {
         assertEquals(HttpStatus.OK, allowedRes.getStatusCode());
         assertEquals("PENDING", allowedRes.getBody().get("status"));
     }
+
+    @Test
+    void postbackTriggersAiFraudInvestigationOnRejection() {
+        AiFraudInvestigationService aiService = org.mockito.Mockito.mock(AiFraudInvestigationService.class);
+        postbackService.setAiFraudInvestigationService(aiService);
+
+        Offer offer = new Offer(
+                "off-fraud-ai-1", "tenant-1", "adv-1", "Fraud Test Offer",
+                "https://test.com", Offer.PayoutType.CPA,
+                new BigDecimal("10.00"), new BigDecimal("15.00"),
+                Offer.Status.ACTIVE, 100, new BigDecimal("1000.00"),
+                null, Set.of("US"), Set.of(1), null, Instant.now()
+        );
+        offerService.save(offer);
+
+        ClickTrackerService.ClickTrackingResult click = clickTracker.trackClick(
+                offer, "aff-1", "sub1", null, null, null, null,
+                "192.168.1.100", "Mozilla/5.0", "US", 1
+        );
+        com.affiliate.platform.affiliate.domain.ClickSession instantSession = new com.affiliate.platform.affiliate.domain.ClickSession(
+                click.clickId(), "tenant-1", offer.id(), "aff-1",
+                "sub1", null, null, null, null,
+                "192.168.1.100", "Mozilla/5.0", "US", 1,
+                Instant.now(), Instant.now().plus(java.time.Duration.ofDays(30))
+        );
+        @SuppressWarnings("unchecked")
+        java.util.concurrent.ConcurrentMap<String, com.affiliate.platform.affiliate.domain.ClickSession> store =
+                (java.util.concurrent.ConcurrentMap<String, com.affiliate.platform.affiliate.domain.ClickSession>) ReflectionTestUtils.getField(clickTracker, "sessionStore");
+        store.put(click.clickId(), instantSession);
+
+        com.affiliate.platform.affiliate.domain.Conversion conv = postbackService.processPostback(
+                click.clickId(), "tx_ai_fraud_1", BigDecimal.ZERO, Instant.now()
+        );
+        assertEquals(com.affiliate.platform.affiliate.domain.Conversion.Status.FRAUD_SUSPECTED, conv.status());
+
+        org.mockito.Mockito.verify(aiService, org.mockito.Mockito.timeout(2000).atLeastOnce())
+                .investigateAnomaly(org.mockito.ArgumentMatchers.eq("tenant-1"), org.mockito.ArgumentMatchers.eq(click.clickId()),
+                        org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.anyMap());
+    }
 }

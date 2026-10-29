@@ -7,11 +7,11 @@
 [![ClickHouse](https://img.shields.io/badge/ClickHouse-24+-yellow.svg)](https://clickhouse.com/)
 [![Kafka](https://img.shields.io/badge/Kafka-KRaft_Batch_Consumer-black.svg)](https://kafka.apache.org/)
 [![MyBatis-Plus](https://img.shields.io/badge/MyBatis--Plus-3.5.9-green.svg)](https://baomidou.com/)
-[![Flyway](https://img.shields.io/badge/Flyway-V1~V22_(88_Tables)-red.svg)](https://flywaydb.org/)
-[![Schema Alignment](https://img.shields.io/badge/Schema%20Alignment-100%25_(88_Entities)-success.svg)](scripts/audit-entity-schema.mjs)
+[![Flyway](https://img.shields.io/badge/Flyway-V1~V25_(92_Tables)-red.svg)](https://flywaydb.org/)
+[![Schema Alignment](https://img.shields.io/badge/Schema%20Alignment-100%25_(92_Entities)-success.svg)](scripts/audit-entity-schema.mjs)
 [![OpenTelemetry](https://img.shields.io/badge/OpenTelemetry-Tracing_&_APM-blueviolet.svg)](https://opentelemetry.io/)
 
-面向高并发程序化广告（DSP/SSP/ADX）与商业级网盟营销（Affiliate Network）的一体化数字营销云原生中枢，采用 **Java 21 Project Loom 虚拟线程 + Spring Boot 3.4 模块化单体架构**，由 **19 个 Java Maven 模块** 与 **1 个 Nuxt 3 现代化管理前端** 构成。
+面向高并发程序化广告（DSP/SSP/ADX）与商业级网盟营销（Affiliate Network）的一体化数字营销云原生中枢，采用 **Java 21 Project Loom 虚拟线程 + Spring Boot 3.4 模块化单体与微服务多模架构**，由 **24 个 Java Maven 模块**（含 20 个领域组件与 4 个独立微服务运行时）与 **1 个 Nuxt 3 现代化管理前端** 构成。
 
 系统完整涵盖：OpenRTB 2.5 纳秒级撮合、动态出价（oCPM/Bid Shading）、多触点归因（Data-Driven MTA）、LinUCB 上下文多臂老虎机分流、Apple SKAdNetwork 4.0 隐私归因、4D 实时反欺诈风控、**Offer 存储桶 Parquet 画像补量与 AppsFlyer/Adjust MMP 归因推送**、AI 素材自动化（多模型视频生成/7阶段 Studio/CapCut 草稿导出/7日基准打标）、统一 AI 推理中枢、双式记账资金管理及分层 OLAP 实时星型立方体。
 
@@ -157,9 +157,12 @@ docs/
 | `V19` | 统一 AI 中枢配置与审计表（`ai_model_config`, `ai_prompt_template`, `ai_usage_log`） | 82 张 |
 | `V20` | Offer 流量补量规则与推送审计表（`affiliate_offer_supplement_rule`, `affiliate_offer_supplement_log`） | 84 张 |
 | `V21` | 生产环境高频查询与外键联合索引加固调优 | 84 张 |
-| **`V22`** | **PostgreSQL 范围分区表与定期归档**（`affiliate_click_session_partitioned`, `affiliate_offer_supplement_log_partitioned`, 自动化分区存储过程 `create_monthly_partition`, 定期冷数据归档存储过程 `archive_partitioned_records`, 归档表 `affiliate_click_session_archive`, `affiliate_offer_supplement_log_archive`） | **88 张** |
+| `V22` | **PostgreSQL 范围分区表与定期归档**（`affiliate_click_session_partitioned`, `affiliate_offer_supplement_log_partitioned`, 自动化分区存储过程 `create_monthly_partition`, 定期冷数据归档存储过程 `archive_partitioned_records`, 归档表 `affiliate_click_session_archive`, `affiliate_offer_supplement_log_archive`） | 88 张 |
+| `V23` | **企业级复式记账不可变分录与财务对账支持**（`ledger_transaction`, `ledger_line`, 钱包账户 `wallet_account.version` 乐观锁并发保护） | 90 张 |
+| `V24` | **事务发件箱死信队列与失败重放归档**（`event_outbox_dead`, 发件箱末次错误追踪 `event_outbox.last_error`） | 91 张 |
+| **`V25`** | **分布式 LinUCB 多臂老虎机模型参数持久化**（`affiliate_bandit_arm`, 逆协方差矩阵 $A^{-1}$ 与收益向量 $b$ 动态增量与持久化） | **92 张** |
 
-> 💡 **架构一致性门禁**：工程根目录下提供 `node scripts/audit-entity-schema.mjs`，执行后自动比对 `platform-infrastructure` 中的 88 个 Java Entity 属性与 88 张 Flyway DDL 表结构，**双向保持 100% 字段/类型对齐**。
+> 💡 **架构一致性门禁**：工程根目录下提供 `node scripts/audit-entity-schema.mjs`，执行后自动比对 `platform-infrastructure` 中的 92 个 Java Entity 属性与 92 张 Flyway DDL 表结构，**双向保持 100% 字段/类型对齐**。
 
 ---
 

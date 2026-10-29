@@ -346,6 +346,11 @@ public class ParquetUserProfileReader {
             }
         }
 
+        // 识别画像补量关心的投影列集合 (Column Projection)
+        final Set<String> PROJECTED_COLUMNS = Set.of(
+                "id", "gadvid", "idfa", "ip", "ua", "os", "ds_publisher_id", "ds_adx", "s", "m"
+        );
+
         // 支持多 RowGroup 顺序合并解码
         final int finalTotalRows = totalRows;
         for (RowGroupMeta rg : rowGroups) {
@@ -355,6 +360,10 @@ public class ParquetUserProfileReader {
                 String colName = !col.path.isEmpty()
                         ? col.path.get(col.path.size() - 1)
                         : (c < leafSchemas.size() ? leafSchemas.get(c).name : ("col_" + c));
+                if (!PROJECTED_COLUMNS.contains(colName.toLowerCase())) {
+                    // 列裁剪：非目标分析列直接跳过物理反序列化与解压
+                    continue;
+                }
                 SchemaElement schemaElem = leafByName.getOrDefault(
                         colName,
                         c < leafSchemas.size() ? leafSchemas.get(c) : new SchemaElement()
@@ -395,39 +404,18 @@ public class ParquetUserProfileReader {
             S3StorageConfig cfg = configOpt.get();
             String remoteUrl = buildBucketObjectUrl(cfg, trimmed);
             if (remoteUrl != null && (remoteUrl.startsWith("http://") || remoteUrl.startsWith("https://"))) {
-                try {
-                    HttpRequest.Builder reqBuilder = HttpRequest.newBuilder()
-                            .uri(URI.create(remoteUrl))
-                            .timeout(Duration.ofSeconds(8))
-                            .header("User-Agent", "AffiliatePlatform-ParquetReader/1.0")
-                            .GET();
-                    if (cfg.accessKeyId() != null && !cfg.accessKeyId().isBlank()) {
-                        reqBuilder.header("X-Amz-Access-Key-Id", sanitizeHeaderValue(cfg.accessKeyId()));
-                    }
-                    HttpResponse<byte[]> resp = httpClient.send(reqBuilder.build(), HttpResponse.BodyHandlers.ofByteArray());
-                    if (resp.statusCode() >= 200 && resp.statusCode() < 300 && resp.body() != null && resp.body().length > 12) {
-                        return resp.body();
-                    }
-                } catch (Exception e) {
-                    log.debug("[ParquetReader] Remote S3 fetch skipped for {}: {}", remoteUrl, e.getMessage());
+                byte[] fetched = fetchHttpWithRangeParallel(remoteUrl, cfg.accessKeyId());
+                if (fetched != null && fetched.length >= 12) {
+                    return fetched;
                 }
             }
         }
 
         // 3. 若传入的是直接 HTTP/HTTPS 链接
         if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
-            try {
-                HttpRequest req = HttpRequest.newBuilder()
-                        .uri(URI.create(trimmed))
-                        .timeout(Duration.ofSeconds(8))
-                        .GET()
-                        .build();
-                HttpResponse<byte[]> resp = httpClient.send(req, HttpResponse.BodyHandlers.ofByteArray());
-                if (resp.statusCode() >= 200 && resp.statusCode() < 300) {
-                    return resp.body();
-                }
-            } catch (Exception e) {
-                log.debug("[ParquetReader] Direct HTTP fetch skipped for {}: {}", trimmed, e.getMessage());
+            byte[] fetched = fetchHttpWithRangeParallel(trimmed, null);
+            if (fetched != null && fetched.length >= 12) {
+                return fetched;
             }
         }
 
@@ -457,6 +445,86 @@ public class ParquetUserProfileReader {
                 .filter(S3StorageConfig::isDefault)
                 .findFirst()
                 .or(() -> s3StorageConfigService.listConfigs().stream().findFirst());
+    }
+
+    /**
+     * 支持大文件并发 Byte-Range 分片拉取与单连接自动退避兜底
+     */
+    private byte[] fetchHttpWithRangeParallel(String remoteUrl, String accessKeyId) {
+        try {
+            HttpRequest.Builder headBuilder = HttpRequest.newBuilder()
+                    .uri(URI.create(remoteUrl))
+                    .timeout(Duration.ofSeconds(3))
+                    .header("User-Agent", "AffiliatePlatform-ParquetReader/1.0")
+                    .method("HEAD", HttpRequest.BodyPublishers.noBody());
+            if (accessKeyId != null && !accessKeyId.isBlank()) {
+                headBuilder.header("X-Amz-Access-Key-Id", sanitizeHeaderValue(accessKeyId));
+            }
+            HttpResponse<Void> headResp = httpClient.send(headBuilder.build(), HttpResponse.BodyHandlers.discarding());
+            long contentLength = headResp.headers().firstValueAsLong("Content-Length").orElse(-1L);
+            String acceptRanges = headResp.headers().firstValue("Accept-Ranges").orElse("");
+
+            if (contentLength > 2 * 1024 * 1024 && acceptRanges.toLowerCase().contains("bytes")) {
+                int chunkSize = 2 * 1024 * 1024;
+                int chunks = (int) Math.ceil((double) contentLength / chunkSize);
+                byte[] merged = new byte[(int) contentLength];
+                List<java.util.concurrent.Future<Boolean>> futures = new ArrayList<>();
+                try (var executor = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()) {
+                    for (int i = 0; i < chunks; i++) {
+                        final int chunkIdx = i;
+                        final long start = (long) chunkIdx * chunkSize;
+                        final long end = Math.min(start + chunkSize - 1, contentLength - 1);
+                        final int expectedLen = (int) (end - start + 1);
+                        futures.add(executor.submit(() -> {
+                            HttpRequest.Builder rangeReq = HttpRequest.newBuilder()
+                                    .uri(URI.create(remoteUrl))
+                                    .timeout(Duration.ofSeconds(8))
+                                    .header("Range", "bytes=" + start + "-" + end)
+                                    .header("User-Agent", "AffiliatePlatform-ParquetReader/1.0")
+                                    .GET();
+                            if (accessKeyId != null && !accessKeyId.isBlank()) {
+                                rangeReq.header("X-Amz-Access-Key-Id", sanitizeHeaderValue(accessKeyId));
+                            }
+                            HttpResponse<byte[]> chunkResp = httpClient.send(rangeReq.build(), HttpResponse.BodyHandlers.ofByteArray());
+                            if (chunkResp.statusCode() == 206) {
+                                byte[] body = chunkResp.body();
+                                if (body != null && body.length == expectedLen) {
+                                    System.arraycopy(body, 0, merged, (int) start, body.length);
+                                    return true;
+                                }
+                            }
+                            return false;
+                        }));
+                    }
+                    boolean allSuccess = true;
+                    for (var f : futures) {
+                        if (!Boolean.TRUE.equals(f.get())) {
+                            allSuccess = false;
+                            break;
+                        }
+                    }
+                    if (allSuccess) {
+                        return merged;
+                    }
+                }
+            }
+
+            HttpRequest.Builder reqBuilder = HttpRequest.newBuilder()
+                    .uri(URI.create(remoteUrl))
+                    .timeout(Duration.ofSeconds(8))
+                    .header("User-Agent", "AffiliatePlatform-ParquetReader/1.0")
+                    .GET();
+            if (accessKeyId != null && !accessKeyId.isBlank()) {
+                reqBuilder.header("X-Amz-Access-Key-Id", sanitizeHeaderValue(accessKeyId));
+            }
+            HttpResponse<byte[]> resp = httpClient.send(reqBuilder.build(), HttpResponse.BodyHandlers.ofByteArray());
+            if (resp.statusCode() >= 200 && resp.statusCode() < 300) {
+                return resp.body();
+            }
+        } catch (Exception e) {
+            log.debug("[ParquetReader] Remote fetch skipped for {}: {}", remoteUrl, e.getMessage());
+        }
+        return null;
     }
 
     public String buildBucketObjectUrl(S3StorageConfig cfg, String objectKey) {

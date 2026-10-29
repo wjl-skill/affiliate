@@ -1,12 +1,19 @@
 package com.affiliate.platform.affiliate.service;
 
+import com.affiliate.platform.entity.AffiliateBanditArmEntity;
+import com.affiliate.platform.mapper.AffiliateBanditArmMapper;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.Mockito;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.*;
 
 class LinUcbBanditEngineTest {
 
@@ -100,5 +107,33 @@ class LinUcbBanditEngineTest {
         assertEquals(95.0, report.statisticalConfidence());
         assertTrue(report.verdict().contains("BANDIT"));
         assertEquals(2, report.armStats().size());
+    }
+
+    @Test
+    void testDistributedPersistenceWithMapper() throws Exception {
+        AffiliateBanditArmMapper mockMapper = Mockito.mock(AffiliateBanditArmMapper.class);
+        ObjectMapper mapper = new ObjectMapper();
+
+        double[][] aInv = new double[12][12];
+        for (int i = 0; i < 12; i++) aInv[i][i] = 1.0;
+        double[] b = new double[12];
+        b[0] = 5.0;
+
+        AffiliateBanditArmEntity preloadedEntity = new AffiliateBanditArmEntity(
+                "t1:link1:offer_preloaded", "t1", "link1", "offer_preloaded",
+                12, mapper.writeValueAsString(aInv), mapper.writeValueAsString(b),
+                10, 10, 5, BigDecimal.valueOf(25.0), Instant.now()
+        );
+        when(mockMapper.selectList(null)).thenReturn(List.of(preloadedEntity));
+
+        LinUcbBanditEngine engineWithMapper = new LinUcbBanditEngine(0.5, 1.0, mockMapper, null, mapper);
+        assertEquals(1, engineWithMapper.getTrainedArmCount());
+
+        LinUcbBanditEngine.BanditContext ctx = LinUcbBanditEngine.BanditContext.of("US", 1, 10);
+        engineWithMapper.updateArm("t1", "link1", "offer_preloaded", ctx, 3.0);
+
+        // 给虚拟线程短暂时间完成异步落盘
+        Thread.sleep(100);
+        verify(mockMapper, atLeastOnce()).upsert(any(AffiliateBanditArmEntity.class));
     }
 }
