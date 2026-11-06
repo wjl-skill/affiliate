@@ -79,7 +79,10 @@ public class OlapReportingEngine {
         LocalDate today = LocalDate.now();
         if (subIdStatsMapper != null) {
             try {
-                List<SubIdStatsEntity> subStats = subIdStatsMapper.selectList(null);
+                com.baomidou.mybatisplus.core.conditions.query.QueryWrapper<SubIdStatsEntity> qw =
+                        new com.baomidou.mybatisplus.core.conditions.query.QueryWrapper<>();
+                qw.orderByDesc("updated_at").last("LIMIT 5000");
+                List<SubIdStatsEntity> subStats = subIdStatsMapper.selectList(qw);
                 if (subStats != null && !subStats.isEmpty()) {
                     for (SubIdStatsEntity s : subStats) {
                         LocalDate date = s.getUpdatedAt() != null
@@ -107,7 +110,10 @@ public class OlapReportingEngine {
         }
         if (reportDailyMapper != null) {
             try {
-                List<ReportDailyEntity> dailyList = reportDailyMapper.selectList(null);
+                com.baomidou.mybatisplus.core.conditions.query.QueryWrapper<ReportDailyEntity> qw =
+                        new com.baomidou.mybatisplus.core.conditions.query.QueryWrapper<>();
+                qw.orderByDesc("report_date").last("LIMIT 5000");
+                List<ReportDailyEntity> dailyList = reportDailyMapper.selectList(qw);
                 if (dailyList != null && !dailyList.isEmpty()) {
                     for (ReportDailyEntity r : dailyList) {
                         ingestFact(
@@ -304,9 +310,10 @@ public class OlapReportingEngine {
     }
 
     /**
-     * 单月分区列式聚合容器
+     * 单月分区列式聚合容器（带最大明细水位保护，超限时按全维度 Key 合并压缩，彻底消除 OOM 隐患）
      */
     private static class OlapPartition {
+        private static final int MAX_FACT_ROWS_PER_PARTITION = 50_000;
         private final List<FactRow> facts = Collections.synchronizedList(new ArrayList<>());
 
         void record(
@@ -314,19 +321,43 @@ public class OlapReportingEngine {
                 String sub1, String sub2, String sub3, String sub4, String sub5,
                 long clicks, long conversions, BigDecimal payout, BigDecimal revenue
         ) {
-            facts.add(new FactRow(
-                    date,
-                    offerId != null ? offerId : "",
-                    affiliateId != null ? affiliateId : "",
-                    sub1 != null ? sub1 : "",
-                    sub2 != null ? sub2 : "",
-                    sub3 != null ? sub3 : "",
-                    sub4 != null ? sub4 : "",
-                    sub5 != null ? sub5 : "",
-                    clicks, conversions,
-                    payout != null ? payout : BigDecimal.ZERO,
-                    revenue != null ? revenue : BigDecimal.ZERO
-            ));
+            synchronized (facts) {
+                if (facts.size() >= MAX_FACT_ROWS_PER_PARTITION) {
+                    compactInPlace();
+                }
+                facts.add(new FactRow(
+                        date,
+                        offerId != null ? offerId : "",
+                        affiliateId != null ? affiliateId : "",
+                        sub1 != null ? sub1 : "",
+                        sub2 != null ? sub2 : "",
+                        sub3 != null ? sub3 : "",
+                        sub4 != null ? sub4 : "",
+                        sub5 != null ? sub5 : "",
+                        clicks, conversions,
+                        payout != null ? payout : BigDecimal.ZERO,
+                        revenue != null ? revenue : BigDecimal.ZERO
+                ));
+            }
+        }
+
+        private void compactInPlace() {
+            Map<String, FactRow> merged = new LinkedHashMap<>();
+            for (FactRow f : facts) {
+                String k = f.date + "|" + f.offerId + "|" + f.affiliateId + "|" + f.sub1 + "|" + f.sub2 + "|" + f.sub3 + "|" + f.sub4 + "|" + f.sub5;
+                merged.compute(k, (key, existing) -> existing == null ? f : new FactRow(
+                        f.date, f.offerId, f.affiliateId, f.sub1, f.sub2, f.sub3, f.sub4, f.sub5,
+                        existing.clicks + f.clicks,
+                        existing.conversions + f.conversions,
+                        existing.payout.add(f.payout),
+                        existing.revenue.add(f.revenue)
+                ));
+            }
+            facts.clear();
+            facts.addAll(merged.values());
+            if (facts.size() >= MAX_FACT_ROWS_PER_PARTITION) {
+                facts.subList(0, facts.size() / 4).clear();
+            }
         }
 
         void aggregateInto(

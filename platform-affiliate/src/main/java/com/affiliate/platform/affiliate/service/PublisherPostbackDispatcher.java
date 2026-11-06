@@ -40,7 +40,8 @@ public class PublisherPostbackDispatcher {
             String responseBody
     ) {}
 
-    private final List<PostbackDeliveryLog> deliveryLogs = Collections.synchronizedList(new ArrayList<>());
+    private static final int MAX_DELIVERY_LOGS = 2000;
+    private final java.util.Deque<PostbackDeliveryLog> deliveryLogs = new java.util.concurrent.ConcurrentLinkedDeque<>();
     private final HttpClient httpClient;
     private final boolean networkEnabled;
 
@@ -81,22 +82,27 @@ public class PublisherPostbackDispatcher {
         }
 
         String url = urlTemplate;
-        url = url.replace("{click_id}", conversion.clickId() != null ? conversion.clickId() : "");
+        url = url.replace("{click_id}", urlEncode(conversion.clickId()));
         url = url.replace("{payout}", conversion.payout() != null ? conversion.payout().toPlainString() : "0.00");
-        url = url.replace("{txid}", conversion.txId() != null ? conversion.txId() : "");
+        url = url.replace("{txid}", urlEncode(conversion.txId()));
         url = url.replace("{currency}", "USD");
 
         if (session != null) {
-            url = url.replace("{sub1}", session.sub1() != null ? session.sub1() : "");
-            url = url.replace("{sub2}", session.sub2() != null ? session.sub2() : "");
-            url = url.replace("{sub3}", session.sub3() != null ? session.sub3() : "");
-            url = url.replace("{sub4}", session.sub4() != null ? session.sub4() : "");
-            url = url.replace("{sub5}", session.sub5() != null ? session.sub5() : "");
+            url = url.replace("{sub1}", urlEncode(session.sub1()));
+            url = url.replace("{sub2}", urlEncode(session.sub2()));
+            url = url.replace("{sub3}", urlEncode(session.sub3()));
+            url = url.replace("{sub4}", urlEncode(session.sub4()));
+            url = url.replace("{sub5}", urlEncode(session.sub5()));
         } else {
             url = url.replace("{sub1}", "").replace("{sub2}", "").replace("{sub3}", "").replace("{sub4}", "").replace("{sub5}", "");
         }
 
         return url;
+    }
+
+    private static String urlEncode(String val) {
+        if (val == null || val.isBlank()) return "";
+        return java.net.URLEncoder.encode(val, java.nio.charset.StandardCharsets.UTF_8);
     }
 
     /**
@@ -168,7 +174,10 @@ public class PublisherPostbackDispatcher {
                 success,
                 responseBody
         );
-        deliveryLogs.add(deliveryLog);
+        deliveryLogs.addLast(deliveryLog);
+        while (deliveryLogs.size() > MAX_DELIVERY_LOGS) {
+            deliveryLogs.pollFirst();
+        }
         return deliveryLog;
     }
 

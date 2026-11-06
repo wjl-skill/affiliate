@@ -61,7 +61,13 @@ public class S2sPostbackService {
     private final com.affiliate.platform.affiliate.metrics.AffiliateMetrics metrics;
     private final org.springframework.kafka.core.KafkaTemplate<String, Object> kafkaTemplate;
 
-    private final ConcurrentMap<String, Conversion> fallbackConversions = new ConcurrentHashMap<>();
+    // 有界内存转化缓存（基于 Caffeine W-TinyLFU，最大容量 50,000，防止长期运行内存无限堆积）
+    private final com.github.benmanes.caffeine.cache.Cache<String, Conversion> conversionCache =
+            com.github.benmanes.caffeine.cache.Caffeine.newBuilder()
+                    .maximumSize(50_000)
+                    .expireAfterWrite(Duration.ofHours(24))
+                    .build();
+    private final ConcurrentMap<String, Conversion> fallbackConversions = conversionCache.asMap();
     private final ConcurrentMap<String, AffiliatePartner> fallbackPartners = new ConcurrentHashMap<>();
 
     public S2sPostbackService(
@@ -352,9 +358,10 @@ public class S2sPostbackService {
                 fraudRes = new AffiliateAntiFraudEngine.FraudInspectionResult(false, Conversion.Status.REJECTED, "OFFER_CAP_EXCEEDED");
             }
 
-            // 5. 生成转化实体
+            // 5. 生成转化实体并执行下游 Postback 分发（合并为单次持久化，消除双倍 Kafka 与 DB 写放大）
             String convId = "conv_" + UUID.randomUUID().toString().replace("-", "");
-            Conversion conversion = new Conversion(
+            Conversion.PostbackStatus finalPostbackStatus = Conversion.PostbackStatus.PENDING;
+            Conversion draftConversion = new Conversion(
                     convId,
                     session.tenantId(),
                     session.clickId(),
@@ -368,14 +375,28 @@ public class S2sPostbackService {
                     fraudRes.recommendedStatus(),
                     fraudRes.rejectionReason(),
                     session.sub1(),
-                    Conversion.PostbackStatus.PENDING,
+                    finalPostbackStatus,
                     current
             );
 
-            saveConversion(conversion);
+            if (fraudRes.passed() && partner != null) {
+                PublisherPostbackDispatcher.PostbackDeliveryLog deliveryLog =
+                        postbackDispatcher.dispatch(partner, draftConversion, session);
+                if (deliveryLog != null) {
+                    finalPostbackStatus = deliveryLog.success()
+                            ? Conversion.PostbackStatus.DELIVERED
+                            : Conversion.PostbackStatus.FAILED;
+                }
+            }
 
-            // 异步触发 AI 作弊异常调查取证 (通过 Java 21 虚拟线程执行，不阻塞主归因链响应)
-            if (aiFraudInvestigationService != null && (conversion.status() == Conversion.Status.FRAUD_SUSPECTED || conversion.status() == Conversion.Status.REJECTED)) {
+            Conversion result = (finalPostbackStatus == Conversion.PostbackStatus.PENDING)
+                    ? draftConversion
+                    : draftConversion.withPostbackStatus(finalPostbackStatus);
+
+            saveConversion(result);
+
+            // 异步触发 AI 作弊异常调查取证 (通过上下文感知的 Java 21 虚拟线程执行，不阻塞主归因链响应)
+            if (aiFraudInvestigationService != null && (result.status() == Conversion.Status.FRAUD_SUSPECTED || result.status() == Conversion.Status.REJECTED)) {
                 final String fTenantId = session.tenantId();
                 final String fClickId = session.clickId();
                 final String fReason = fraudRes.rejectionReason();
@@ -386,7 +407,7 @@ public class S2sPostbackService {
                         "txId", txId,
                         "deviceType", deviceType
                 );
-                Thread.ofVirtual().name("ai-fraud-investigation-", 0).start(() -> {
+                com.affiliate.platform.concurrent.ContextAwareVirtualThreads.start("ai-fraud-investigation-", () -> {
                     try {
                         aiFraudInvestigationService.investigateAnomaly(fTenantId, fClickId, fReason, telemetry);
                     } catch (Exception ex) {
@@ -395,8 +416,8 @@ public class S2sPostbackService {
                 });
             }
 
-            // 在线更新 LinUCB 多臂老虎机学习反馈
-            if (tdsRouter != null && session != null && conversion.status() == Conversion.Status.APPROVED) {
+            // 在线更新 LinUCB 多臂老虎机学习反馈（通过风控质检的有效转化即触发在线收益反馈）
+            if (tdsRouter != null && session != null && fraudRes.passed()) {
                 try {
                     int hour = session.createdAt().atZone(java.time.ZoneOffset.UTC).getHour();
                     LinUcbBanditEngine.BanditContext bCtx = LinUcbBanditEngine.BanditContext.of(
@@ -406,22 +427,10 @@ public class S2sPostbackService {
                             session.sub1(),
                             BigDecimal.ZERO
                     );
-                    double reward = conversion.payout() != null ? conversion.payout().doubleValue() : 1.0;
+                    double reward = result.payout() != null ? result.payout().doubleValue() : 1.0;
                     tdsRouter.recordBanditFeedback(session.tenantId(), "smartlink", session.offerId(), bCtx, reward);
                 } catch (Exception ex) {
                     log.warn("[S2sPostback] Non-blocking bandit feedback update failed: {}", ex.getMessage());
-                }
-            }
-
-            // 6. 若风控通过，分发下游 Postback 并回写真实回执状态
-            Conversion result = conversion;
-            if (fraudRes.passed() && partner != null) {
-                PublisherPostbackDispatcher.PostbackDeliveryLog log =
-                        postbackDispatcher.dispatch(partner, conversion, session);
-                if (log != null) {
-                    result = conversion.withPostbackStatus(
-                            log.success() ? Conversion.PostbackStatus.DELIVERED : Conversion.PostbackStatus.FAILED);
-                    saveConversion(result);
                 }
             }
 

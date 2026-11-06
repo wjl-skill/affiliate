@@ -96,11 +96,22 @@ public class TdsRouter {
             LinUcbBanditEngine.BanditContext context,
             double reward
     ) {
+        recordBanditFeedback(tenantId, smartLinkId, offerId, context, reward, LinUcbBanditEngine.ExperimentBucket.TREATMENT);
+    }
+
+    public void recordBanditFeedback(
+            String tenantId,
+            String smartLinkId,
+            String offerId,
+            LinUcbBanditEngine.BanditContext context,
+            double reward,
+            LinUcbBanditEngine.ExperimentBucket bucket
+    ) {
         if (banditEngine != null && offerId != null) {
-            banditEngine.updateArm(tenantId, smartLinkId, offerId, context, reward);
+            banditEngine.updateArm(tenantId, smartLinkId, offerId, context, reward, bucket);
             String mappedSmartLinkId = offerSmartLinkMapping.get(offerId);
             if (mappedSmartLinkId != null && !mappedSmartLinkId.equals(smartLinkId)) {
-                banditEngine.updateArm(tenantId, mappedSmartLinkId, offerId, context, reward);
+                banditEngine.updateArm(tenantId, mappedSmartLinkId, offerId, context, reward, bucket);
             }
         }
     }
@@ -230,13 +241,15 @@ public class TdsRouter {
                     country, deviceType, currentHour, linkKey, avgPriorEpc
             );
 
-            String selectedOfferId = banditEngine.selectBestOffer(
+            LinUcbBanditEngine.AbRoutingDecision decision = banditEngine.selectOfferWithAbExperiment(
                     smartLink.tenantId(),
                     smartLink.id(),
                     candidateIds,
-                    banditCtx
+                    banditCtx,
+                    null
             );
 
+            String selectedOfferId = decision != null ? decision.selectedOfferId() : null;
             if (selectedOfferId != null && offerMap.containsKey(selectedOfferId)) {
                 offerSmartLinkMapping.put(selectedOfferId, smartLink.id());
                 return offerMap.get(selectedOfferId);

@@ -1,0 +1,56 @@
+# ===================================================================
+# Nacos DataId: affiliate-common.yaml
+# Group: AFFILIATE_GROUP
+# Namespace: prod (或 public)
+# 用途: 全微服务集群共享的基础设施与动态策略参数配置 (支持实时热更新)
+# ===================================================================
+
+spring:
+  threads:
+    virtual:
+      enabled: true
+
+  datasource:
+    driver-class-name: org.postgresql.Driver
+    url: ${DB_URL:jdbc:postgresql://postgres:5432/postgres?currentSchema=public&reWriteBatchedInserts=true&stringtype=unspecified}
+    username: ${DB_USERNAME:postgres}
+    password: ${DB_PASSWORD:postgres123}
+
+  data:
+    redis:
+      host: ${REDIS_HOST:redis}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:redis123}
+      database: ${REDIS_DB:0}
+      timeout: 1500ms
+
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:kafka:29092}
+
+# 业务动态参数热更新域 (修改后 Nacos 秒级推送至全集群节点并触发 NacosConfigRefreshEvent)
+app:
+  tenant:
+    strict-mode: true
+  security:
+    enabled: true
+    token-ttl-minutes: 720
+  infrastructure:
+    database-enabled: true
+    redis-enabled: true
+    kafka-enabled: true
+  bandit:
+    # LinUCB 真实 A/B 实验 Holdout 对照组分流比例 (0.10 = 10% Control 轮询组 + 90% LinUCB 实验组)
+    ab-control-ratio: 0.10
+    alpha: 0.50
+    lambda: 1.0
+  supplement:
+    network-enabled: true
+    # 生产严格模式设为 false（网络异常计入 502 失败）；沙盒压测设为 true
+    sandbox-fallback-enabled: false
+  antifraud:
+    min-ctit-seconds: 3
+    max-ctit-seconds: 604800
+    datacenter-block-enabled: true
+    bot-ua-block-enabled: true
+  outbox:
+    relay-interval-ms: 1000

@@ -1,0 +1,42 @@
+# ===================================================================
+# Nacos DataId: platform-app-tracker-prod.yaml
+# Group: AFFILIATE_GROUP
+# 用途: 边缘点击追踪与 S2S 归因数据面独立配置 (Port: 8081)
+# ===================================================================
+
+server:
+  port: 8081
+  tomcat:
+    max-connections: 20000
+    accept-count: 1000
+
+spring:
+  datasource:
+    hikari:
+      pool-name: AffiliateTrackerHikari
+      maximum-pool-size: 25
+      minimum-idle: 5
+      connection-timeout: 1000
+
+  data:
+    redis:
+      timeout: 800ms
+      lettuce:
+        pool:
+          max-active: 200
+          max-idle: 50
+          min-idle: 15
+
+  kafka:
+    producer:
+      acks: 1
+      retries: 3
+      batch-size: 32768
+      linger-ms: 5
+
+app:
+  security:
+    postback-auth-required: true
+    postback-secret: ${POSTBACK_HMAC_SECRET:tracker-prod-hmac-secret-2026}
+  bandit:
+    ab-control-ratio: 0.10

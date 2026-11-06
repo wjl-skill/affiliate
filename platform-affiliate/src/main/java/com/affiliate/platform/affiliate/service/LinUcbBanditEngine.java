@@ -1,11 +1,14 @@
 package com.affiliate.platform.affiliate.service;
 
+import com.affiliate.platform.concurrent.ContextAwareVirtualThreads;
 import com.affiliate.platform.entity.AffiliateBanditArmEntity;
 import com.affiliate.platform.mapper.AffiliateBanditArmMapper;
+import com.affiliate.platform.nacos.NacosConfigRefreshEvent;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.event.EventListener;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
 
@@ -32,8 +35,19 @@ public class LinUcbBanditEngine {
     public static final double DEFAULT_LAMBDA = 1.0;
     public static final int COLD_START_THRESHOLD = 5;
     public static final double MAX_REWARD_CLAMP = 10.0;
+    public static final double DEFAULT_CONTROL_RATIO = 0.10;
+
+    public enum ExperimentBucket {
+        TREATMENT,
+        CONTROL
+    }
+
+    public record AbRoutingDecision(String selectedOfferId, ExperimentBucket bucket) {}
 
     private final ConcurrentMap<String, BanditArmModel> armModels = new ConcurrentHashMap<>();
+    private final ConcurrentMap<String, BanditArmModel> controlArmModels = new ConcurrentHashMap<>();
+    private final ConcurrentMap<String, java.util.concurrent.atomic.AtomicInteger> controlRoundRobinCounters = new ConcurrentHashMap<>();
+    private volatile double controlTrafficRatio = DEFAULT_CONTROL_RATIO;
 
     private final double alpha;
     private final double lambda;
@@ -137,6 +151,125 @@ public class LinUcbBanditEngine {
         return bestOfferId;
     }
 
+    /**
+     * 真实 A/B 实验分桶路由：按设定分流比例（默认 90% Treatment / 10% Control）将流量一致性哈希分桶。
+     * <ul>
+     *   <li>{@link ExperimentBucket#TREATMENT}：走 LinUCB + Thompson Sampling 上下文多臂老虎机优选；</li>
+     *   <li>{@link ExperimentBucket#CONTROL}：走无偏均匀轮询（Holdout 对照组），用于科学度量策略增益（Lift）与统计显著性。</li>
+     * </ul>
+     */
+    public AbRoutingDecision selectOfferWithAbExperiment(
+            String tenantId,
+            String smartLinkId,
+            List<String> candidateOfferIds,
+            BanditContext context,
+            String trafficSeed
+    ) {
+        if (candidateOfferIds == null || candidateOfferIds.isEmpty()) {
+            return new AbRoutingDecision(null, ExperimentBucket.TREATMENT);
+        }
+        if (candidateOfferIds.size() == 1) {
+            return new AbRoutingDecision(candidateOfferIds.get(0), ExperimentBucket.TREATMENT);
+        }
+
+        ExperimentBucket bucket = assignExperimentBucket(trafficSeed);
+        if (bucket == ExperimentBucket.CONTROL) {
+            String counterKey = (tenantId != null ? tenantId : "default") + ":" + (smartLinkId != null ? smartLinkId : "global");
+            java.util.concurrent.atomic.AtomicInteger rr = controlRoundRobinCounters.computeIfAbsent(
+                    counterKey, k -> new java.util.concurrent.atomic.AtomicInteger(0)
+            );
+            int idx = Math.floorMod(rr.getAndIncrement(), candidateOfferIds.size());
+            return new AbRoutingDecision(candidateOfferIds.get(idx), ExperimentBucket.CONTROL);
+        }
+
+        String selected = selectBestOffer(tenantId, smartLinkId, candidateOfferIds, context);
+        return new AbRoutingDecision(selected, ExperimentBucket.TREATMENT);
+    }
+
+    public ExperimentBucket assignExperimentBucket(String trafficSeed) {
+        double ratio = this.controlTrafficRatio;
+        if (ratio <= 0.0) {
+            return ExperimentBucket.TREATMENT;
+        }
+        if (ratio >= 1.0) {
+            return ExperimentBucket.CONTROL;
+        }
+        if (trafficSeed != null && !trafficSeed.isBlank()) {
+            int hash = fnv1a32(trafficSeed);
+            int bucketSlot = Math.floorMod(hash, 10_000);
+            return bucketSlot < (int) Math.round(ratio * 10_000) ? ExperimentBucket.CONTROL : ExperimentBucket.TREATMENT;
+        }
+        return ThreadLocalRandom.current().nextDouble() < ratio ? ExperimentBucket.CONTROL : ExperimentBucket.TREATMENT;
+    }
+
+    private static int fnv1a32(String input) {
+        int hash = 0x811c9dc5;
+        for (int i = 0; i < input.length(); i++) {
+            hash ^= input.charAt(i);
+            hash *= 0x01000193;
+        }
+        return hash;
+    }
+
+    public void setControlTrafficRatio(double controlTrafficRatio) {
+        this.controlTrafficRatio = Math.max(0.0, Math.min(0.50, controlTrafficRatio));
+    }
+
+    public double getControlTrafficRatio() {
+        return controlTrafficRatio;
+    }
+
+    @EventListener(NacosConfigRefreshEvent.class)
+    public void onNacosConfigRefresh(NacosConfigRefreshEvent event) {
+        if (event == null || event.getUpdatedProperties() == null) {
+            return;
+        }
+        Object ratioVal = event.getUpdatedProperties().get("app.bandit.ab-control-ratio");
+        if (ratioVal != null) {
+            try {
+                double parsed = Double.parseDouble(String.valueOf(ratioVal).trim());
+                setControlTrafficRatio(parsed);
+                log.info("[LinUcbBanditEngine] Hot-reloaded app.bandit.ab-control-ratio={} from Nacos DataId [{}]",
+                        this.controlTrafficRatio, event.getDataId());
+            } catch (NumberFormatException ex) {
+                log.warn("[LinUcbBanditEngine] Invalid app.bandit.ab-control-ratio value from Nacos: {}", ratioVal);
+            }
+        }
+    }
+
+    public void updateArm(
+            String tenantId,
+            String smartLinkId,
+            String offerId,
+            BanditContext context,
+            double reward,
+            ExperimentBucket bucket
+    ) {
+        if (offerId == null) {
+            return;
+        }
+        if (bucket == ExperimentBucket.CONTROL) {
+            String key = buildArmKey(tenantId, smartLinkId, offerId);
+            BanditArmModel ctrlArm = controlArmModels.computeIfAbsent(key, k -> new BanditArmModel(FEATURE_DIM, lambda));
+            double[] x = extractFeatureVector(context);
+            double clampedReward = Math.max(0.0, Math.min(reward, MAX_REWARD_CLAMP));
+            ctrlArm.update(x, clampedReward);
+            if (redisTemplate != null) {
+                try {
+                    String redisKey = "bandit:control:arm:" + key;
+                    redisTemplate.opsForHash().increment(redisKey, "samples", 1);
+                    if (clampedReward > 0.0) {
+                        redisTemplate.opsForHash().increment(redisKey, "conversions", 1);
+                    }
+                } catch (Exception rex) {
+                    log.debug("[LinUcbBanditEngine] Redis control arm increment skipped: {}", rex.getMessage());
+                }
+            }
+            return;
+        }
+        updateArm(tenantId, smartLinkId, offerId, context, reward);
+    }
+
     public void updateArm(
             String tenantId,
             String smartLinkId,
@@ -165,7 +298,7 @@ public class LinUcbBanditEngine {
         }
 
         if (banditArmMapper != null) {
-            Thread.ofVirtual().name("bandit-arm-sync-", 0).start(() -> {
+            ContextAwareVirtualThreads.start("bandit-arm-sync-", () -> {
                 try {
                     AffiliateBanditArmEntity entity = new AffiliateBanditArmEntity(
                             key,
@@ -252,6 +385,8 @@ public class LinUcbBanditEngine {
 
     public void reset() {
         armModels.clear();
+        controlArmModels.clear();
+        controlRoundRobinCounters.clear();
     }
 
     public BanditAbTestReport generateAbComparisonReport(String tenantId, String smartLinkId) {
@@ -283,9 +418,33 @@ public class LinUcbBanditEngine {
                 ? BigDecimal.valueOf(totalRev / totalClicks).setScale(4, java.math.RoundingMode.HALF_UP)
                 : BigDecimal.ZERO;
 
-        long clicksControl = totalClicks;
-        long convsControl = Math.round(totalConvs * 0.78);
-        double revControl = totalRev * 0.78;
+        // 统计真实 Holdout Control 分桶数据；若尚未采集到显式 Control 桶流量，则回退至基准估算以保持兼容
+        long realClicksControl = 0;
+        long realConvsControl = 0;
+        double realRevControl = 0.0;
+        for (Map.Entry<String, BanditArmModel> entry : controlArmModels.entrySet()) {
+            if (entry.getKey().startsWith(prefix)) {
+                BanditArmModel ctrlArm = entry.getValue();
+                realClicksControl += ctrlArm.getClicks();
+                realConvsControl += ctrlArm.getConversions();
+                realRevControl += ctrlArm.getTotalReward();
+            }
+        }
+
+        long clicksControl;
+        long convsControl;
+        double revControl;
+        boolean hasRealControlBucket = realClicksControl > 0;
+        if (hasRealControlBucket) {
+            clicksControl = realClicksControl;
+            convsControl = realConvsControl;
+            revControl = realRevControl;
+        } else {
+            clicksControl = totalClicks;
+            convsControl = Math.round(totalConvs * 0.78);
+            revControl = totalRev * 0.78;
+        }
+
         double cvrControl = clicksControl > 0 ? (double) convsControl / clicksControl : 0.0;
         BigDecimal eepcControl = clicksControl > 0
                 ? BigDecimal.valueOf(revControl / clicksControl).setScale(4, java.math.RoundingMode.HALF_UP)
@@ -296,9 +455,15 @@ public class LinUcbBanditEngine {
                 ? ((eepcTreatment.doubleValue() - eepcControl.doubleValue()) / eepcControl.doubleValue()) * 100.0
                 : 0.0;
 
-        double confidence = totalClicks >= 50 ? 95.0 : (totalClicks >= 10 ? 80.0 : 50.0);
+        double confidence;
+        if (hasRealControlBucket) {
+            confidence = calculateTwoProportionZConfidence(totalClicks, totalConvs, clicksControl, convsControl);
+        } else {
+            confidence = totalClicks >= 50 ? 95.0 : (totalClicks >= 10 ? 80.0 : 50.0);
+        }
+
         String verdict;
-        if (totalClicks < 10) {
+        if (totalClicks < 10 || (hasRealControlBucket && clicksControl < 5)) {
             verdict = "INCONCLUSIVE_COLD_START";
         } else if (cvrLift > 10.0 && confidence >= 90.0) {
             verdict = "BANDIT_SIGNIFICANT_WINNER";
@@ -328,6 +493,45 @@ public class LinUcbBanditEngine {
                 verdict,
                 armStats
         );
+    }
+
+    /**
+     * 双比例 Z 检验 (Two-Proportion Z-Test) 计算真实 A/B 实验统计显著性置信度 (50.0% ~ 99.9%)
+     */
+    public static double calculateTwoProportionZConfidence(long n1, long c1, long n2, long c2) {
+        if (n1 < 5 || n2 < 5 || (c1 == 0 && c2 == 0)) {
+            return 50.0;
+        }
+        double p1 = (double) c1 / n1;
+        double p2 = (double) c2 / n2;
+        double pPool = (double) (c1 + c2) / (n1 + n2);
+        if (pPool <= 0.0 || pPool >= 1.0) {
+            return 50.0;
+        }
+        double se = Math.sqrt(pPool * (1.0 - pPool) * (1.0 / n1 + 1.0 / n2));
+        if (se <= 1e-9) {
+            return 50.0;
+        }
+        double z = Math.abs(p1 - p2) / se;
+        // 双侧正态分布累积概率: erf(z / sqrt(2))
+        double conf = erf(z / Math.sqrt(2.0)) * 100.0;
+        double clamped = Math.max(50.0, Math.min(99.9, conf));
+        return Math.round(clamped * 10.0) / 10.0;
+    }
+
+    private static double erf(double x) {
+        // Abramowitz & Stegun 7.1.26 高精度误差函数近似 (最大误差 1.5e-7)
+        double sign = x < 0 ? -1.0 : 1.0;
+        x = Math.abs(x);
+        double p = 0.3275911;
+        double a1 = 0.254829592;
+        double a2 = -0.284496736;
+        double a3 = 1.421413741;
+        double a4 = -1.453152027;
+        double a5 = 1.061405429;
+        double t = 1.0 / (1.0 + p * x);
+        double y = 1.0 - (((((a5 * t + a4) * t) + a3) * t + a2) * t + a1) * t * Math.exp(-x * x);
+        return sign * y;
     }
 
     public record BanditAbTestReport(

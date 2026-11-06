@@ -1,5 +1,6 @@
 package com.affiliate.platform.service.video.impl;
 
+import com.affiliate.platform.concurrent.ContextAwareVirtualThreads;
 import com.affiliate.platform.domain.video.*;
 import com.affiliate.platform.event.DomainEvent;
 import com.affiliate.platform.event.EventPublisher;
@@ -73,7 +74,9 @@ public class VideoProcessServiceImpl implements VideoProcessService {
         this.probeService = probeService;
         this.workDirManager = workDirManager;
         this.events = events != null ? events : e -> {};
-        this.executor = executor != null ? executor : Executors.newVirtualThreadPerTaskExecutor();
+        this.executor = ContextAwareVirtualThreads.wrapExecutor(
+                executor != null ? executor : Executors.newVirtualThreadPerTaskExecutor()
+        );
     }
 
     @Override
@@ -104,9 +107,10 @@ public class VideoProcessServiceImpl implements VideoProcessService {
 
         VideoProcessTaskRecord saved = taskRepo.save(task);
 
-        // 提交到执行器异步或同步启动流水线
+        // 提交到执行器异步或同步启动流水线（绑定目标租户上下文，防止跨虚拟线程丢失租户）
         String taskId = saved.id();
-        executor.execute(() -> executeTaskPipeline(taskId));
+        String boundTenant = effectiveTenant;
+        executor.execute(() -> TenantContext.runAs(boundTenant, () -> executeTaskPipeline(taskId)));
 
         return saved;
     }

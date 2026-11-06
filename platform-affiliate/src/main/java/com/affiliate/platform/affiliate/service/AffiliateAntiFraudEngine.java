@@ -158,11 +158,27 @@ public class AffiliateAntiFraudEngine {
     }
 
     /**
-     * 接收远端 Redis Pub/Sub 广播并热应用
+     * 接收远端 Redis Pub/Sub 广播并热应用（同时支持规则阈值同步与动态黑白名单增量同步）
      */
     public void applyRemoteRuleSync(String payload) {
         if (payload == null || payload.isBlank()) return;
         try {
+            if (payload.startsWith("BL_ADD_IP:")) {
+                ipBlacklist.add(payload.substring("BL_ADD_IP:".length()).trim());
+                return;
+            }
+            if (payload.startsWith("BL_REM_IP:")) {
+                ipBlacklist.remove(payload.substring("BL_REM_IP:".length()).trim());
+                return;
+            }
+            if (payload.startsWith("BL_ADD_SUB:")) {
+                subIdBlacklist.add(payload.substring("BL_ADD_SUB:".length()).trim());
+                return;
+            }
+            if (payload.startsWith("BL_REM_SUB:")) {
+                subIdBlacklist.remove(payload.substring("BL_REM_SUB:".length()).trim());
+                return;
+            }
             String[] parts = payload.split(":");
             if (parts.length >= 4) {
                 this.minCtitSeconds = Long.parseLong(parts[0]);
@@ -173,6 +189,16 @@ public class AffiliateAntiFraudEngine {
             }
         } catch (Exception e) {
             log.warn("[AntiFraudEngine] Failed to apply remote rule sync payload '{}': {}", payload, e.getMessage());
+        }
+    }
+
+    private void publishSyncEvent(String message) {
+        if (stringRedisTemplate != null && message != null) {
+            try {
+                stringRedisTemplate.convertAndSend("channel:antifraud:rule_sync", message);
+            } catch (Exception e) {
+                log.debug("[AntiFraudEngine] Redis pub/sub sync skipped: {}", e.getMessage());
+            }
         }
     }
 
@@ -435,6 +461,7 @@ public class AffiliateAntiFraudEngine {
     public void addIpToBlacklist(String ip, String reason, String operator, Instant expiresAt) {
         if (ip == null || ip.isBlank()) return;
         ipBlacklist.add(ip);
+        publishSyncEvent("BL_ADD_IP:" + ip.trim());
         if (blacklistMapper != null) {
             String id = "bl_ip_" + UUID.randomUUID().toString().replace("-", "").substring(0, 12);
             AntiFraudBlacklistEntity entity = new AntiFraudBlacklistEntity(
@@ -455,6 +482,7 @@ public class AffiliateAntiFraudEngine {
     public void removeIpFromBlacklist(String ip) {
         if (ip == null) return;
         ipBlacklist.remove(ip);
+        publishSyncEvent("BL_REM_IP:" + ip.trim());
         if (blacklistMapper != null) {
             QueryWrapper<AntiFraudBlacklistEntity> qw = new QueryWrapper<>();
             qw.eq("target_type", "IP").eq("target_value", ip);
@@ -469,6 +497,7 @@ public class AffiliateAntiFraudEngine {
     public void addSubIdToBlacklist(String subId, String reason, String operator, Instant expiresAt) {
         if (subId == null || subId.isBlank()) return;
         subIdBlacklist.add(subId);
+        publishSyncEvent("BL_ADD_SUB:" + subId.trim());
         if (blacklistMapper != null) {
             String id = "bl_sub_" + UUID.randomUUID().toString().replace("-", "").substring(0, 12);
             AntiFraudBlacklistEntity entity = new AntiFraudBlacklistEntity(
@@ -489,6 +518,7 @@ public class AffiliateAntiFraudEngine {
     public void removeSubIdFromBlacklist(String subId) {
         if (subId == null) return;
         subIdBlacklist.remove(subId);
+        publishSyncEvent("BL_REM_SUB:" + subId.trim());
         if (blacklistMapper != null) {
             QueryWrapper<AntiFraudBlacklistEntity> qw = new QueryWrapper<>();
             qw.eq("target_type", "SUB_ID").eq("target_value", subId);

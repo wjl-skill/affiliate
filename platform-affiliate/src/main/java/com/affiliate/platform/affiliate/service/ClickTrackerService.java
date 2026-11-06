@@ -55,8 +55,13 @@ public class ClickTrackerService {
         }
     }
 
-    // 内存降级存储容器
-    private final ConcurrentMap<String, ClickSession> sessionStore = new ConcurrentHashMap<>();
+    // 有界本地会话高速缓存 (基于 Caffeine W-TinyLFU，最大容量 100,000，彻底根绝高并发点击下的 Heap OOM)
+    private final com.github.benmanes.caffeine.cache.Cache<String, ClickSession> sessionCache =
+            com.github.benmanes.caffeine.cache.Caffeine.newBuilder()
+                    .maximumSize(100_000)
+                    .expireAfterWrite(Duration.ofHours(6))
+                    .build();
+    private final ConcurrentMap<String, ClickSession> sessionStore = sessionCache.asMap();
 
     private final org.springframework.kafka.core.KafkaTemplate<String, Object> kafkaTemplate;
     private final com.affiliate.platform.affiliate.metrics.AffiliateMetrics metrics;

@@ -1,0 +1,25 @@
+# ===================================================================
+# Nacos DataId: platform-app-admin-prod.yaml
+# Group: AFFILIATE_GROUP
+# 用途: 运营控制面、OLAP 多维报表、AI 素材与财务结算服务配置 (Port: 8083)
+# ===================================================================
+
+server:
+  port: 8083
+
+spring:
+  datasource:
+    hikari:
+      pool-name: AffiliateAdminHikari
+      maximum-pool-size: 50
+      minimum-idle: 10
+      connection-timeout: 3000
+
+  flyway:
+    # 仅由控制面 Admin 节点在启动时统一执行 Flyway Schema 迁移，避免多微服务并发锁表
+    enabled: true
+    baseline-on-migrate: true
+
+app:
+  google:
+    enabled: true

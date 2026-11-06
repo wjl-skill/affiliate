@@ -35,6 +35,9 @@ public class TwoTierCacheManager {
     // Jackson JSON 序列化工具
     private final ObjectMapper objectMapper;
 
+    public static final String CACHE_INVALIDATION_CHANNEL = "channel:cache:invalidation";
+    private final String instanceId = java.util.UUID.randomUUID().toString();
+
     // 已初始化的缓存实例池
     private final ConcurrentMap<String, TwoTierCache<?, ?>> cachePool = new ConcurrentHashMap<>();
 
@@ -44,6 +47,35 @@ public class TwoTierCacheManager {
     ) {
         this.redisTemplate = redisTemplate;
         this.objectMapper = objectMapper;
+    }
+
+    /**
+     * 处理来自 Redis Pub/Sub 的跨节点 L1 缓存失效广播 (格式: instanceId|namespace|key)
+     */
+    public void onRemoteInvalidationMessage(String payload) {
+        if (payload == null || payload.isBlank()) return;
+        String[] parts = payload.split("\\|", 3);
+        if (parts.length < 3) return;
+        String senderInstance = parts[0];
+        if (instanceId.equals(senderInstance)) {
+            return; // 忽略本节点自发广播
+        }
+        String namespace = parts[1];
+        String key = parts[2];
+        TwoTierCache<?, ?> targetCache = cachePool.get(namespace);
+        if (targetCache instanceof DefaultTwoTierCache<?> defCache) {
+            defCache.invalidateLocalOnly(key);
+        }
+    }
+
+    private void broadcastInvalidation(String namespace, String key) {
+        if (redisTemplate != null && namespace != null && key != null) {
+            try {
+                redisTemplate.convertAndSend(CACHE_INVALIDATION_CHANNEL, instanceId + "|" + namespace + "|" + key);
+            } catch (Exception e) {
+                log.debug("Broadcast L1 cache invalidation skipped for {}:{}: {}", namespace, key, e.getMessage());
+            }
+        }
     }
 
     /**
@@ -200,15 +232,22 @@ public class TwoTierCacheManager {
             // 1. 写入 L1 Guava
             l1Cache.put(key, value);
 
-            // 2. 写入 L2 Redis（附带随机离散 TTL 防雪崩）
+            // 2. 写入 L2 Redis（附带随机离散 TTL 防雪崩）并广播跨节点 L1 失效
             if (redisTemplate != null) {
                 try {
                     String json = objectMapper.writeValueAsString(value);
                     Duration effectiveTtl = calculateJitteredTtl(ttl);
                     redisTemplate.opsForValue().set(redisKey(key), json, effectiveTtl);
+                    broadcastInvalidation(namespace, key);
                 } catch (Exception ex) {
                     log.warn("Redis L2 cache write error for key {}: {}", key, ex.getMessage());
                 }
+            }
+        }
+
+        void invalidateLocalOnly(String key) {
+            if (key != null) {
+                l1Cache.invalidate(key);
             }
         }
 
@@ -218,10 +257,11 @@ public class TwoTierCacheManager {
             // 1. 淘汰 L1
             l1Cache.invalidate(key);
 
-            // 2. 淘汰 L2
+            // 2. 淘汰 L2 并广播其他节点淘汰 L1
             if (redisTemplate != null) {
                 try {
                     redisTemplate.delete(redisKey(key));
+                    broadcastInvalidation(namespace, key);
                 } catch (Exception ex) {
                     log.warn("Redis L2 cache evict error for key {}: {}", key, ex.getMessage());
                 }

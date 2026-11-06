@@ -79,10 +79,10 @@ public class ConversionEventConsumer {
             }
         }
 
-        // 3. 驱动下游多维分析度量统计
+        // 3. 驱动下游多维分析度量统计（对齐 ClickHouse 物化视图：APPROVED 与通过反作弊初审的 PENDING 均计入实时统计）
         if (analyticsService != null) {
             for (ConversionEntity entity : batch) {
-                if ("APPROVED".equalsIgnoreCase(entity.getStatus())) {
+                if ("APPROVED".equalsIgnoreCase(entity.getStatus()) || "PENDING".equalsIgnoreCase(entity.getStatus())) {
                     try {
                         analyticsService.recordConversion(
                                 entity.getAffiliateId(),

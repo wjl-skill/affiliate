@@ -9,6 +9,7 @@ import jakarta.servlet.http.HttpServletResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
+import org.springframework.core.annotation.Order;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Component;
@@ -25,8 +26,10 @@ import java.util.regex.Pattern;
  * 2. 针对客户端伪造 X-Tenant-ID 请求头进行越权校验：非超级管理员严禁跨租户篡改；
  * 3. 提取或自动生成分布式追踪 TraceId 并挂载 MDC；
  * 4. 请求结束通过 finally 强制清理，防止线程复用污染。
+ * 5. Order(0) 确保在 Spring Security FilterChain (-100) 完成 JWT 验签后执行。
  */
 @Component
+@Order(0)
 public class TenantContextFilter extends OncePerRequestFilter {
 
     private static final Logger log = LoggerFactory.getLogger(TenantContextFilter.class);

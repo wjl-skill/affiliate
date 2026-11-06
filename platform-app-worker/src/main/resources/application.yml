@@ -17,6 +17,33 @@ spring:
     virtual:
       enabled: true
 
+  # Nacos 微服务注册发现与配置中心配置
+  cloud:
+    nacos:
+      server-addr: ${NACOS_SERVER_ADDR:127.0.0.1:8848}
+      username: ${NACOS_USERNAME:nacos}
+      password: ${NACOS_PASSWORD:nacos}
+      discovery:
+        enabled: ${NACOS_ENABLED:false}
+        namespace: ${NACOS_NAMESPACE:public}
+        group: ${NACOS_GROUP:AFFILIATE_GROUP}
+        service: platform-app-worker
+        cluster-name: ${NACOS_CLUSTER:WORKERPLANE}
+        weight: 1.0
+        metadata:
+          role: async-worker
+          plane: workerplane
+      config:
+        enabled: ${NACOS_ENABLED:false}
+        namespace: ${NACOS_NAMESPACE:public}
+        group: ${NACOS_GROUP:AFFILIATE_GROUP}
+        file-extension: yaml
+        refresh-enabled: true
+        shared-configs:
+          - data-id: affiliate-common.yaml
+            group: ${NACOS_GROUP:AFFILIATE_GROUP}
+            refresh: true
+
   security:
     filter:
       dispatcher-types:

@@ -110,6 +110,45 @@ class LinUcbBanditEngineTest {
     }
 
     @Test
+    void testRealAbExperimentBucketingAndTwoProportionZConfidence() {
+        String tenantId = "t_ab";
+        String smartLinkId = "link_ab_01";
+        List<String> candidates = List.of("offer_high", "offer_low");
+        LinUcbBanditEngine.BanditContext ctx = LinUcbBanditEngine.BanditContext.of("US", 1, 14);
+
+        banditEngine.setControlTrafficRatio(0.20); // 20% Control, 80% Treatment
+        int treatmentRouted = 0;
+        int controlRouted = 0;
+
+        for (int i = 0; i < 200; i++) {
+            String seed = "req_seed_" + i;
+            LinUcbBanditEngine.AbRoutingDecision decision = banditEngine.selectOfferWithAbExperiment(
+                    tenantId, smartLinkId, candidates, ctx, seed
+            );
+            assertNotNull(decision.selectedOfferId());
+            if (decision.bucket() == LinUcbBanditEngine.ExperimentBucket.CONTROL) {
+                controlRouted++;
+                double reward = (i % 5 == 0) ? 1.5 : 0.0; // Control ~20% CVR
+                banditEngine.updateArm(tenantId, smartLinkId, decision.selectedOfferId(), ctx, reward, LinUcbBanditEngine.ExperimentBucket.CONTROL);
+            } else {
+                treatmentRouted++;
+                double reward = (i % 2 == 0) ? 3.5 : 0.0; // Treatment ~50% CVR
+                banditEngine.updateArm(tenantId, smartLinkId, "offer_high", ctx, reward, LinUcbBanditEngine.ExperimentBucket.TREATMENT);
+            }
+        }
+
+        assertTrue(controlRouted >= 20 && controlRouted <= 65, "Deterministic 20% bucketing should route ~40 requests to CONTROL");
+        assertEquals(200, treatmentRouted + controlRouted);
+
+        var report = banditEngine.generateAbComparisonReport(tenantId, smartLinkId);
+        assertEquals(treatmentRouted, report.totalClicksTreatment());
+        assertEquals(controlRouted, report.totalClicksControl());
+        assertTrue(report.cvrLiftPercent() > 30.0);
+        assertTrue(report.statisticalConfidence() >= 90.0);
+        assertEquals("BANDIT_SIGNIFICANT_WINNER", report.verdict());
+    }
+
+    @Test
     void testDistributedPersistenceWithMapper() throws Exception {
         AffiliateBanditArmMapper mockMapper = Mockito.mock(AffiliateBanditArmMapper.class);
         ObjectMapper mapper = new ObjectMapper();

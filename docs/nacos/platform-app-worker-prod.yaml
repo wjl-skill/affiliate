@@ -1,0 +1,33 @@
+# ===================================================================
+# Nacos DataId: platform-app-worker-prod.yaml
+# Group: AFFILIATE_GROUP
+# 用途: 异步后台任务、Transactional Outbox 中继、Kafka 批量入库与自动补量配置 (Port: 8084)
+# ===================================================================
+
+server:
+  port: 8084
+
+spring:
+  datasource:
+    hikari:
+      pool-name: AffiliateWorkerHikari
+      maximum-pool-size: 60
+      minimum-idle: 10
+      connection-timeout: 3000
+
+  kafka:
+    consumer:
+      group-id: affiliate-worker-group
+      auto-offset-reset: earliest
+      enable-auto-commit: false
+      max-poll-records: 500
+    listener:
+      ack-mode: batch
+      concurrency: 4
+
+app:
+  outbox:
+    relay-interval-ms: 1000
+  supplement:
+    network-enabled: true
+    sandbox-fallback-enabled: false

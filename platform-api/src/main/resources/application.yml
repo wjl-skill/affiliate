@@ -23,6 +23,30 @@ spring:
     virtual:
       enabled: true
 
+  # Nacos 微服务注册发现与配置中心全局配置
+  cloud:
+    nacos:
+      server-addr: ${NACOS_SERVER_ADDR:127.0.0.1:8848}
+      username: ${NACOS_USERNAME:nacos}
+      password: ${NACOS_PASSWORD:nacos}
+      discovery:
+        enabled: ${NACOS_ENABLED:false}
+        namespace: ${NACOS_NAMESPACE:public}
+        group: ${NACOS_GROUP:AFFILIATE_GROUP}
+        service: affiliate-platform
+        cluster-name: ${NACOS_CLUSTER:DEFAULT}
+        weight: 1.0
+      config:
+        enabled: ${NACOS_ENABLED:false}
+        namespace: ${NACOS_NAMESPACE:public}
+        group: ${NACOS_GROUP:AFFILIATE_GROUP}
+        file-extension: yaml
+        refresh-enabled: true
+        shared-configs:
+          - data-id: affiliate-common.yaml
+            group: ${NACOS_GROUP:AFFILIATE_GROUP}
+            refresh: true
+
   # 默认数据源配置 (PostgreSQL 本地环境)
   datasource:
     driver-class-name: org.postgresql.Driver
@@ -143,4 +167,3 @@ app:
     bin-path: ${IP2LOCATION_BIN_PATH:}
     # 内存访问模式: MEMORY_MAPPED (操作系统内存映射，微秒级延迟)
     cache-mode: ${IP2LOCATION_CACHE_MODE:MEMORY_MAPPED}
-

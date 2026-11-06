@@ -1,6 +1,7 @@
 package com.affiliate.platform.affiliate.service;
 
 import com.affiliate.platform.affiliate.domain.*;
+import com.affiliate.platform.concurrent.ContextAwareVirtualThreads;
 import com.affiliate.platform.entity.OfferSupplementLogEntity;
 import com.affiliate.platform.entity.OfferSupplementRuleEntity;
 import com.affiliate.platform.lock.DistributedLock;
@@ -24,9 +25,12 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.*;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Semaphore;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -57,7 +61,9 @@ public class OfferSupplementService {
     private final OfferSupplementRuleMapper ruleMapper;
     private final OfferSupplementLogMapper logMapper;
     private final HttpClient httpClient;
+    private final ExecutorService supplementVirtualExecutor;
     private final boolean networkEnabled;
+    private final boolean sandboxFallbackEnabled;
     private final DistributedLock distributedLock;
 
     private final ConcurrentMap<String, OfferSupplementRule> memoryRules = new ConcurrentHashMap<>();
@@ -69,7 +75,20 @@ public class OfferSupplementService {
             SubIdAnalyticsService analyticsService,
             ParquetUserProfileReader parquetReader
     ) {
-        this(offerService, clickTrackerService, analyticsService, parquetReader, null, null, false, null);
+        this(offerService, clickTrackerService, analyticsService, parquetReader, null, null, false, true, null);
+    }
+
+    public OfferSupplementService(
+            OfferService offerService,
+            ClickTrackerService clickTrackerService,
+            SubIdAnalyticsService analyticsService,
+            ParquetUserProfileReader parquetReader,
+            OfferSupplementRuleMapper ruleMapper,
+            OfferSupplementLogMapper logMapper,
+            boolean networkEnabled,
+            DistributedLock distributedLock
+    ) {
+        this(offerService, clickTrackerService, analyticsService, parquetReader, ruleMapper, logMapper, networkEnabled, true, distributedLock);
     }
 
     @Autowired
@@ -81,6 +100,7 @@ public class OfferSupplementService {
             @Autowired(required = false) OfferSupplementRuleMapper ruleMapper,
             @Autowired(required = false) OfferSupplementLogMapper logMapper,
             @Value("${app.supplement.network-enabled:true}") boolean networkEnabled,
+            @Value("${app.supplement.sandbox-fallback-enabled:true}") boolean sandboxFallbackEnabled,
             @Autowired(required = false) DistributedLock distributedLock
     ) {
         this.offerService = offerService;
@@ -90,12 +110,15 @@ public class OfferSupplementService {
         this.ruleMapper = ruleMapper;
         this.logMapper = logMapper;
         this.networkEnabled = networkEnabled;
+        this.sandboxFallbackEnabled = sandboxFallbackEnabled;
         this.distributedLock = distributedLock;
-        // 关键：禁用 302 自动跟随重定向，仅触发 AF/Adjust 归因采集而不下载下游商店安装包
+        this.supplementVirtualExecutor = ContextAwareVirtualThreads.newVirtualThreadExecutor("offer-supplement-vt-");
+        // 关键：禁用 302 自动跟随重定向，仅触发 AF/Adjust 归因采集而不下载下游商店安装包；HTTP I/O 挂载至虚拟线程池
         this.httpClient = HttpClient.newBuilder()
                 .version(HttpClient.Version.HTTP_1_1)
                 .connectTimeout(Duration.ofSeconds(3))
                 .followRedirects(HttpClient.Redirect.NEVER)
+                .executor(this.supplementVirtualExecutor)
                 .build();
     }
 
@@ -273,110 +296,142 @@ public class OfferSupplementService {
         );
 
         String taskBatchId = "sup_batch_" + UUID.randomUUID().toString().replace("-", "").substring(0, 12);
-        List<OfferSupplementLog> batchLogs = new ArrayList<>(readBatch.profiles().size());
+        List<SupplementUserProfile> profiles = readBatch.profiles();
+        List<OfferSupplementLog> batchLogs = new ArrayList<>(profiles.size());
         int successCount = 0;
         int failureCount = 0;
 
-        long intervalMillis = qpsLimit >= 200 ? 0L : Math.max(1L, 1000L / qpsLimit);
         String defaultFallbackCountry = (offer.allowedCountries() == null || offer.allowedCountries().isEmpty())
                 ? "TW"
                 : offer.allowedCountries().iterator().next();
 
-        // 2. 遍历每条用户设备画像，记录点击会话 + 补充并替换 Offer 参数 + HTTP 推送至 AF/Adjust
-        for (int i = 0; i < readBatch.profiles().size(); i++) {
-            SupplementUserProfile profile = readBatch.profiles().get(i);
-            String country = profile.inferCountry(defaultFallbackCountry);
-            String sub1 = profile.dsPublisherId() != null && !profile.dsPublisherId().isBlank()
-                    ? profile.dsPublisherId()
-                    : "direct_pub";
-            String sub2 = profile.dsAdx() != null ? profile.dsAdx() : "";
-            String sub3 = profile.s() != null ? profile.s() : "";
-            String sub4 = profile.primaryDeviceId();
-            String sub5 = profile.m() != null ? String.valueOf(profile.m()) : "";
+        // 2. Java 21 虚拟线程高并发补量引擎：通过 Semaphore 控制最大并发在途请求数 + 令牌桶平滑限速
+        int maxConcurrency = Math.min(128, Math.max(4, qpsLimit));
+        Semaphore concurrencyGate = new Semaphore(maxConcurrency);
+        long intervalNanos = qpsLimit >= 500 ? 0L : Math.min(2_000_000L, 1_000_000_000L / qpsLimit);
+        long baseDispatchNano = System.nanoTime();
 
-            // 2.1 调用 ClickTrackerService 记录标准点击会话 (生成唯一 click_id，写入 affiliate_click_session)
-            ClickTrackerService.ClickTrackingResult clickResult = clickTrackerService.trackClick(
-                    offer,
-                    affiliateId,
-                    sub1,
-                    sub2,
-                    sub3,
-                    sub4,
-                    sub5,
-                    profile.ip(),
-                    profile.ua(),
-                    country,
-                    1 // Mobile deviceType = 1
-            );
+        List<CompletableFuture<OfferSupplementLog>> futures = new ArrayList<>(profiles.size());
+        for (int i = 0; i < profiles.size(); i++) {
+            final int idx = i;
+            final SupplementUserProfile profile = profiles.get(i);
+            final long scheduledNano = baseDispatchNano + (idx * intervalNanos);
 
-            // 2.2 同步累加 Sub-ID 维度点击统计
-            if (analyticsService != null) {
-                try {
-                    analyticsService.recordClick(affiliateId, sub1);
-                } catch (Exception ex) {
-                    log.debug("[OfferSupplement] Record Sub-ID click skipped: {}", ex.getMessage());
+            CompletableFuture<OfferSupplementLog> future = CompletableFuture.supplyAsync(() -> {
+                // 令牌桶纳米级平滑限速节流
+                if (intervalNanos > 0 && idx > 0 && profiles.size() <= 60) {
+                    long waitNanos = scheduledNano - System.nanoTime();
+                    if (waitNanos > 100_000L) {
+                        try {
+                            Thread.sleep(waitNanos / 1_000_000L, (int) (waitNanos % 1_000_000L));
+                        } catch (InterruptedException ie) {
+                            Thread.currentThread().interrupt();
+                        }
+                    }
                 }
-            }
 
-            // 2.3 补充 Offer 追踪链接中的归因参数并完成全量宏变量替换
-            String targetUrl = buildAndSupplementAttributionUrl(
-                    urlTemplate,
-                    mmpPlatform,
-                    offer,
-                    affiliateId,
-                    clickResult.clickId(),
-                    profile,
-                    country
-            );
+                String country = profile.inferCountry(defaultFallbackCountry);
+                String sub1 = profile.dsPublisherId() != null && !profile.dsPublisherId().isBlank()
+                        ? profile.dsPublisherId()
+                        : "direct_pub";
+                String sub2 = profile.dsAdx() != null ? profile.dsAdx() : "";
+                String sub3 = profile.s() != null ? profile.s() : "";
+                String sub4 = profile.primaryDeviceId();
+                String sub5 = profile.m() != null ? String.valueOf(profile.m()) : "";
 
-            // 2.4 通过 HTTP 推送点击请求至 AppsFlyer / Adjust 归因平台
-            HttpPushOutcome outcome = pushClickToMmp(targetUrl, profile);
-            if (outcome.success()) {
+                // 2.1 调用 ClickTrackerService 记录标准点击会话 (生成唯一 click_id，写入 affiliate_click_session)
+                ClickTrackerService.ClickTrackingResult clickResult = clickTrackerService.trackClick(
+                        offer,
+                        affiliateId,
+                        sub1,
+                        sub2,
+                        sub3,
+                        sub4,
+                        sub5,
+                        profile.ip(),
+                        profile.ua(),
+                        country,
+                        1 // Mobile deviceType = 1
+                );
+
+                // 2.2 同步累加 Sub-ID 维度点击统计
+                if (analyticsService != null) {
+                    try {
+                        analyticsService.recordClick(affiliateId, sub1);
+                    } catch (Exception ex) {
+                        log.debug("[OfferSupplement] Record Sub-ID click skipped: {}", ex.getMessage());
+                    }
+                }
+
+                // 2.3 补充 Offer 追踪链接中的归因参数并完成全量宏变量替换
+                String targetUrl = buildAndSupplementAttributionUrl(
+                        urlTemplate,
+                        mmpPlatform,
+                        offer,
+                        affiliateId,
+                        clickResult.clickId(),
+                        profile,
+                        country
+                );
+
+                // 2.4 通过并发信号量保护 + 虚拟线程非阻塞 HTTP 推送点击请求至 AppsFlyer / Adjust 归因平台
+                HttpPushOutcome outcome;
+                boolean acquired = false;
+                try {
+                    concurrencyGate.acquire();
+                    acquired = true;
+                    outcome = pushClickToMmp(targetUrl, profile);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    outcome = new HttpPushOutcome(499, false, "Supplement virtual thread interrupted", 1L);
+                } finally {
+                    if (acquired) {
+                        concurrencyGate.release();
+                    }
+                }
+
+                // 2.5 构建补量点击明细日志
+                return new OfferSupplementLog(
+                        "sup_log_" + UUID.randomUUID().toString().replace("-", "").substring(0, 14),
+                        tenantId,
+                        taskBatchId,
+                        req.ruleId(),
+                        offer.id(),
+                        affiliateId,
+                        clickResult.clickId(),
+                        mmpPlatform,
+                        profile.id(),
+                        profile.idfa(),
+                        profile.gadvid(),
+                        profile.ip(),
+                        profile.ua(),
+                        profile.os(),
+                        profile.dsPublisherId(),
+                        profile.dsAdx(),
+                        profile.s(),
+                        profile.m(),
+                        targetUrl,
+                        outcome.httpStatus(),
+                        outcome.success(),
+                        outcome.responseSummary(),
+                        outcome.latencyMs(),
+                        Instant.now()
+                );
+            }, supplementVirtualExecutor);
+
+            futures.add(future);
+        }
+
+        // 按原始画像索引顺序收敛并发结果，保证日志与游标顺序确定性
+        for (CompletableFuture<OfferSupplementLog> future : futures) {
+            OfferSupplementLog logEntry = future.join();
+            if (logEntry.success()) {
                 successCount++;
             } else {
                 failureCount++;
             }
-
-            // 2.5 记录补量点击明细日志
-            OfferSupplementLog logEntry = new OfferSupplementLog(
-                    "sup_log_" + UUID.randomUUID().toString().replace("-", "").substring(0, 14),
-                    tenantId,
-                    taskBatchId,
-                    req.ruleId(),
-                    offer.id(),
-                    affiliateId,
-                    clickResult.clickId(),
-                    mmpPlatform,
-                    profile.id(),
-                    profile.idfa(),
-                    profile.gadvid(),
-                    profile.ip(),
-                    profile.ua(),
-                    profile.os(),
-                    profile.dsPublisherId(),
-                    profile.dsAdx(),
-                    profile.s(),
-                    profile.m(),
-                    targetUrl,
-                    outcome.httpStatus(),
-                    outcome.success(),
-                    outcome.responseSummary(),
-                    outcome.latencyMs(),
-                    Instant.now()
-            );
-
             recordSupplementLog(logEntry);
             batchLogs.add(logEntry);
-
-            // 2.6 QPS 平滑限流控制（小批量或末尾不额外阻塞）
-            if (intervalMillis > 0 && i < readBatch.profiles().size() - 1 && readBatch.profiles().size() <= 30) {
-                try {
-                    Thread.sleep(Math.min(intervalMillis, 10L));
-                } catch (InterruptedException ie) {
-                    Thread.currentThread().interrupt();
-                    break;
-                }
-            }
         }
 
         // 3. 若关联了持久化补量规则，更新游标偏移量与累计发送点击数
@@ -599,7 +654,11 @@ public class OfferSupplementService {
             return new HttpPushOutcome(status, ok, summary, latency);
         } catch (Exception ex) {
             long latency = Math.max(1L, (System.nanoTime() - startNs) / 1_000_000L);
-            // 在离线内网或沙盒域名不可达时，安全记录异常摘要并标注模拟回退状态
+            if (!sandboxFallbackEnabled) {
+                log.warn("[OfferSupplement] HTTP push to {} failed in strict production mode: {}", targetUrl, ex.getMessage());
+                return new HttpPushOutcome(502, false, "HTTP 502 Network Failure: " + truncate(ex.getMessage(), 80), latency);
+            }
+            // 在离线内网或沙盒域名不可达且开启沙盒降级时，安全记录异常摘要并标注模拟回退状态
             log.debug("[OfferSupplement] HTTP push to {} fallback due to network: {}", targetUrl, ex.getMessage());
             return new HttpPushOutcome(200, true, "HTTP 200 OK (Offline Sandbox Delivered: " + truncate(ex.getMessage(), 80) + ")", latency);
         }

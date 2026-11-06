@@ -15,6 +15,28 @@ spring:
     virtual:
       enabled: true
 
+  cloud:
+    nacos:
+      server-addr: ${NACOS_SERVER_ADDR:nacos:8848}
+      username: ${NACOS_USERNAME:nacos}
+      password: ${NACOS_PASSWORD:nacos}
+      discovery:
+        enabled: ${NACOS_ENABLED:true}
+        namespace: ${NACOS_NAMESPACE:prod}
+        group: ${NACOS_GROUP:AFFILIATE_GROUP}
+        service: affiliate-platform
+        cluster-name: ${NACOS_CLUSTER:DEFAULT}
+      config:
+        enabled: ${NACOS_ENABLED:true}
+        namespace: ${NACOS_NAMESPACE:prod}
+        group: ${NACOS_GROUP:AFFILIATE_GROUP}
+        file-extension: yaml
+        refresh-enabled: true
+        shared-configs:
+          - data-id: affiliate-common.yaml
+            group: ${NACOS_GROUP:AFFILIATE_GROUP}
+            refresh: true
+
   datasource:
     # PostgreSQL 关系数据库连接配置
     driver-class-name: org.postgresql.Driver

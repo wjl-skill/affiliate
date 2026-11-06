@@ -56,6 +56,17 @@ public interface BudgetService {
     default void creditBudget(String tenantId, String campaignId, BigDecimal amount) {}
 
     /**
+     * 延长活跃预占或本地切片租约的有效期，防止存活切片被超时扫描误回收
+     *
+     * @param reservation    预占凭证
+     * @param durationMillis 续期毫秒数
+     * @return 是否续租成功
+     */
+    default boolean renewLease(Reservation reservation, long durationMillis) {
+        return true;
+    }
+
+    /**
      * 预算原子预占临时凭据实体 (Budget Reservation Record)
      *
      * @param id         预占流水唯一主键 ID

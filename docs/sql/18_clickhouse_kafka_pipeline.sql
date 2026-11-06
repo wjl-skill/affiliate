@@ -27,19 +27,24 @@ PRIMARY KEY (tenant_id, report_date, offer_id, affiliate_id)
 ORDER BY (tenant_id, report_date, offer_id, affiliate_id, country, sub1, sub2, sub3, sub4, sub5)
 SETTINGS index_granularity = 8192;
 
--- 2. Kafka 实时点击事件缓冲消费引擎 (Kafka Engine for Clicks)
+-- 2. Kafka 实时点击事件缓冲消费引擎 (兼容 Jackson camelCase 与 snake_case 双格式序列化)
 CREATE TABLE IF NOT EXISTS kafka_affiliate_click_queue (
-    click_id String,
-    tenant_id String,
-    offer_id String,
-    affiliate_id String,
+    click_id Nullable(String),
+    clickId Nullable(String),
+    tenant_id Nullable(String),
+    tenantId Nullable(String),
+    offer_id Nullable(String),
+    offerId Nullable(String),
+    affiliate_id Nullable(String),
+    affiliateId Nullable(String),
     sub1 Nullable(String),
     sub2 Nullable(String),
     sub3 Nullable(String),
     sub4 Nullable(String),
     sub5 Nullable(String),
     country Nullable(String),
-    created_at DateTime64(3, 'UTC')
+    created_at Nullable(DateTime64(3, 'UTC')),
+    createdAt Nullable(DateTime64(3, 'UTC'))
 ) ENGINE = Kafka
 SETTINGS
     kafka_broker_list = 'kafka:9092',
@@ -53,11 +58,11 @@ SETTINGS
 CREATE MATERIALIZED VIEW IF NOT EXISTS mv_kafka_click_to_olap
 TO affiliate_report_daily_olap AS
 SELECT
-    ifNull(tenant_id, 'default') AS tenant_id,
-    toDate(created_at) AS report_date,
-    ifNull(offer_id, '') AS offer_id,
-    ifNull(affiliate_id, '') AS affiliate_id,
-    ifNull(country, 'ZZ') AS country,
+    coalesce(tenant_id, tenantId, 'default') AS tenant_id,
+    toDate(coalesce(created_at, createdAt, now64(3))) AS report_date,
+    coalesce(offer_id, offerId, '') AS offer_id,
+    coalesce(affiliate_id, affiliateId, '') AS affiliate_id,
+    coalesce(country, 'ZZ') AS country,
     ifNull(sub1, '') AS sub1,
     ifNull(sub2, '') AS sub2,
     ifNull(sub3, '') AS sub3,
@@ -69,12 +74,16 @@ SELECT
     toDecimal64(0.0000, 4) AS revenue
 FROM kafka_affiliate_click_queue;
 
--- 4. Kafka 实时转化事件缓冲消费引擎 (Kafka Engine for Conversions)
+-- 4. Kafka 实时转化事件缓冲消费引擎 (兼容 Jackson camelCase 与 snake_case 双格式序列化)
 CREATE TABLE IF NOT EXISTS kafka_affiliate_conversion_queue (
-    conversion_id String,
-    tenant_id String,
-    offer_id String,
-    affiliate_id String,
+    conversion_id Nullable(String),
+    id Nullable(String),
+    tenant_id Nullable(String),
+    tenantId Nullable(String),
+    offer_id Nullable(String),
+    offerId Nullable(String),
+    affiliate_id Nullable(String),
+    affiliateId Nullable(String),
     sub1 Nullable(String),
     sub2 Nullable(String),
     sub3 Nullable(String),
@@ -84,7 +93,8 @@ CREATE TABLE IF NOT EXISTS kafka_affiliate_conversion_queue (
     payout Decimal64(4),
     revenue Decimal64(4),
     status String,
-    created_at DateTime64(3, 'UTC')
+    created_at Nullable(DateTime64(3, 'UTC')),
+    createdAt Nullable(DateTime64(3, 'UTC'))
 ) ENGINE = Kafka
 SETTINGS
     kafka_broker_list = 'kafka:9092',
@@ -98,11 +108,11 @@ SETTINGS
 CREATE MATERIALIZED VIEW IF NOT EXISTS mv_kafka_conversion_to_olap
 TO affiliate_report_daily_olap AS
 SELECT
-    ifNull(tenant_id, 'default') AS tenant_id,
-    toDate(created_at) AS report_date,
-    ifNull(offer_id, '') AS offer_id,
-    ifNull(affiliate_id, '') AS affiliate_id,
-    ifNull(country, 'ZZ') AS country,
+    coalesce(tenant_id, tenantId, 'default') AS tenant_id,
+    toDate(coalesce(created_at, createdAt, now64(3))) AS report_date,
+    coalesce(offer_id, offerId, '') AS offer_id,
+    coalesce(affiliate_id, affiliateId, '') AS affiliate_id,
+    coalesce(country, 'ZZ') AS country,
     ifNull(sub1, '') AS sub1,
     ifNull(sub2, '') AS sub2,
     ifNull(sub3, '') AS sub3,

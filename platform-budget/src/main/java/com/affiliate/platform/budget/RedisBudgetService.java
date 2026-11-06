@@ -43,6 +43,7 @@ public class RedisBudgetService implements BudgetService {
     private final DefaultRedisScript<Long> confirmScript;
     private final DefaultRedisScript<Long> releaseScript;
     private final DefaultRedisScript<Long> expireSweepScript;
+    private final DefaultRedisScript<Long> renewLeaseScript;
 
     /**
      * 构造 Redis 预算服务并初始化 Lua 原子脚本
@@ -135,6 +136,14 @@ public class RedisBudgetService implements BudgetService {
                 "redis.call('SETEX', KEYS[4], " + AUDIT_RECORD_TTL_SECONDS + ", '1') " +
                 "return 1";
         this.expireSweepScript = new DefaultRedisScript<>(expireSweepLua, Long.class);
+
+        // 5. 预占切片租约续期脚本
+        String renewLua =
+                "if redis.call('EXISTS', KEYS[1]) == 0 then return 0 end " +
+                "redis.call('EXPIRE', KEYS[1], tonumber(ARGV[3])) " +
+                "redis.call('ZADD', KEYS[2], tonumber(ARGV[2]), ARGV[1]) " +
+                "return 1";
+        this.renewLeaseScript = new DefaultRedisScript<>(renewLua, Long.class);
     }
 
     /**
@@ -230,6 +239,22 @@ public class RedisBudgetService implements BudgetService {
         if (amount == null || amount.signum() <= 0) return;
         String budgetKey = "{budget:" + tenantId + ":" + campaignId + "}:daily";
         redis.opsForValue().increment(budgetKey, toMicros(amount));
+    }
+
+    @Override
+    public boolean renewLease(Reservation reservation, long durationMillis) {
+        if (reservation == null || reservation.id() == null) return false;
+        String reserveKey = "{budget:" + reservation.tenantId() + ":" + reservation.campaignId() + "}:res:" + reservation.id();
+        String activeSetKey = "{budget:" + reservation.tenantId() + ":" + reservation.campaignId() + "}:active_res";
+        long newExpireEpoch = Instant.now().plusMillis(Math.max(1000L, durationMillis)).toEpochMilli();
+        Long res = redis.execute(
+                renewLeaseScript,
+                List.of(reserveKey, activeSetKey),
+                reservation.id(),
+                String.valueOf(newExpireEpoch),
+                String.valueOf(SAFETY_STORE_TTL_SECONDS)
+        );
+        return res != null && res == 1L;
     }
 
     /**

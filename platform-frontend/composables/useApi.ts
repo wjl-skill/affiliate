@@ -2,23 +2,21 @@
  * 网盟后台统一 API 请求客户端封装
  * 自动注入当前租户空间与后端地址，统一解析后端错误体并向外抛出可展示的错误信息。
  * 调用失败时始终抛出异常，由页面决定提示与空态展示（不存在演示数据兜底）。
+ * 采用 Nuxt SSR 安全的 useState 管理当前租户上下文，杜绝服务端渲染跨请求租户串号。
  */
 import { ref, type Ref } from 'vue'
 
-let sharedTenantRef: Ref<string> | null = null
-
 export function useApi() {
   const config = useRuntimeConfig()
-  if (!sharedTenantRef) {
+  const currentTenant: Ref<string> = useState<string>('aff_tenant', () => {
     let savedTenant = ''
     try {
       if (typeof window !== 'undefined' && window.localStorage) {
         savedTenant = localStorage.getItem('aff_tenant') || ''
       }
     } catch { /* 隐私模式 */ }
-    sharedTenantRef = ref(savedTenant || config.public.tenantId || 'tenant-1')
-  }
-  const currentTenant = sharedTenantRef
+    return savedTenant || (config.public.tenantId as string) || 'tenant-1'
+  })
 
   const fetchApi = async <T>(url: string, options: Parameters<typeof $fetch>[1] = {}): Promise<T> => {
     const { token, clearAuth } = useAuth()

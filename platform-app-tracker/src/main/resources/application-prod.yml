@@ -9,6 +9,28 @@ spring:
   autoconfigure:
     exclude: []
 
+  cloud:
+    nacos:
+      server-addr: ${NACOS_SERVER_ADDR:nacos:8848}
+      username: ${NACOS_USERNAME:nacos}
+      password: ${NACOS_PASSWORD:nacos}
+      discovery:
+        enabled: ${NACOS_ENABLED:true}
+        namespace: ${NACOS_NAMESPACE:prod}
+        group: ${NACOS_GROUP:AFFILIATE_GROUP}
+        service: platform-app-tracker
+        cluster-name: ${NACOS_CLUSTER:DATAPLANE}
+      config:
+        enabled: ${NACOS_ENABLED:true}
+        namespace: ${NACOS_NAMESPACE:prod}
+        group: ${NACOS_GROUP:AFFILIATE_GROUP}
+        file-extension: yaml
+        refresh-enabled: true
+        shared-configs:
+          - data-id: affiliate-common.yaml
+            group: ${NACOS_GROUP:AFFILIATE_GROUP}
+            refresh: true
+
   datasource:
     driver-class-name: org.postgresql.Driver
     url: ${DB_URL:jdbc:postgresql://127.0.0.1:5432/postgres?currentSchema=public&reWriteBatchedInserts=true&stringtype=unspecified}

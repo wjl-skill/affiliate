@@ -1,0 +1,35 @@
+# ===================================================================
+# Nacos DataId: platform-app-rtb-prod.yaml
+# Group: AFFILIATE_GROUP
+# 用途: OpenRTB 2.5/3.0 毫秒级实时竞价引擎独立配置 (Port: 8082)
+# ===================================================================
+
+server:
+  port: 8082
+  tomcat:
+    max-connections: 30000
+    accept-count: 2000
+
+spring:
+  datasource:
+    hikari:
+      pool-name: AffiliateRtbHikari
+      maximum-pool-size: 20
+      minimum-idle: 5
+      connection-timeout: 800
+
+  data:
+    redis:
+      timeout: 500ms
+      lettuce:
+        pool:
+          max-active: 250
+          max-idle: 60
+          min-idle: 20
+
+app:
+  auction:
+    default-timeout-ms: 15
+    default-floor-price: 0.10
+  rtb:
+    hmac-secret: ${RTB_HMAC_SECRET:affiliate-prod-rtb-hmac-key-32bytes!}

@@ -12,9 +12,11 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -34,7 +36,7 @@ public class OutboxRelayScheduler {
 
     private static final Logger log = LoggerFactory.getLogger(OutboxRelayScheduler.class);
     private static final String RELAY_LOCK_KEY = "lock:outbox:relay";
-    private static final Duration LOCK_LEASE_DURATION = Duration.ofSeconds(10);
+    private static final Duration LOCK_LEASE_DURATION = Duration.ofSeconds(30);
 
     // 安全释放分布式锁 Lua 脚本
     private static final DefaultRedisScript<Long> UNLOCK_SCRIPT = new DefaultRedisScript<>(
@@ -100,19 +102,37 @@ public class OutboxRelayScheduler {
                 }
             }
 
-            // 批量拉取最多 100 条待处理事件 (FOR UPDATE SKIP LOCKED)
+            // 批量拉取最多 100 条待处理事件 (FOR UPDATE SKIP LOCKED)，并发异步发起 Kafka 投递后统一收敛结果
             List<DomainEvent<?>> pending = outbox.pending(100);
+            if (pending == null || pending.isEmpty()) {
+                return;
+            }
+            record InflightSend(DomainEvent<?> event, String topic, CompletableFuture<?> future, Exception syncException) {}
+            List<InflightSend> inflight = new ArrayList<>(pending.size());
             for (DomainEvent<?> event : pending) {
                 String topic = "affiliate." + event.eventType();
                 String messageKey = event.aggregateId();
                 try {
-                    // 同步等待至多 3 秒，确保投递成功后再标记发布
-                    kafka.send(topic, messageKey, event).get(3, TimeUnit.SECONDS);
-                    outbox.markPublished(event.eventId());
+                    CompletableFuture<?> future = kafka.send(topic, messageKey, event);
+                    inflight.add(new InflightSend(event, topic, future, null));
+                } catch (Exception syncEx) {
+                    inflight.add(new InflightSend(event, topic, null, syncEx));
+                }
+            }
+            for (InflightSend item : inflight) {
+                try {
+                    if (item.syncException() != null) {
+                        throw item.syncException();
+                    }
+                    if (item.future() != null) {
+                        item.future().get(3, TimeUnit.SECONDS);
+                    }
+                    outbox.markPublished(item.event().eventId());
                 } catch (Exception ex) {
-                    String errorMsg = ex.getMessage() != null ? ex.getMessage() : ex.getClass().getSimpleName();
-                    log.error("Failed to relay outbox event {} to topic {}: {}", event.eventId(), topic, errorMsg);
-                    outbox.recordFailure(event.eventId(), errorMsg);
+                    Throwable root = ex.getCause() != null ? ex.getCause() : ex;
+                    String errorMsg = root.getMessage() != null ? root.getMessage() : root.getClass().getSimpleName();
+                    log.error("Failed to relay outbox event {} to topic {}: {}", item.event().eventId(), item.topic(), errorMsg);
+                    outbox.recordFailure(item.event().eventId(), errorMsg);
                 }
             }
         } finally {

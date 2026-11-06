@@ -178,7 +178,7 @@ public class LocalBudgetSliceService {
                             BigDecimal sliceFetchAmount = BigDecimal.valueOf(Math.max(DEFAULT_SLICE_MICROS, deductMicros * 10) / 1_000_000.0);
                             BudgetService.Reservation fetched = mainBudgetService.reserve(key.tenantId(), key.campaignId(), "local_slice_agent", sliceFetchAmount);
                             
-                            // 登记 30 秒切片租约
+                            // 登记 30 秒切片租约，若存在旧切片租约则先向主池确认结清，杜绝残留预占被重复回收
                             long fetchMicros = toMicros(sliceFetchAmount);
                             SliceLease lease = new SliceLease(
                                     key,
@@ -186,7 +186,14 @@ public class LocalBudgetSliceService {
                                     fetchMicros,
                                     new AtomicLong(System.currentTimeMillis() + DEFAULT_LEASE_DURATION_MS)
                             );
-                            activeLeases.put(key, lease);
+                            SliceLease prevLease = activeLeases.put(key, lease);
+                            if (prevLease != null && prevLease.reservation() != null) {
+                                try {
+                                    mainBudgetService.confirm(prevLease.reservation());
+                                } catch (Exception confirmEx) {
+                                    log.debug("Confirm previous slice lease skipped: {}", confirmEx.getMessage());
+                                }
+                            }
 
                             // 将拉取到的切片填充至本地原子计数器
                             slice.addAndGet(fetchMicros);
@@ -202,16 +209,29 @@ public class LocalBudgetSliceService {
 
 
     /**
-     * 周期性租约心跳续约：为存活运行中的本地切片延长主预算租约
+     * 周期性租约心跳续约：为存活运行中的本地切片同步延长本地与主预算池 (Redis) 租约
      */
     public void renewActiveLeases() {
-        long now = System.currentTimeMillis();
         for (SliceLease lease : activeLeases.values()) {
             AtomicLong slice = localSlices.get(lease.key());
             if (slice != null && slice.get() > 0) {
                 lease.extendLease(DEFAULT_LEASE_DURATION_MS);
+                if (lease.reservation() != null) {
+                    try {
+                        mainBudgetService.renewLease(lease.reservation(), DEFAULT_LEASE_DURATION_MS * 4);
+                    } catch (Exception ex) {
+                        log.debug("Failed to renew remote slice lease for {}: {}", lease.key(), ex.getMessage());
+                    }
+                }
             } else {
-                activeLeases.remove(lease.key());
+                SliceLease removed = activeLeases.remove(lease.key());
+                if (removed != null && removed.reservation() != null) {
+                    try {
+                        mainBudgetService.confirm(removed.reservation());
+                    } catch (Exception ex) {
+                        log.debug("Failed to confirm depleted slice lease for {}: {}", lease.key(), ex.getMessage());
+                    }
+                }
             }
         }
     }
@@ -295,7 +315,15 @@ public class LocalBudgetSliceService {
 
     public BigDecimal drainAndReturnSlice(SliceKey key) {
         AtomicLong slice = localSlices.get(key);
-        activeLeases.remove(key);
+        SliceLease removedLease = activeLeases.remove(key);
+        if (removedLease != null && removedLease.reservation() != null) {
+            try {
+                // 先确认并销毁主池中的切片预占单，防止超时扫描器重复退回整张切片造成预算膨胀
+                mainBudgetService.confirm(removedLease.reservation());
+            } catch (Exception ex) {
+                log.debug("Confirm slice reservation on drain skipped for {}: {}", key, ex.getMessage());
+            }
+        }
         if (slice == null) return BigDecimal.ZERO;
 
         long unspentMicros = slice.getAndSet(0);

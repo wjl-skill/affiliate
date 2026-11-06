@@ -2,6 +2,7 @@ package com.affiliate.platform.security;
 
 import com.affiliate.platform.security.auth.JwtAuthenticationFilter;
 import com.affiliate.platform.security.auth.JwtTokenService;
+import com.affiliate.platform.tenant.TenantContextFilter;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
@@ -74,6 +75,7 @@ public class SecurityConfiguration {
                     response.getWriter().write("{\"message\":\"未登录或访问令牌已失效\"}");
                 }))
                 .addFilterBefore(new JwtAuthenticationFilter(jwtTokenService, rbacService), UsernamePasswordAuthenticationFilter.class)
+                .addFilterAfter(new TenantContextFilter(), JwtAuthenticationFilter.class)
                 .build();
     }
 }
