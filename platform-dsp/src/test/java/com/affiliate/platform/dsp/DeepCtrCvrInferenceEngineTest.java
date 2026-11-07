@@ -76,4 +76,43 @@ class DeepCtrCvrInferenceEngineTest {
             assertTrue(idx >= 0 && idx < DeepCtrCvrInferenceEngine.HASH_BUCKET_SIZE);
         }
     }
+
+    @Test
+    void testOnlineSgdUpdateImprovesPositiveFeedbackPrediction() {
+        TrafficContext ctx = new TrafficContext(
+                "techcrunch.com",
+                1,
+                LocalDate.now(),
+                10,
+                LocalDate.now().getDayOfWeek(),
+                "US",
+                Set.of("saas", "ai")
+        );
+        Campaign campaign = new Campaign(
+                "camp_ai",
+                "adv_ai_01",
+                "Enterprise AI Cloud",
+                LocalDate.now().minusDays(1),
+                LocalDate.now().plusDays(30),
+                BigDecimal.valueOf(2000.0),
+                BigDecimal.valueOf(25.00),
+                Set.of("techcrunch.com"),
+                Set.of(1),
+                Campaign.Status.ACTIVE,
+                null
+        );
+        BigDecimal floor = BigDecimal.valueOf(2.00);
+
+        DeepCtrCvrInferenceEngine.PredictionResult initialPred = engine.predict(ctx, campaign, floor);
+
+        // 连续注入 5 次正向点击与转化样本反馈
+        for (int i = 0; i < 5; i++) {
+            engine.updateModel(ctx, campaign, floor, true, true);
+        }
+
+        DeepCtrCvrInferenceEngine.PredictionResult updatedPred = engine.predict(ctx, campaign, floor);
+        assertEquals(5L, engine.getOnlineUpdateCount());
+        assertTrue(updatedPred.pCtr() > initialPred.pCtr(), "Online positive click feedback should increase pCTR");
+        assertTrue(updatedPred.pCvr() > initialPred.pCvr(), "Online positive conversion feedback should increase pCVR");
+    }
 }

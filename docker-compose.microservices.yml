@@ -104,6 +104,9 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        APP_MODULE: platform-app-tracker
+        APP_PORT: 8081
     container_name: platform-app-tracker
     restart: unless-stopped
     ports:
@@ -139,6 +142,9 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        APP_MODULE: platform-app-rtb
+        APP_PORT: 8082
     container_name: platform-app-rtb
     restart: unless-stopped
     ports:
@@ -174,6 +180,9 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        APP_MODULE: platform-app-admin
+        APP_PORT: 8083
     container_name: platform-app-admin
     restart: unless-stopped
     ports:
@@ -210,6 +219,9 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        APP_MODULE: platform-app-worker
+        APP_PORT: 8084
     container_name: platform-app-worker
     restart: unless-stopped
     ports:

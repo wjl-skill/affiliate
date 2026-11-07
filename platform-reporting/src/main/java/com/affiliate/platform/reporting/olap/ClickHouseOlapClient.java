@@ -26,13 +26,18 @@ import java.util.concurrent.ConcurrentHashMap;
  * <p>
  * 替代传统关系型数据库承接跨度长、高基数 Sub-ID (sub1~sub5) 的实时向量化下钻查询：
  * 1. 采用零外部依赖的高性能 HTTP 向量化接口 (ClickHouse JSONEachRow Protocol)；
- * 2. 具备自动心跳探测与不可用时平滑降级至本地列式切片引擎能力；
+ * 2. 具备带 TTL 缓存的自动心跳探测与快速失败冷却退避（消除每次查询冗余 /ping RTT 与离线超时阻塞）；
  * 3. 自动生成星型模型向量聚合 SQL 并计算 CTR, CVR, eCPM, EPC, 毛利指标。
  */
 @Component
 public class ClickHouseOlapClient {
 
     private static final Logger log = LoggerFactory.getLogger(ClickHouseOlapClient.class);
+
+    // 健康状态缓存有效期（10 秒），避免每次查询都额外发起一次 /ping HTTP 往返
+    private static final long HEALTH_CACHE_TTL_MS = 10_000L;
+    // 探测失败后的快速降级冷却期（15 秒），避免 ClickHouse 离线时每次查询阻塞 1 秒超时
+    private static final long FAILURE_BACKOFF_MS = 15_000L;
 
     private final String clickhouseUrl;
     private final String database;
@@ -41,6 +46,9 @@ public class ClickHouseOlapClient {
     private final boolean enabled;
     private final HttpClient httpClient;
     private final ObjectMapper objectMapper;
+
+    private volatile boolean cachedAvailable = false;
+    private volatile long nextProbeAllowedAtMs = 0L;
 
     // 内存降级模拟缓存，方便开发与单元测试验证
     private final Map<String, List<OlapAggregationRow>> mockCache = new ConcurrentHashMap<>();
@@ -59,7 +67,7 @@ public class ClickHouseOlapClient {
             @Autowired(required = false) ObjectMapper objectMapper
     ) {
         this.clickhouseUrl = clickhouseUrl != null ? clickhouseUrl.replaceAll("/+$", "") : "http://localhost:8123";
-        this.database = database != null ? database : "default";
+        this.database = sanitizeIdentifier(database != null ? database : "default");
         this.username = username != null ? username : "default";
         this.password = password != null ? password : "";
         this.enabled = enabled;
@@ -75,10 +83,14 @@ public class ClickHouseOlapClient {
     }
 
     /**
-     * 探测 ClickHouse 服务健康状态
+     * 探测 ClickHouse 服务健康状态（带 TTL 缓存与失败快速冷却）
      */
     public boolean isAvailable() {
         if (!enabled) return false;
+        long now = System.currentTimeMillis();
+        if (now < nextProbeAllowedAtMs) {
+            return cachedAvailable;
+        }
         try {
             HttpRequest request = HttpRequest.newBuilder()
                     .uri(URI.create(clickhouseUrl + "/ping"))
@@ -86,9 +98,14 @@ public class ClickHouseOlapClient {
                     .GET()
                     .build();
             HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-            return response.statusCode() == 200 && response.body().contains("Ok");
+            boolean ok = response.statusCode() == 200 && response.body().contains("Ok");
+            cachedAvailable = ok;
+            nextProbeAllowedAtMs = now + (ok ? HEALTH_CACHE_TTL_MS : FAILURE_BACKOFF_MS);
+            return ok;
         } catch (Exception ex) {
-            log.debug("[ClickHouseOlapClient] Ping failed, falling back to local engine: {}", ex.getMessage());
+            cachedAvailable = false;
+            nextProbeAllowedAtMs = now + FAILURE_BACKOFF_MS;
+            log.debug("[ClickHouseOlapClient] Ping failed, falling back to local engine for {}ms: {}", FAILURE_BACKOFF_MS, ex.getMessage());
             return false;
         }
     }
@@ -105,6 +122,8 @@ public class ClickHouseOlapClient {
     ) {
         String column = mapDimensionColumn(groupByField);
         int safeLimit = limit <= 0 ? 500 : Math.min(limit, 5000);
+        LocalDate safeFrom = fromDate != null ? fromDate : LocalDate.now().minusDays(7);
+        LocalDate safeTo = toDate != null ? toDate : LocalDate.now();
         return String.format(
                 "SELECT %s AS dim_value, " +
                 "sum(clicks) AS total_clicks, " +
@@ -122,8 +141,8 @@ public class ClickHouseOlapClient {
                 column,
                 database,
                 escapeSql(tenantId),
-                fromDate.toString(),
-                toDate.toString(),
+                safeFrom.toString(),
+                safeTo.toString(),
                 column,
                 safeLimit
         );
@@ -163,6 +182,8 @@ public class ClickHouseOlapClient {
                     log.warn("[ClickHouseOlapClient] Query returned status {}: {}", response.statusCode(), response.body());
                 }
             } catch (Exception ex) {
+                cachedAvailable = false;
+                nextProbeAllowedAtMs = System.currentTimeMillis() + FAILURE_BACKOFF_MS;
                 log.warn("[ClickHouseOlapClient] Failed to execute query on ClickHouse: {}", ex.getMessage());
             }
         }
@@ -225,6 +246,12 @@ public class ClickHouseOlapClient {
             case "country" -> "country";
             default -> "sub1";
         };
+    }
+
+    private static String sanitizeIdentifier(String id) {
+        if (id == null || id.isBlank()) return "default";
+        String cleaned = id.replaceAll("[^a-zA-Z0-9_]", "");
+        return cleaned.isBlank() ? "default" : cleaned;
     }
 
     private static String escapeSql(String val) {

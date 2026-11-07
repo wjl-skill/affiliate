@@ -3,6 +3,7 @@ package com.affiliate.platform.event;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
@@ -25,9 +26,11 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * <p>
  * 定时轮询发件箱中未完成投递的事件，可靠中继投递至 Kafka。
  * 生产加固：
- * 1. 采用带 Owner 唯一凭证的分布式租约锁，并通过 Lua 脚本安全释放，防止长任务超时释放后误删其他节点新锁；
- * 2. 具备单机并发防重入（AtomicBoolean）；
- * 3. 投递成功后更新 markPublished，投递失败累加重试计数与异常摘要；达到阈值自动沉降至死信表并报警。
+ * 1. 支持 app.scheduling.enabled 门控，防止数据面节点与 Worker 节点争抢锁；
+ * 2. 采用带 Owner 唯一凭证的分布式租约锁，并通过 Lua 脚本安全释放，防止长任务超时释放后误删其他节点新锁；
+ * 3. 具备单机并发防重入（AtomicBoolean）；
+ * 4. 采用 CompletableFuture.allOf 并行屏障等待整批 Kafka 异步发送结果，杜绝串行等待导致锁租约过期；
+ * 5. 投递成功后更新 markPublished，投递失败累加重试计数与异常摘要；达到阈值自动沉降至死信表并报警。
  */
 @Component
 @EnableScheduling
@@ -37,6 +40,7 @@ public class OutboxRelayScheduler {
     private static final Logger log = LoggerFactory.getLogger(OutboxRelayScheduler.class);
     private static final String RELAY_LOCK_KEY = "lock:outbox:relay";
     private static final Duration LOCK_LEASE_DURATION = Duration.ofSeconds(30);
+    private static final long BATCH_SEND_TIMEOUT_SECONDS = 5L;
 
     // 安全释放分布式锁 Lua 脚本
     private static final DefaultRedisScript<Long> UNLOCK_SCRIPT = new DefaultRedisScript<>(
@@ -47,6 +51,9 @@ public class OutboxRelayScheduler {
             "end",
             Long.class
     );
+
+    @Value("${app.scheduling.enabled:true}")
+    private boolean schedulingEnabled = true;
 
     // 事务发件箱仓储
     private final OutboxStore outbox;
@@ -80,6 +87,9 @@ public class OutboxRelayScheduler {
      */
     @Scheduled(fixedDelayString = "${app.outbox.relay-interval-ms:1000}")
     public void relay() {
+        if (!schedulingEnabled) {
+            return;
+        }
         if (!isRelaying.compareAndSet(false, true)) {
             // 本机上一轮中继尚未结束，跳过避免线程拥堵
             return;
@@ -109,23 +119,45 @@ public class OutboxRelayScheduler {
             }
             record InflightSend(DomainEvent<?> event, String topic, CompletableFuture<?> future, Exception syncException) {}
             List<InflightSend> inflight = new ArrayList<>(pending.size());
+            List<CompletableFuture<?>> asyncFutures = new ArrayList<>(pending.size());
+
             for (DomainEvent<?> event : pending) {
                 String topic = "affiliate." + event.eventType();
                 String messageKey = event.aggregateId();
                 try {
                     CompletableFuture<?> future = kafka.send(topic, messageKey, event);
                     inflight.add(new InflightSend(event, topic, future, null));
+                    if (future != null) {
+                        asyncFutures.add(future);
+                    }
                 } catch (Exception syncEx) {
                     inflight.add(new InflightSend(event, topic, null, syncEx));
                 }
             }
+
+            // 并行屏障等待整批 Kafka 异步投递完成（最长 5s，远小于 30s 分布式锁租约，杜绝串行累加阻塞）
+            if (!asyncFutures.isEmpty()) {
+                try {
+                    CompletableFuture.allOf(asyncFutures.toArray(new CompletableFuture[0]))
+                            .get(BATCH_SEND_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+                } catch (Exception batchWaitEx) {
+                    log.debug("Outbox batch wait completed with partial failure or timeout: {}", batchWaitEx.getMessage());
+                }
+            }
+
             for (InflightSend item : inflight) {
                 try {
                     if (item.syncException() != null) {
                         throw item.syncException();
                     }
-                    if (item.future() != null) {
-                        item.future().get(3, TimeUnit.SECONDS);
+                    CompletableFuture<?> f = item.future();
+                    if (f != null) {
+                        if (!f.isDone()) {
+                            f.cancel(true);
+                            throw new java.util.concurrent.TimeoutException("Kafka send timed out after " + BATCH_SEND_TIMEOUT_SECONDS + "s");
+                        }
+                        // 若已完成但包含异常，getNow 会抛出 CompletionException
+                        f.getNow(null);
                     }
                     outbox.markPublished(item.event().eventId());
                 } catch (Exception ex) {

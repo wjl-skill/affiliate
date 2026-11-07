@@ -3,6 +3,7 @@ package com.affiliate.platform.rtb;
 import com.affiliate.platform.budget.BudgetService;
 import com.affiliate.platform.budget.FrequencyCapService;
 import com.affiliate.platform.budget.LocalBudgetSliceService;
+import com.affiliate.platform.concurrent.ContextAwareVirtualThreads;
 import com.affiliate.platform.domain.AdSlot;
 import com.affiliate.platform.domain.Auction;
 import com.affiliate.platform.domain.Creative;
@@ -26,7 +27,7 @@ import java.util.UUID;
  * OpenRTB 2.5 极速实时竞价拍卖服务 (High-Performance RTB Auction Service)
  * <p>
  * 遵循工业界 P99 < 20ms 的超低延迟 SLA 规范：
- * 1. 采用内存倒排索引 (CreativeInvertedIndex) 实现 O(1) 纳秒级素材检索；
+ * 1. 采用内存倒排索引 (CreativeInvertedIndex) 实现 O(1) 纳秒级素材检索，并支持 30s TTL 增量热刷新；
  * 2. 采用两级本地配额切片 (LocalBudgetSliceService) 实现微秒级无网络 RTT 预算扣减；
  * 3. 采用基于 Redis 的滑动窗口频控避免骚扰与超频；
  * 4. 内置 15ms 请求级硬超时截断防护机制，预留 5ms 网络传输与序列化缓冲，绝不违约。
@@ -35,6 +36,9 @@ import java.util.UUID;
 public class OpenRtbAuctionService {
 
     private static final Logger log = LoggerFactory.getLogger(OpenRtbAuctionService.class);
+
+    // 倒排索引周期性热刷新间隔：30 秒
+    private static final long INDEX_REFRESH_INTERVAL_NANOS = 30_000_000_000L;
 
     // 媒体广告位服务
     private final AdSlotService slots;
@@ -71,6 +75,9 @@ public class OpenRtbAuctionService {
 
     // 自适应负载过载保护器
     private final RtbAdaptiveLoadShedder loadShedder;
+
+    // 最近一次倒排索引刷新纳秒时间戳
+    private volatile long lastIndexRefreshNanos = System.nanoTime();
 
     /**
      * 完整依赖注入构造器
@@ -152,6 +159,17 @@ public class OpenRtbAuctionService {
     }
 
     /**
+     * 刷新内存素材倒排索引（支持主动调用或 TTL 到期触发）
+     */
+    public synchronized void refreshCreativeIndex() {
+        List<Creative> latest = creatives != null ? creatives.list() : List.of();
+        if (latest != null && (!latest.isEmpty() || creativeIndex.totalActiveCount() == 0)) {
+            creativeIndex.loadAll(latest);
+        }
+        lastIndexRefreshNanos = System.nanoTime();
+    }
+
+    /**
      * 执行 OpenRTB 竞价核心主流程 (RTB Hot Path)
      *
      * @param request OpenRTB 2.5 竞价请求
@@ -176,9 +194,10 @@ public class OpenRtbAuctionService {
         String userId = (request.user() != null && request.user().id() != null) ? request.user().id() : "anon";
         List<OpenRtb.Bid> bids = new ArrayList<>();
 
-        // 懒加载：确保倒排索引在初次请求前已被装载入内存
-        if (creativeIndex.totalActiveCount() == 0) {
-            creativeIndex.loadAll(creatives.list());
+        // 懒加载与 30s TTL 热刷新：确保倒排索引及时感知新增/下架的广告素材
+        if (creativeIndex.totalActiveCount() == 0
+                || (startNanos - lastIndexRefreshNanos) >= INDEX_REFRESH_INTERVAL_NANOS) {
+            refreshCreativeIndex();
         }
 
         // 遍历竞价请求中的每一个广告曝光机会 (Impression)
@@ -263,12 +282,11 @@ public class OpenRtbAuctionService {
                 if (disruptorLedger != null) {
                     disruptorLedger.recordAsync(auctionRecord);
                 } else {
-                    Thread.ofVirtual().name("rtb-auction-async-writer").start(() -> {
+                    ContextAwareVirtualThreads.start("rtb-auction-async-writer", () -> {
                         try {
                             auctions.save(auctionRecord);
                         } catch (Exception ex) {
-                            org.slf4j.LoggerFactory.getLogger(OpenRtbAuctionService.class)
-                                    .warn("Async auction save failed for {}: {}", auctionId, ex.getMessage());
+                            log.warn("Async auction save failed for {}: {}", auctionId, ex.getMessage());
                         }
                     });
                 }
@@ -291,6 +309,13 @@ public class OpenRtbAuctionService {
      */
     public CreativeInvertedIndex getCreativeIndex() {
         return creativeIndex;
+    }
+
+    /**
+     * 获取本地两级预算切片服务引用（用于 Win Notice 确认核销本地预占单）
+     */
+    public LocalBudgetSliceService getLocalBudgetService() {
+        return localBudgetService;
     }
 
     /**

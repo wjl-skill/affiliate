@@ -10,16 +10,16 @@ import com.affiliate.platform.service.billing.CreativeAiBillingService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
-import java.util.Optional;
 
 /**
- * AI 视频生成任务定时轮询与生命周期回收调度器 (采用分布式锁加固防重)
+ * AI 视频生成任务定时轮询与生命周期回收调度器 (采用分布式锁加固防重与微服务调度隔离)
  * <p>
  * 1. 自动轮询处理中的 AI 视频生成任务并更新结果；
  * 2. 自动超时熔断：处理时间超过 2 小时的死锁/挂起任务自动标记失败并解冻预占算力；
@@ -32,6 +32,9 @@ public class AiTaskPollingScheduler {
 
     private static final Duration STALE_PROCESSING_TIMEOUT = Duration.ofHours(2);
     private static final Duration SUCCESS_FETCHED_DISCARD_TIMEOUT = Duration.ofDays(5);
+
+    @Value("${app.scheduling.enabled:true}")
+    private boolean schedulingEnabled = true;
 
     private final AiVideoGenerationService generationService;
     private final AiGenerateTaskRecordRepository taskRepo;
@@ -64,6 +67,9 @@ public class AiTaskPollingScheduler {
      */
     @Scheduled(fixedDelay = 10000)
     public int pollPendingAiTasks() {
+        if (!schedulingEnabled) {
+            return 0;
+        }
         String lockKey = "lock:ai:polling";
         var lockOpt = distributedLock.tryAcquire(lockKey, Duration.ofSeconds(9));
         if (lockOpt.isEmpty()) {
@@ -88,6 +94,9 @@ public class AiTaskPollingScheduler {
      */
     @Scheduled(fixedDelay = 300000)
     public int cleanupStaleTasks() {
+        if (!schedulingEnabled) {
+            return 0;
+        }
         String lockKey = "lock:ai:cleanup_stale";
         var lockOpt = distributedLock.tryAcquire(lockKey, Duration.ofMinutes(4));
         if (lockOpt.isEmpty()) {

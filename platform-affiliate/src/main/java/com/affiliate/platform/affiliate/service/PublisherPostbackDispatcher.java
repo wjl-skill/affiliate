@@ -3,6 +3,7 @@ package com.affiliate.platform.affiliate.service;
 import com.affiliate.platform.affiliate.domain.AffiliatePartner;
 import com.affiliate.platform.affiliate.domain.ClickSession;
 import com.affiliate.platform.affiliate.domain.Conversion;
+import com.affiliate.platform.concurrent.ContextAwareVirtualThreads;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -14,9 +15,9 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
-import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
+import java.util.Locale;
+import java.util.concurrent.CompletableFuture;
 
 /**
  * 渠道转化下游回传分发器 (Publisher Postback Dispatcher - Production Grade)
@@ -24,8 +25,8 @@ import java.util.List;
  * 当网盟平台成功归因并确认一笔有效转化时：
  * 1. 提取该渠道客配置的 `postbackUrlTemplate`；
  * 2. 动态替换宏参数（`{click_id}`, `{payout}`, `{txid}`, `{sub1}` 等）；
- * 3. 异步发送真实 HTTP GET 请求完成对下游渠道的转化通知；
- * 4. 内置指数退避重试机制与失败状态记录，具备完整投递审计留痕。
+ * 3. 执行 SSRF 与协议安全校验（拦截非 HTTP/HTTPS 协议及云主机元数据地址 `169.254.169.254`）；
+ * 4. 支持虚拟线程异步分发 (`dispatchAsync`) 与指数退避重试机制，具备完整投递审计留痕。
  */
 @Service
 public class PublisherPostbackDispatcher {
@@ -106,7 +107,44 @@ public class PublisherPostbackDispatcher {
     }
 
     /**
-     * 调度分发渠道回传通知 (带真实 HTTP 请求与退避重试)
+     * 校验 Postback URI 是否符合 SSRF 防护基线（仅允许 http/https，禁止访问云元数据及危险内网地址）
+     */
+    public static boolean isSafePostbackUri(URI uri) {
+        if (uri == null || uri.getScheme() == null || uri.getHost() == null) {
+            return false;
+        }
+        String scheme = uri.getScheme().toLowerCase(Locale.ROOT);
+        if (!"http".equals(scheme) && !"https".equals(scheme)) {
+            return false;
+        }
+        String host = uri.getHost().toLowerCase(Locale.ROOT);
+        if (host.startsWith("169.254.") || "metadata.google.internal".equals(host) || "100.100.100.200".equals(host)) {
+            return false;
+        }
+        return true;
+    }
+
+    /**
+     * 基于上下文感知虚拟线程的异步非阻塞回传分发
+     */
+    public CompletableFuture<PostbackDeliveryLog> dispatchAsync(
+            AffiliatePartner partner,
+            Conversion conversion,
+            ClickSession session
+    ) {
+        CompletableFuture<PostbackDeliveryLog> future = new CompletableFuture<>();
+        ContextAwareVirtualThreads.start("publisher-postback-vt", () -> {
+            try {
+                future.complete(dispatch(partner, conversion, session));
+            } catch (Throwable ex) {
+                future.completeExceptionally(ex);
+            }
+        });
+        return future;
+    }
+
+    /**
+     * 调度分发渠道回传通知 (带 SSRF 校验、真实 HTTP 请求与退避重试)
      */
     public PostbackDeliveryLog dispatch(
             AffiliatePartner partner,
@@ -125,13 +163,32 @@ public class PublisherPostbackDispatcher {
         boolean success = false;
         String responseBody = "PENDING";
 
+        URI parsedUri;
+        try {
+            parsedUri = URI.create(renderedUrl);
+        } catch (Exception invalidUri) {
+            PostbackDeliveryLog blockedLog = new PostbackDeliveryLog(
+                    conversion.id(), partner.id(), renderedUrl, false, "Blocked: Invalid URI syntax"
+            );
+            recordDeliveryLog(blockedLog);
+            return blockedLog;
+        }
+
+        if (!isSafePostbackUri(parsedUri)) {
+            log.warn("[SSRF Guard] Blocked unsafe postback URI for partner {}: {}", partner.id(), renderedUrl);
+            PostbackDeliveryLog blockedLog = new PostbackDeliveryLog(
+                    conversion.id(), partner.id(), renderedUrl, false, "Blocked by SSRF security policy"
+            );
+            recordDeliveryLog(blockedLog);
+            return blockedLog;
+        }
+
         if (networkEnabled && httpClient != null) {
             int maxAttempts = 3;
             for (int attempt = 1; attempt <= maxAttempts; attempt++) {
                 try {
-                    URI uri = URI.create(renderedUrl);
                     HttpRequest request = HttpRequest.newBuilder()
-                            .uri(uri)
+                            .uri(parsedUri)
                             .timeout(Duration.ofSeconds(3))
                             .header("User-Agent", "AffiliatePlatform-PostbackDispatcher/1.0")
                             .GET()
@@ -174,11 +231,15 @@ public class PublisherPostbackDispatcher {
                 success,
                 responseBody
         );
+        recordDeliveryLog(deliveryLog);
+        return deliveryLog;
+    }
+
+    private void recordDeliveryLog(PostbackDeliveryLog deliveryLog) {
         deliveryLogs.addLast(deliveryLog);
         while (deliveryLogs.size() > MAX_DELIVERY_LOGS) {
             deliveryLogs.pollFirst();
         }
-        return deliveryLog;
     }
 
     private static String truncate(String text, int maxLen) {

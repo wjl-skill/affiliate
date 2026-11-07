@@ -118,6 +118,8 @@ management:
         enabled: true
 
 app:
+  scheduling:
+    enabled: ${APP_SCHEDULING_ENABLED:false}
   security:
     enabled: ${APP_SECURITY_ENABLED:true}
     jwt-secret: ${APP_JWT_SECRET:affiliate-platform-dev-jwt-secret-change-me-in-prod-0518}

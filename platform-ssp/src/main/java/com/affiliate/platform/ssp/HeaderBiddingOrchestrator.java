@@ -1,5 +1,6 @@
 package com.affiliate.platform.ssp;
 
+import com.affiliate.platform.concurrent.ContextAwareVirtualThreads;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -16,8 +17,8 @@ import java.util.concurrent.atomic.AtomicLong;
  * Prebid 规范并发 Header Bidding 头部竞价编排器 (Header Bidding Orchestrator)
  * <p>
  * 商业级 SSP 与媒体变现平台（Magnite / OpenX / Prebid.org）核心竞价分发组件：
- * 1. 废弃传统串行瀑布流，向优质候选 DSP 买方执行亚毫秒级并发广播询价；
- * 2. 具备智能买家筛选 (Smart Bidder Selection Top-K)：基于历史竞得率、出价强度与可用性裁剪流量，削减 60%+ 冗余出口请求；
+ * 1. 废弃传统串行瀑布流，采用具备租户与追踪上下文透传的虚拟线程向候选 DSP 买方执行亚毫秒级并发广播询价；
+ * 2. 具备智能买家筛选 (Smart Bidder Selection Top-K with UCB1 + EWMA)：基于历史竞得率、EWMA 动态出价强度与 UCB1 置信上界探索裁剪流量；
  * 3. 具备工业级滑动窗口熔断降级 (Adaptive Circuit Breaker)：自动隔离持续超时或异常的 DSP，保护媒体加载 SLA；
  * 4. 统一执行广告位底价（Floor Price）拦截与第一价统一出清。
  */
@@ -26,7 +27,7 @@ public class HeaderBiddingOrchestrator {
 
     private static final Logger log = LoggerFactory.getLogger(HeaderBiddingOrchestrator.class);
 
-    private final ExecutorService auctionExecutor = Executors.newVirtualThreadPerTaskExecutor();
+    private final ExecutorService auctionExecutor = ContextAwareVirtualThreads.newVirtualThreadExecutor("ssp-header-bidding-");
 
     // 默认并发广播买家上限（超过该数量执行 Top-K 裁剪）
     public static final int DEFAULT_MAX_BIDDERS = 8;
@@ -36,6 +37,12 @@ public class HeaderBiddingOrchestrator {
 
     // 熔断冷却恢复时间 (毫秒)：默认 15 秒
     private static final long CIRCUIT_COOLDOWN_MS = 15_000L;
+
+    // UCB1 探索系数
+    private static final double UCB_EXPLORATION_FACTOR = 1.25;
+
+    // 全局总询价轮次计数（用于 UCB1 探索项计算）
+    private final AtomicLong totalAuctionRounds = new AtomicLong(0);
 
     // 内存各买家统计与熔断状态画像
     private final ConcurrentMap<String, BidderMetrics> bidderMetricsMap = new ConcurrentHashMap<>();
@@ -75,6 +82,7 @@ public class HeaderBiddingOrchestrator {
 
         Instant start = Instant.now();
         long now = System.currentTimeMillis();
+        totalAuctionRounds.incrementAndGet();
 
         // 1. 熔断过滤与 Top-K 智能买家筛选
         List<DemandPartnerAdapter> selectedAdapters = selectTopBidders(candidateAdapters, maxBidders, now);
@@ -136,7 +144,7 @@ public class HeaderBiddingOrchestrator {
 
         BigDecimal floor = floorPrice != null ? floorPrice : BigDecimal.ZERO;
 
-        // 4. 底价过滤并按 CPM 降序排序
+        // 5. 底价过滤并按 CPM 降序排序
         List<BidOffer> eligible = validOffers.stream()
                 .filter(o -> o.cpmPrice().compareTo(floor) >= 0)
                 .sorted((a, b) -> b.cpmPrice().compareTo(a.cpmPrice()))
@@ -169,7 +177,7 @@ public class HeaderBiddingOrchestrator {
     }
 
     /**
-     * 智能买家筛选算法：结合熔断状态与历史 UCB/填报分数，挑选 Top-K 最优买家
+     * 智能买家筛选算法：结合熔断状态与历史 UCB1/EWMA 分数，挑选 Top-K 最优买家
      */
     private List<DemandPartnerAdapter> selectTopBidders(List<DemandPartnerAdapter> candidates, int maxBidders, long now) {
         if (candidates.size() <= maxBidders && maxBidders > 0) {
@@ -201,7 +209,7 @@ public class HeaderBiddingOrchestrator {
     }
 
     /**
-     * 买家综合价值打分 (结合响应率、竞得率与平均出价强度，新买家享冷启动探索奖励)
+     * 买家综合价值打分 (结合响应率、竞得率、EWMA 出价强度与 UCB1 置信上界探索奖励)
      */
     private double calculateBidderScore(String bidderId) {
         BidderMetrics m = bidderMetricsMap.get(bidderId);
@@ -213,10 +221,13 @@ public class HeaderBiddingOrchestrator {
         long req = m.requests.get();
         double respRate = (double) m.responses.get() / req;
         double winRate = (double) m.wins.get() / Math.max(1, m.responses.get());
-        double avgPrice = m.avgPrice();
+        double effectivePrice = m.ewmaPrice();
 
-        // 综合得分: 响应率权重 30% + 胜率权重 40% + 价格因子 30%
-        return respRate * 3.0 + winRate * 4.0 + Math.min(avgPrice, 10.0) * 0.3;
+        long totalRounds = Math.max(req, totalAuctionRounds.get());
+        double ucbBonus = UCB_EXPLORATION_FACTOR * Math.sqrt(Math.log(totalRounds + 1.0) / req);
+
+        // 综合得分: 响应率权重 30% + 胜率权重 40% + EWMA 价格因子 30% + UCB1 探索上界
+        return respRate * 3.0 + winRate * 4.0 + Math.min(effectivePrice, 10.0) * 0.3 + ucbBonus;
     }
 
     private boolean isCircuitOpen(String bidderId, long now) {
@@ -239,12 +250,14 @@ public class HeaderBiddingOrchestrator {
 
     public void resetMetrics() {
         bidderMetricsMap.clear();
+        totalAuctionRounds.set(0);
     }
 
     /**
      * 单个买家的实时健康画像与熔断状态追踪器
      */
     public static class BidderMetrics {
+        private static final double EWMA_ALPHA = 0.25;
         public final AtomicLong requests = new AtomicLong(0);
         public final AtomicLong responses = new AtomicLong(0);
         public final AtomicLong wins = new AtomicLong(0);
@@ -252,11 +265,17 @@ public class HeaderBiddingOrchestrator {
         public final AtomicInteger consecutiveFailures = new AtomicInteger(0);
         public final AtomicLong circuitOpenUntil = new AtomicLong(0);
         private double totalCpmAccumulated = 0.0;
+        private double ewmaCpm = 0.0;
 
         public synchronized void recordSuccess(double price) {
-            responses.incrementAndGet();
+            long respCount = responses.incrementAndGet();
             consecutiveFailures.set(0);
             totalCpmAccumulated += price;
+            if (respCount == 1) {
+                ewmaCpm = price;
+            } else {
+                ewmaCpm = EWMA_ALPHA * price + (1.0 - EWMA_ALPHA) * ewmaCpm;
+            }
         }
 
         public void recordEmptyResponse() {
@@ -283,6 +302,10 @@ public class HeaderBiddingOrchestrator {
         public synchronized double avgPrice() {
             long resp = responses.get();
             return resp == 0 ? 0.0 : totalCpmAccumulated / resp;
+        }
+
+        public synchronized double ewmaPrice() {
+            return ewmaCpm > 0.0 ? ewmaCpm : avgPrice();
         }
     }
 

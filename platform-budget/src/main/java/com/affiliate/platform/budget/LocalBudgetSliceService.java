@@ -8,7 +8,6 @@ import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
-import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.*;
@@ -164,7 +163,7 @@ public class LocalBudgetSliceService {
             if (current >= deductMicros) {
                 // 本地切片充足，执行原子 CAS 扣减
                 if (slice.compareAndSet(current, current - deductMicros)) {
-                    String resId = UUID.randomUUID().toString();
+                    String resId = "local_slice_" + UUID.randomUUID();
                     BudgetService.Reservation res = new BudgetService.Reservation(resId, key.tenantId(), key.campaignId(), userId, amount);
                     localReservations.put(resId, new TimedReservation(res, System.currentTimeMillis()));
                     return res;
@@ -177,7 +176,7 @@ public class LocalBudgetSliceService {
                             // 批量拉取 10 USD 或至少 10 倍当前请求量的大切片
                             BigDecimal sliceFetchAmount = BigDecimal.valueOf(Math.max(DEFAULT_SLICE_MICROS, deductMicros * 10) / 1_000_000.0);
                             BudgetService.Reservation fetched = mainBudgetService.reserve(key.tenantId(), key.campaignId(), "local_slice_agent", sliceFetchAmount);
-                            
+
                             // 登记 30 秒切片租约，若存在旧切片租约则先向主池确认结清，杜绝残留预占被重复回收
                             long fetchMicros = toMicros(sliceFetchAmount);
                             SliceLease lease = new SliceLease(
@@ -206,7 +205,6 @@ public class LocalBudgetSliceService {
             }
         }
     }
-
 
     /**
      * 周期性租约心跳续约：为存活运行中的本地切片同步延长本地与主预算池 (Redis) 租约
@@ -254,8 +252,10 @@ public class LocalBudgetSliceService {
     public void confirm(BudgetService.Reservation reservation) {
         if (reservation == null) return;
         if (localReservations.remove(reservation.id()) == null) {
-            // 只有直接落到主预算服务的预占才需要向主服务确认。
-            mainBudgetService.confirm(reservation);
+            if (reservation.id() == null || !reservation.id().startsWith("local_slice_")) {
+                // 只有直接落到主预算服务的预占才需要向主服务确认。
+                mainBudgetService.confirm(reservation);
+            }
         }
     }
 

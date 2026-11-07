@@ -1,10 +1,12 @@
-﻿# ===================================================================
-# Stage 1: Build application with Maven
+# ===================================================================
+# Stage 1: Build application with Maven (Supports Multi-Microservice Target)
 # ===================================================================
 FROM maven:3.9.9-eclipse-temurin-21 AS builder
 WORKDIR /workspace
 
-# 预先拷贝根 POM 与子模块 POM，充分利用 Docker 缓存层
+ARG APP_MODULE=platform-api
+
+# 预先拷贝根 POM 与全部 23 个子模块 POM，充分利用 Docker 缓存层
 COPY pom.xml ./
 COPY platform-common/pom.xml platform-common/
 COPY platform-infrastructure/pom.xml platform-infrastructure/
@@ -23,7 +25,12 @@ COPY platform-media-connectors/pom.xml platform-media-connectors/
 COPY platform-billing/pom.xml platform-billing/
 COPY platform-reporting/pom.xml platform-reporting/
 COPY platform-affiliate/pom.xml platform-affiliate/
+COPY platform-ai/pom.xml platform-ai/
 COPY platform-api/pom.xml platform-api/
+COPY platform-app-tracker/pom.xml platform-app-tracker/
+COPY platform-app-rtb/pom.xml platform-app-rtb/
+COPY platform-app-admin/pom.xml platform-app-admin/
+COPY platform-app-worker/pom.xml platform-app-worker/
 
 # 拷贝各子模块源码
 COPY platform-common/src platform-common/src
@@ -43,15 +50,23 @@ COPY platform-media-connectors/src platform-media-connectors/src
 COPY platform-billing/src platform-billing/src
 COPY platform-reporting/src platform-reporting/src
 COPY platform-affiliate/src platform-affiliate/src
+COPY platform-ai/src platform-ai/src
 COPY platform-api/src platform-api/src
+COPY platform-app-tracker/src platform-app-tracker/src
+COPY platform-app-rtb/src platform-app-rtb/src
+COPY platform-app-admin/src platform-app-admin/src
+COPY platform-app-worker/src platform-app-worker/src
 
-# 执行独立构建打包
-RUN mvn clean package -pl platform-api -am -DskipTests
+# 执行指定微服务模块独立构建打包
+RUN mvn clean package -pl ${APP_MODULE} -am -DskipTests
 
 # ===================================================================
 # Stage 2: Minimal & Secure Production Runtime
 # ===================================================================
 FROM eclipse-temurin:21-jre-alpine
+
+ARG APP_MODULE=platform-api
+ARG APP_PORT=8080
 
 # 安装 curl 工具并创建非 root 用户运行
 RUN apk add --no-cache curl && \
@@ -59,20 +74,21 @@ RUN apk add --no-cache curl && \
 
 WORKDIR /app
 
-# 从构建阶段提取最终 jar 包
-COPY --from=builder /workspace/platform-api/target/platform-api-*.jar /app/app.jar
+# 从构建阶段提取目标微服务可执行 jar 包
+COPY --from=builder /workspace/${APP_MODULE}/target/${APP_MODULE}-*.jar /app/app.jar
 
 # 赋予用户权限并切换
 RUN chown -R appuser:appgroup /app
 USER appuser
 
-EXPOSE 8080
+ENV APP_PORT=${APP_PORT}
+EXPOSE ${APP_PORT}
 
 # 生产 JVM 参数与容器自适应内存配置
 ENV JAVA_TOOL_OPTIONS="-XX:+UseG1GC -XX:MaxRAMPercentage=75.0 -XX:+ExitOnOutOfMemoryError"
 
 # 健康检查探针
 HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
-  CMD curl -f http://localhost:8080/actuator/health || exit 1
+  CMD curl -f http://localhost:${APP_PORT}/actuator/health || exit 1
 
 ENTRYPOINT ["java", "-jar", "app.jar"]

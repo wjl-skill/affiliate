@@ -1,5 +1,6 @@
 package com.affiliate.platform.rtb;
 
+import com.affiliate.platform.concurrent.ContextAwareVirtualThreads;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -16,7 +17,7 @@ import java.util.concurrent.*;
  * <p>
  * 连接媒体供给方 (SSP/Publishers) 与外部多家需求方 (DSP/Seats) 的核心撮合出清中枢：
  * 1. 注册管理外部 DSP 席位适配器清单 (SeatBidderAdapter)；
- * 2. 毫秒级并发广播竞价请求，按超时预算 (tmax) 严格截断；
+ * 2. 毫秒级并发广播竞价请求（基于上下文感知的虚拟线程执行器），按超时预算 (tmax) 严格并行汇聚截断；
  * 3. 协同 {@link PmpDealMatcher} 实现 PMP 私有交易与公开拍卖的分层加权竞胜；
  * 4. 支持 First-Price 与 Second-Price (Vickrey + 0.01) 统一多边出清。
  */
@@ -25,7 +26,7 @@ public class MultiSeatAuctionExchange {
 
     private static final Logger log = LoggerFactory.getLogger(MultiSeatAuctionExchange.class);
 
-    private final ExecutorService exchangeExecutor = Executors.newVirtualThreadPerTaskExecutor();
+    private final ExecutorService exchangeExecutor = ContextAwareVirtualThreads.newVirtualThreadExecutor("adx-seat-bidder-");
     private final PmpDealMatcher pmpMatcher;
     private final List<SeatBidderAdapter> registeredAdapters = new CopyOnWriteArrayList<>();
 
@@ -115,7 +116,7 @@ public class MultiSeatAuctionExchange {
         long timeoutBudgetMs = Math.max(2, tmax - 3);
 
         // 1. 并发向所有已注册 DSP 席位广播请求
-        List<CompletableFuture<Optional<OpenRtb.BidResponse>>> futures = new ArrayList<>();
+        List<CompletableFuture<Optional<OpenRtb.BidResponse>>> futures = new ArrayList<>(registeredAdapters.size());
         Map<CompletableFuture<Optional<OpenRtb.BidResponse>>, String> futureToSeat = new LinkedHashMap<>();
 
         for (SeatBidderAdapter adapter : registeredAdapters) {
@@ -126,17 +127,32 @@ public class MultiSeatAuctionExchange {
             futureToSeat.put(f, adapter.seatId());
         }
 
-        // 2. 收集各席位返回的出价分录
+        // 2. 并行等待所有席位在统一超时死线内完成（避免顺序阻塞放大尾部延迟）
+        try {
+            CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
+                    .get(timeoutBudgetMs, TimeUnit.MILLISECONDS);
+        } catch (TimeoutException te) {
+            log.debug("Some DSP seats exceeded auction timeout budget ({}ms), proceeding with completed responses", timeoutBudgetMs);
+        } catch (Exception e) {
+            log.debug("Exchange parallel wait interrupted or had partial failure: {}", e.getMessage());
+        }
+
+        // 3. 收集各席位已完成返回的出价分录，取消超时未完成的任务
         List<EvaluatedSeatBid> candidateBids = new ArrayList<>();
         for (Map.Entry<CompletableFuture<Optional<OpenRtb.BidResponse>>, String> entry : futureToSeat.entrySet()) {
             CompletableFuture<Optional<OpenRtb.BidResponse>> future = entry.getKey();
             String seatId = entry.getValue();
 
-            try {
-                long elapsed = Duration.between(start, Instant.now()).toMillis();
-                long remaining = Math.max(1, timeoutBudgetMs - elapsed);
+            if (!future.isDone()) {
+                future.cancel(true);
+                continue;
+            }
+            if (future.isCompletedExceptionally() || future.isCancelled()) {
+                continue;
+            }
 
-                Optional<OpenRtb.BidResponse> respOpt = future.get(remaining, TimeUnit.MILLISECONDS);
+            try {
+                Optional<OpenRtb.BidResponse> respOpt = future.getNow(Optional.empty());
                 if (respOpt.isPresent() && respOpt.get().seatbid() != null) {
                     for (OpenRtb.SeatBid sb : respOpt.get().seatbid()) {
                         String currentSeat = (sb.seat() != null && !sb.seat().isBlank()) ? sb.seat() : seatId;
@@ -159,10 +175,8 @@ public class MultiSeatAuctionExchange {
                         }
                     }
                 }
-            } catch (TimeoutException te) {
-                future.cancel(true);
             } catch (Exception e) {
-                log.debug("Seat bidder execution notice during auction: {}", e.getMessage());
+                log.debug("Seat bidder result extraction notice during auction: {}", e.getMessage());
             }
         }
 
@@ -171,7 +185,7 @@ public class MultiSeatAuctionExchange {
             return ExchangeClearingResult.noWinner(durationMs);
         }
 
-        // 3. 排序规则：优先比 Deal 层级（score 越大越优先），同层级比价格（price 越高越优先）
+        // 4. 排序规则：优先比 Deal 层级（score 越大越优先），同层级比价格（price 越高越优先）
         candidateBids.sort((a, b) -> {
             if (a.priorityScore() != b.priorityScore()) {
                 return Integer.compare(b.priorityScore(), a.priorityScore());

@@ -6,25 +6,32 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
+import java.time.Duration;
 import java.time.LocalDate;
+import java.util.Iterator;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
 /**
- * 租户级 AI 算力成本护栏与日预算熔断器 (AI Cost Guard & Budget Governor)
+ * 租户级 AI 算力成本护栏与日预算熔断器 (Distributed AI Cost Guard & Budget Governor)
  * <p>
  * 遵循阶段 2 外部依赖韧性与成本护栏规范：
- * 1. 租户级每日算力预算管控，事前拦截超限请求并告警；
+ * 1. 租户级每日算力预算管控，支持 Redis 跨实例全局共享累加 + 本地有界回退，事前拦截超限请求并告警；
  * 2. 统计每日已消耗金额，精确记录跨供应商 (DashScope/Ark/OpenAI) 算力成本；
- * 3. 与 AiUsageMeteringService 无缝联动记录审计日志。
+ * 3. 与 AiUsageMeteringService 无缝联动，按真实消费金额动态折算审计 Token 用量。
  */
 @Service
 public class AiCostGuardService {
 
     private static final Logger log = LoggerFactory.getLogger(AiCostGuardService.class);
+
+    private static final String REDIS_COST_PREFIX = "ai:cost:daily:";
+    private static final int MAX_LOCAL_DAY_KEYS = 5_000;
 
     @Value("${app.ai.default-daily-budget:50.00}")
     private BigDecimal defaultDailyBudget = new BigDecimal("50.00");
@@ -32,23 +39,33 @@ public class AiCostGuardService {
     // 租户自定义日预算映射：tenantId -> 日预算上限
     private final ConcurrentMap<String, BigDecimal> customBudgets = new ConcurrentHashMap<>();
 
-    // 租户每日累计消费：tenantId:yyyy-MM-dd -> 累计消费金额
+    // 租户每日累计消费本地缓存/回退：tenantId:yyyy-MM-dd -> 累计消费金额
     private final ConcurrentMap<String, BigDecimal> dailySpend = new ConcurrentHashMap<>();
 
     private final AiUsageMeteringService meteringService;
     private final com.affiliate.platform.metrics.SloMetricsCollector metricsCollector;
+    private final StringRedisTemplate redisTemplate;
 
     @Autowired
     public AiCostGuardService(
             @Autowired(required = false) AiUsageMeteringService meteringService,
-            @Autowired(required = false) com.affiliate.platform.metrics.SloMetricsCollector metricsCollector
+            @Autowired(required = false) com.affiliate.platform.metrics.SloMetricsCollector metricsCollector,
+            @Autowired(required = false) StringRedisTemplate redisTemplate
     ) {
         this.meteringService = meteringService;
         this.metricsCollector = metricsCollector != null ? metricsCollector : new com.affiliate.platform.metrics.SloMetricsCollector();
+        this.redisTemplate = redisTemplate;
+    }
+
+    public AiCostGuardService(
+            AiUsageMeteringService meteringService,
+            com.affiliate.platform.metrics.SloMetricsCollector metricsCollector
+    ) {
+        this(meteringService, metricsCollector, null);
     }
 
     public AiCostGuardService() {
-        this(null, null);
+        this(null, null, null);
     }
 
     private String getDayKey(String tenantId) {
@@ -87,7 +104,7 @@ public class AiCostGuardService {
     }
 
     /**
-     * 结算并记录实际算力费用消耗
+     * 结算并记录实际算力费用消耗（优先写入 Redis 跨节点累加并设置 48h 过期，同时维护本地有界副本）
      */
     public void recordActualCost(
             String tenantId,
@@ -102,20 +119,40 @@ public class AiCostGuardService {
             return;
         }
 
+        evictOldLocalKeysIfNeeded();
         String key = getDayKey(tenantId);
         BigDecimal updated = dailySpend.merge(key, actualCost, BigDecimal::add);
+
+        if (redisTemplate != null) {
+            try {
+                String redisKey = REDIS_COST_PREFIX + key;
+                Double clusterSpend = redisTemplate.opsForValue().increment(redisKey, actualCost.doubleValue());
+                redisTemplate.expire(redisKey, Duration.ofHours(48));
+                if (clusterSpend != null) {
+                    updated = BigDecimal.valueOf(clusterSpend).setScale(4, RoundingMode.HALF_UP);
+                    dailySpend.put(key, updated);
+                }
+            } catch (Exception e) {
+                log.debug("Redis increment for AI cost guard unavailable, using local spend tracker: {}", e.getMessage());
+            }
+        }
+
         BigDecimal budget = getDailyBudget(tenantId);
 
         log.info("[AiCostGuard] 租户 {} 记录 AI 算力消费: 供应商={}, 模型={}, 操作={}, 金额=${}, 今日累计=${}/{}",
                 tenantId, provider, model, operation, actualCost, updated, budget);
 
         if (meteringService != null) {
-            // 联动 Token 审计计量
+            // 按实际成本 ($0.002 / 1K tokens 基准) 动态折算 Token 计量，替代固定硬编码值
+            int estimatedTotalTokens = Math.max(10, actualCost.multiply(BigDecimal.valueOf(500_000)).intValue());
+            int estimatedPromptTokens = (int) Math.round(estimatedTotalTokens * 0.65);
+            int estimatedCompletionTokens = Math.max(1, estimatedTotalTokens - estimatedPromptTokens);
+
             meteringService.recordUsage(
                     tenantId,
                     "ai-cost-guard:" + operation,
                     model != null ? model : provider,
-                    new AiUsage(100, 200, 300),
+                    new AiUsage(estimatedPromptTokens, estimatedCompletionTokens, estimatedTotalTokens),
                     latencyMs,
                     success,
                     success ? null : "Cost recorded with failure"
@@ -124,10 +161,22 @@ public class AiCostGuardService {
     }
 
     /**
-     * 查询租户今日累计消费金额
+     * 查询租户今日累计消费金额（优先从 Redis 获取集群全局累计值）
      */
     public BigDecimal getDailySpend(String tenantId) {
         String key = getDayKey(tenantId);
+        if (redisTemplate != null) {
+            try {
+                String val = redisTemplate.opsForValue().get(REDIS_COST_PREFIX + key);
+                if (val != null && !val.isBlank()) {
+                    BigDecimal redisSpend = new BigDecimal(val).setScale(4, RoundingMode.HALF_UP);
+                    dailySpend.put(key, redisSpend);
+                    return redisSpend;
+                }
+            } catch (Exception e) {
+                log.debug("Redis get for AI cost guard unavailable, reading local fallback: {}", e.getMessage());
+            }
+        }
         return dailySpend.getOrDefault(key, BigDecimal.ZERO);
     }
 
@@ -148,6 +197,20 @@ public class AiCostGuardService {
         if (tenantId != null && budget != null) {
             customBudgets.put(tenantId, budget);
             log.info("[AiCostGuard] 租户 {} 日预算已调整为: ${}", tenantId, budget);
+        }
+    }
+
+    private void evictOldLocalKeysIfNeeded() {
+        if (dailySpend.size() < MAX_LOCAL_DAY_KEYS) {
+            return;
+        }
+        String todaySuffix = ":" + LocalDate.now();
+        Iterator<String> it = dailySpend.keySet().iterator();
+        while (it.hasNext()) {
+            String k = it.next();
+            if (!k.endsWith(todaySuffix)) {
+                it.remove();
+            }
         }
     }
 }

@@ -1,7 +1,9 @@
 package com.affiliate.platform.cdp;
 
+import com.affiliate.platform.concurrent.ContextAwareVirtualThreads;
 import com.affiliate.platform.entity.CdpUserTraitEntity;
 import com.affiliate.platform.mapper.CdpUserTraitMapper;
+import com.affiliate.platform.tenant.TenantContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -21,15 +23,22 @@ import java.util.concurrent.ConcurrentMap;
  * <p>
  * 工业级 CDP 核心流式计算组件：
  * 1. 实时摄入用户全触点行为流（点击、加购、购买、浏览等）；
- * 2. 维护用户滚动多维指标（7天活跃频次、累计消费、品类偏好分布、设备终端亲和度）；
+ * 2. 维护用户滚动多维指标（7天活跃频次、累计消费、品类偏好分布、设备终端亲和度），具备容量护栏防止内存溢出；
  * 3. 动态触发高价值大 R 玩家 (whale_purchaser)、价格敏感型 (bargain_hunter)、流失风险 (churn_risk) 等画像标签；
  * 4. 自动协同 {@link IdentityMappingService} 与 {@link CustomerTimelineService} 保持统一画像更新；
- * 5. 联动 PostgreSQL `cdp_user_trait_state` 异步持久化存储与回源查询。
+ * 5. 联动 PostgreSQL `cdp_user_trait_state` 异步持久化存储与回源查询（透传真实租户上下文）。
  */
 @Service
 public class RealtimeEventTraitEngine {
 
     private static final Logger log = LoggerFactory.getLogger(RealtimeEventTraitEngine.class);
+
+    // 内存常驻用户画像最大数量护栏（超出后清理最久未活跃画像）
+    private static final int MAX_CACHED_USERS = 100_000;
+    // 单用户类目计数 Map 最大键数量，防止长尾高基数类目撑爆内存
+    private static final int MAX_CATEGORY_KEYS = 50;
+    // 单用户 7 天滚动窗口内最大保留时间戳数量
+    private static final int MAX_RECENT_EVENTS_PER_USER = 1_000;
 
     public enum EventType {
         PAGEVIEW,
@@ -121,6 +130,7 @@ public class RealtimeEventTraitEngine {
         }
         Instant ts = timestamp == null ? Instant.now() : timestamp;
 
+        evictIfOverCapacity();
         InternalState state = userStates.computeIfAbsent(primaryId, InternalState::new);
 
         synchronized (state) {
@@ -132,14 +142,19 @@ public class RealtimeEventTraitEngine {
             }
 
             state.recentEventTimestamps.addLast(ts);
-            // 清理超过 7 天前的滚动窗口事件
+            // 清理超过 7 天前的滚动窗口事件及超出单用户容量上限的旧事件
             Instant cutoff7d = ts.minus(Duration.ofDays(7));
-            while (!state.recentEventTimestamps.isEmpty() && state.recentEventTimestamps.peekFirst().isBefore(cutoff7d)) {
+            while (!state.recentEventTimestamps.isEmpty()
+                    && (state.recentEventTimestamps.peekFirst().isBefore(cutoff7d)
+                    || state.recentEventTimestamps.size() > MAX_RECENT_EVENTS_PER_USER)) {
                 state.recentEventTimestamps.pollFirst();
             }
 
             if (category != null && !category.isBlank()) {
-                state.categoryCounts.merge(category.trim().toLowerCase(Locale.ROOT), 1, Integer::sum);
+                String normCat = category.trim().toLowerCase(Locale.ROOT);
+                if (state.categoryCounts.containsKey(normCat) || state.categoryCounts.size() < MAX_CATEGORY_KEYS) {
+                    state.categoryCounts.merge(normCat, 1, Integer::sum);
+                }
             }
             if (deviceType != null && !deviceType.isBlank()) {
                 state.deviceCounts.merge(deviceType.trim().toUpperCase(Locale.ROOT), 1, Integer::sum);
@@ -194,16 +209,17 @@ public class RealtimeEventTraitEngine {
             }
         }
 
-        // 异步持久化特征状态至 PostgreSQL (Java 21 Virtual Threads)
+        // 异步持久化特征状态至 PostgreSQL（使用 ContextAwareVirtualThreads 自动透传租户与追踪上下文）
         if (traitMapper != null) {
             final Set<String> snapshotTraits = Set.copyOf(dynamicTraits);
-            Thread.ofVirtual().name("cdp-trait-persister").start(() -> {
+            final String resolvedTenant = resolveTenantId();
+            ContextAwareVirtualThreads.start("cdp-trait-persister", () -> {
                 try {
                     String traitsStr = String.join(",", snapshotTraits);
                     CdpUserTraitEntity entity = traitMapper.selectById(primaryId);
                     if (entity == null) {
                         entity = new CdpUserTraitEntity(
-                                primaryId, "default", primaryId, state.totalSpend,
+                                primaryId, resolvedTenant, primaryId, state.totalSpend,
                                 state.purchaseCount, state.clickCount, state.pageviewCount,
                                 state.recentEventTimestamps.size(), getTopKey(state.categoryCounts),
                                 getTopKey(state.deviceCounts), traitsStr,
@@ -230,6 +246,24 @@ public class RealtimeEventTraitEngine {
         }
 
         return createSnapshot(state, dynamicTraits);
+    }
+
+    private void evictIfOverCapacity() {
+        if (userStates.size() < MAX_CACHED_USERS) {
+            return;
+        }
+        Iterator<String> it = userStates.keySet().iterator();
+        int removed = 0;
+        while (it.hasNext() && removed < 1_000) {
+            it.next();
+            it.remove();
+            removed++;
+        }
+    }
+
+    private static String resolveTenantId() {
+        String ctx = TenantContext.get();
+        return (ctx != null && !ctx.isBlank()) ? ctx.trim() : "default";
     }
 
     /**

@@ -1,16 +1,19 @@
 package com.affiliate.platform.billing;
 
+import com.affiliate.platform.lock.DistributedLock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
@@ -20,16 +23,22 @@ import java.util.concurrent.atomic.AtomicReference;
  * <p>
  * 遵循商业级演进路线图（阶段 1 - 资金账本平衡保障）：
  * 1. 周期性（默认每日凌晨 2:00 或按需触发）对所有租户/账户执行全量复式分录 vs 物化余额核对；
- * 2. 差错审计熔断：一旦检测到任意账户 balance != sum(credit) - sum(debit)，立即触发 P1 财务告警；
- * 3. 统计不平衡账户数，暴露度量指标与巡检报表供运维/财务审计追溯。
+ * 2. 支持 app.scheduling.enabled 开关与分布式互斥锁 (DistributedLock)，防止数据面节点或多副本重复触发；
+ * 3. 差错审计熔断：一旦检测到任意账户 balance != sum(credit) - sum(debit)，立即触发 P1 财务告警；
+ * 4. 统计不平衡账户数，暴露度量指标与巡检报表供运维/财务审计追溯。
  */
 @Component
 public class LedgerReconciliationScheduler {
 
     private static final Logger log = LoggerFactory.getLogger(LedgerReconciliationScheduler.class);
+    private static final String RECONCILE_LOCK_KEY = "lock:billing:daily_reconcile";
+
+    @Value("${app.scheduling.enabled:true}")
+    private boolean schedulingEnabled = true;
 
     private final WalletService walletService;
     private final com.affiliate.platform.metrics.SloMetricsCollector metricsCollector;
+    private final DistributedLock distributedLock;
     private final AtomicInteger discrepancyCountTotal = new AtomicInteger(0);
     private final AtomicReference<ReconciliationScanReport> lastScanReport = new AtomicReference<>(null);
 
@@ -44,16 +53,25 @@ public class LedgerReconciliationScheduler {
     ) {}
 
     public LedgerReconciliationScheduler(WalletService walletService) {
-        this(walletService, null);
+        this(walletService, null, null);
+    }
+
+    public LedgerReconciliationScheduler(
+            WalletService walletService,
+            com.affiliate.platform.metrics.SloMetricsCollector metricsCollector
+    ) {
+        this(walletService, metricsCollector, null);
     }
 
     @Autowired
     public LedgerReconciliationScheduler(
             WalletService walletService,
-            @Autowired(required = false) com.affiliate.platform.metrics.SloMetricsCollector metricsCollector
+            @Autowired(required = false) com.affiliate.platform.metrics.SloMetricsCollector metricsCollector,
+            @Autowired(required = false) DistributedLock distributedLock
     ) {
         this.walletService = walletService;
         this.metricsCollector = metricsCollector != null ? metricsCollector : new com.affiliate.platform.metrics.SloMetricsCollector();
+        this.distributedLock = distributedLock;
     }
 
     /**
@@ -61,8 +79,23 @@ public class LedgerReconciliationScheduler {
      */
     @Scheduled(cron = "${affiliate.billing.reconcile.cron:0 0 2 * * ?}")
     public void scheduledDailyReconciliation() {
-        log.info("[LedgerReconciliationScheduler] 启动例行账本借贷平衡自动巡检...");
-        runReconciliationScan(null);
+        if (!schedulingEnabled) {
+            return;
+        }
+        if (distributedLock != null) {
+            Optional<DistributedLock.LockHandle> handleOpt = distributedLock.tryAcquire(RECONCILE_LOCK_KEY, Duration.ofMinutes(15));
+            if (handleOpt.isEmpty()) {
+                log.debug("[LedgerReconciliationScheduler] 未获取到分布式对账锁 {}，由集群其他 Worker 节点执行", RECONCILE_LOCK_KEY);
+                return;
+            }
+            try (DistributedLock.LockHandle ignored = handleOpt.get()) {
+                log.info("[LedgerReconciliationScheduler] 启动例行账本借贷平衡自动巡检...");
+                runReconciliationScan(null);
+            }
+        } else {
+            log.info("[LedgerReconciliationScheduler] 启动例行账本借贷平衡自动巡检...");
+            runReconciliationScan(null);
+        }
     }
 
     /**

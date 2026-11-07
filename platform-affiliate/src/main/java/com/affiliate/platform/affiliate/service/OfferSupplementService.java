@@ -66,6 +66,9 @@ public class OfferSupplementService {
     private final boolean sandboxFallbackEnabled;
     private final DistributedLock distributedLock;
 
+    @Value("${app.scheduling.enabled:true}")
+    private boolean schedulingEnabled = true;
+
     private final ConcurrentMap<String, OfferSupplementRule> memoryRules = new ConcurrentHashMap<>();
     private final ConcurrentLinkedDeque<OfferSupplementLog> memoryLogs = new ConcurrentLinkedDeque<>();
 
@@ -670,6 +673,9 @@ public class OfferSupplementService {
      */
     @Scheduled(fixedDelay = 60000L, initialDelay = 30000L)
     public void runScheduledAutoSupplement() {
+        if (!schedulingEnabled) {
+            return;
+        }
         Instant now = Instant.now();
         List<OfferSupplementRule> candidateRules = (ruleMapper != null)
                 ? listRules(null, null).stream().filter(OfferSupplementRule::autoEnabled).toList()

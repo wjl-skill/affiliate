@@ -15,6 +15,7 @@ import com.affiliate.platform.web.video.dto.VideoProcessRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
@@ -27,12 +28,15 @@ import java.util.Map;
 import java.util.Optional;
 
 /**
- * 批量混剪调度器：负责笛卡尔积交叉组合生成、定时触发与单次消费幂等保证 (采用分布式锁加固防重)
+ * 批量混剪调度器：负责笛卡尔积交叉组合生成、定时触发与单次消费幂等保证 (采用分布式锁加固防重与微服务调度隔离)
  */
 @Service
 public class AutoStitchScheduler {
 
     private static final Logger log = LoggerFactory.getLogger(AutoStitchScheduler.class);
+
+    @Value("${app.scheduling.enabled:true}")
+    private boolean schedulingEnabled = true;
 
     private final AutoStitchConfigRepository configRepo;
     private final AutoStitchService autoStitchService;
@@ -159,6 +163,9 @@ public class AutoStitchScheduler {
      */
     @Scheduled(fixedDelay = 60000)
     public int pollAndTriggerScheduledConfigs() {
+        if (!schedulingEnabled) {
+            return 0;
+        }
         String lockKey = "lock:video:autostitch:scheduler";
         var lockOpt = distributedLock.tryAcquire(lockKey, Duration.ofSeconds(55));
         if (lockOpt.isEmpty()) {

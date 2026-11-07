@@ -175,6 +175,12 @@ public class WalletService {
                     }
                 } else if (billingService != null && billingService.findByIdempotencyKey(idempotencyKey).isPresent()) {
                     return findDomain(accountId);
+                } else {
+                    boolean idemExistsInMem = inMemoryTransactions.values().stream()
+                            .anyMatch(t -> tenantId.equals(t.getTenantId()) && idempotencyKey.equals(t.getIdemKey()));
+                    if (idemExistsInMem) {
+                        return findDomain(accountId);
+                    }
                 }
             }
 
@@ -308,6 +314,12 @@ public class WalletService {
                     }
                 } else if (billingService != null && billingService.findByIdempotencyKey(idempotencyKey).isPresent()) {
                     return findDomain(accountId);
+                } else {
+                    boolean idemExistsInMem = inMemoryTransactions.values().stream()
+                            .anyMatch(t -> tenantId.equals(t.getTenantId()) && idempotencyKey.equals(t.getIdemKey()));
+                    if (idemExistsInMem) {
+                        return findDomain(accountId);
+                    }
                 }
             }
 
@@ -503,9 +515,10 @@ public class WalletService {
      * <p>
      * 业务规则：
      * 1. 严格四眼复核原则：经办人 (makerId) 与复核审批人 (checkerId) 必须为不同主体；
-     * 2. 原始交易必须处于 POSTED 状态且未曾被冲正过 (reverses_id 关联防重)；
-     * 3. 严格生成红字/反向借贷分录并保持借贷平衡；
-     * 4. 在同一事务内联动更新账户物化余额。
+     * 2. 幂等前置校验：若相同 idempotencyKey 重试，幂等返回既有冲正结果；
+     * 3. 原始交易必须处于 POSTED 状态且未曾被其他请求冲正过 (reverses_id 关联防重)；
+     * 4. 严格生成红字/反向借贷分录并保持借贷平衡；
+     * 5. 在同一事务内联动更新账户物化余额。
      */
     @Transactional(rollbackFor = Exception.class)
     public ReversalResult reverseTransaction(
@@ -525,7 +538,7 @@ public class WalletService {
 
         String effectiveTenant = resolveTenant(tenantId);
         String effectiveIdem = (idempotencyKey != null && !idempotencyKey.isBlank())
-                ? idempotencyKey
+                ? idempotencyKey.trim()
                 : "reversal:" + originalTxnId + ":" + UUID.randomUUID();
 
         // 1. 查验原始交易
@@ -548,7 +561,42 @@ public class WalletService {
             throw new IllegalStateException("严禁对冲正分录本身再次执行冲正");
         }
 
-        // 查验是否已被冲正
+        // 2. 幂等前置校验（在 alreadyReversed 校验前执行，确保相同幂等键的网络超时重试安全返回）
+        if (idempotencyKey != null && !idempotencyKey.isBlank()) {
+            LedgerTransactionEntity existingIdem = null;
+            if (ledgerTransactionMapper != null) {
+                existingIdem = ledgerTransactionMapper.findByIdemKey(effectiveTenant, effectiveIdem);
+            } else {
+                existingIdem = inMemoryTransactions.values().stream()
+                        .filter(t -> effectiveTenant.equals(t.getTenantId()) && effectiveIdem.equals(t.getIdemKey()))
+                        .findFirst()
+                        .orElse(null);
+            }
+            if (existingIdem != null) {
+                log.info("[WalletService] 冲正幂等键命中，返回已有冲正交易: {}", existingIdem.getId());
+                List<LedgerLineEntity> existingLines = listLines(existingIdem.getId());
+                String acctId = "";
+                BigDecimal amt = BigDecimal.ZERO;
+                for (LedgerLineEntity l : existingLines) {
+                    if (!ACCT_EXTERNAL_CLEARING.equals(l.getAccountId()) && !ACCT_PLATFORM_REVENUE.equals(l.getAccountId())) {
+                        acctId = l.getAccountId();
+                        amt = l.getAmount();
+                        break;
+                    }
+                }
+                return new ReversalResult(
+                        existingIdem.getId(),
+                        originalTxnId,
+                        effectiveTenant,
+                        acctId,
+                        amt,
+                        existingIdem.getStatus(),
+                        existingIdem.getCreatedAt()
+                );
+            }
+        }
+
+        // 3. 查验是否已被其他冲正请求冲正
         if (ledgerTransactionMapper != null) {
             LedgerTransactionEntity existReversal = ledgerTransactionMapper.findByReversesId(originalTxnId);
             if (existReversal != null) {
@@ -562,16 +610,7 @@ public class WalletService {
             }
         }
 
-        // 2. 幂等检查
-        if (ledgerTransactionMapper != null) {
-            LedgerTransactionEntity existingIdem = ledgerTransactionMapper.findByIdemKey(effectiveTenant, effectiveIdem);
-            if (existingIdem != null) {
-                log.info("[WalletService] 冲正幂等键命中，返回已有冲正交易: {}", existingIdem.getId());
-                return new ReversalResult(existingIdem.getId(), originalTxnId, effectiveTenant, "", BigDecimal.ZERO, "POSTED", existingIdem.getCreatedAt());
-            }
-        }
-
-        // 3. 读取原始借贷分录明细
+        // 4. 读取原始借贷分录明细
         List<LedgerLineEntity> originalLines;
         if (ledgerLineMapper != null) {
             originalLines = ledgerLineMapper.listByTxnId(originalTxnId);
@@ -582,7 +621,7 @@ public class WalletService {
             throw new IllegalStateException("原始会计交易未关联任何分录明细");
         }
 
-        // 4. 创建冲正交易头
+        // 5. 创建冲正交易头
         String reversalTxnId = UUID.randomUUID().toString();
         LedgerTransactionEntity reversalTxn = new LedgerTransactionEntity(
                 reversalTxnId,
@@ -599,7 +638,7 @@ public class WalletService {
         }
         inMemoryTransactions.put(reversalTxnId, reversalTxn);
 
-        // 5. 生成反向借贷分录明细并插入
+        // 6. 生成反向借贷分录明细并插入
         List<LedgerLineEntity> reversalLines = new ArrayList<>();
         BigDecimal totalReversedAmount = BigDecimal.ZERO;
         String affectedCustomerAccount = null;
