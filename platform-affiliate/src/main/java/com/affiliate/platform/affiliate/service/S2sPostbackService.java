@@ -186,6 +186,30 @@ public class S2sPostbackService {
         return Optional.ofNullable(fallbackPartners.get(affiliateId));
     }
 
+    /**
+     * 暂停/冻结违规渠道账户 (ACTIVE/PENDING -> SUSPENDED)
+     */
+    public Optional<AffiliatePartner> suspendPartner(String affiliateId) {
+        if (affiliateId == null || affiliateId.isBlank()) {
+            return Optional.empty();
+        }
+        return findPartner(affiliateId).map(existing -> {
+            AffiliatePartner suspended = new AffiliatePartner(
+                    existing.id(),
+                    existing.tenantId(),
+                    existing.name(),
+                    AffiliatePartner.Status.SUSPENDED,
+                    existing.tier(),
+                    existing.postbackUrlTemplate(),
+                    existing.paymentTerm(),
+                    existing.minPayoutThreshold(),
+                    existing.createdAt()
+            );
+            registerPartner(suspended);
+            return suspended;
+        });
+    }
+
     public Conversion processPostback(String clickId, String txId, BigDecimal saleAmount, Instant now) {
         return processPostback(clickId, txId, saleAmount, null, null, null, null, 0, now);
     }

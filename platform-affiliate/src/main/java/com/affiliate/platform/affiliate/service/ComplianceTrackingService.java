@@ -30,12 +30,28 @@ import java.util.stream.Collectors;
 @Service
 public class ComplianceTrackingService {
 
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(ComplianceTrackingService.class);
+
     private final TermsAcceptanceRepository termsRepository;
     private final TaxDocumentRepository taxDocumentRepository;
     private final KycVerificationRepository kycRepository;
     private final ComplianceViolationRepository violationRepository;
     private final MultiLevelCacheManager cacheManager;
     private final CacheKeyGenerator keyGenerator;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private S2sPostbackService postbackService;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private AffiliateNotificationService notificationService;
+
+    public void setPostbackService(S2sPostbackService postbackService) {
+        this.postbackService = postbackService;
+    }
+
+    public void setNotificationService(AffiliateNotificationService notificationService) {
+        this.notificationService = notificationService;
+    }
 
     private static final Duration KYC_CACHE_TTL = Duration.ofHours(1);
     private static final Duration TAX_CACHE_TTL = Duration.ofMinutes(30);
@@ -333,10 +349,23 @@ public class ComplianceTrackingService {
         cacheManager.evictByPattern("affiliate:violation:" + affiliateId + ":*");
         cacheManager.evictByPattern("affiliate:compliance:report:" + affiliateId);
 
-        // 严重违规自动警告
+        // 严重违规自动冻结渠道账户并触发紧急风控告警通知
         if (severity == ViolationSeverity.CRITICAL) {
-            System.out.println("[ALERT] Critical violation for affiliate: " + affiliateId);
-            // TODO: 调用 AffiliatePartnerService 暂停账户
+            log.warn("[ComplianceAlert] Critical violation recorded for affiliate {}: type={}, description={}",
+                    affiliateId, type, description);
+            if (postbackService != null) {
+                postbackService.suspendPartner(affiliateId);
+            }
+            if (notificationService != null) {
+                notificationService.sendNotification(
+                        affiliateId,
+                        AffiliateNotificationService.NotificationType.FRAUD_ALERT,
+                        "Account Suspended - Critical Compliance Violation",
+                        "Your partner account has been suspended due to critical violation: " + description,
+                        AffiliateNotificationService.NotificationPriority.URGENT,
+                        Map.of("violationId", violationId, "type", type.name(), "severity", severity.name())
+                );
+            }
         }
 
         return toComplianceViolation(entity);

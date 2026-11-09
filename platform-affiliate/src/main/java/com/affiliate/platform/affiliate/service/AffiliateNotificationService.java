@@ -48,6 +48,13 @@ public class AffiliateNotificationService {
     private final ObjectMapper objectMapper;
     private final HttpClient webhookHttpClient;
 
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private S2sPostbackService postbackService;
+
+    public void setPostbackService(S2sPostbackService postbackService) {
+        this.postbackService = postbackService;
+    }
+
     private static final Duration NOTIFICATION_CACHE_TTL = Duration.ofMinutes(5);
     private static final Duration PREFERENCE_CACHE_TTL = Duration.ofHours(1);
     private static final Duration WEBHOOK_CACHE_TTL = Duration.ofMinutes(30);
@@ -218,7 +225,7 @@ public class AffiliateNotificationService {
     }
 
     /**
-     * 批量通知（广播）
+     * 批量通知（向所有活跃渠道广播）
      */
     @Transactional
     public void broadcastToAll(
@@ -227,11 +234,16 @@ public class AffiliateNotificationService {
             String message,
             NotificationPriority priority
     ) {
-        // TODO: 从 AffiliatePartnerService 获取所有活跃渠道
-        List<String> allAffiliateIds = List.of(); // 简化实现
+        List<String> allAffiliateIds = postbackService != null
+                ? postbackService.listPartners().stream()
+                        .filter(p -> p.status() == com.affiliate.platform.affiliate.domain.AffiliatePartner.Status.ACTIVE)
+                        .map(com.affiliate.platform.affiliate.domain.AffiliatePartner::id)
+                        .distinct()
+                        .toList()
+                : List.of();
 
         for (String affiliateId : allAffiliateIds) {
-            sendNotification(affiliateId, type, title, message, priority, Map.of());
+            sendNotification(affiliateId, type, title, message, priority, Map.of("broadcast", "true"));
         }
     }
 

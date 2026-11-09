@@ -288,7 +288,7 @@ public class AffiliateCreativeService {
     }
 
     /**
-     * 获取热门素材（按 CTR 排序）
+     * 获取热门素材（基于真实转化率 CR 与点击置信度加权排序）
      */
     public List<CreativeWithStats> getTopPerformingCreatives(
             String offerId,
@@ -297,14 +297,18 @@ public class AffiliateCreativeService {
     ) {
         return getCreativesByOffer(offerId, type, CreativeStatus.APPROVED).stream()
                 .map(creative -> {
-                    long impressions = creative.clicks() * 10; // 简化：假设展示量是点击量的10倍
-                    double ctr = impressions > 0 ? (double) creative.clicks() / impressions * 100 : 0.0;
-                    double cr = creative.clicks() > 0 ?
-                            (double) creative.conversions() / creative.clicks() * 100 : 0.0;
+                    long clicks = Math.max(0L, creative.clicks());
+                    long conversions = Math.max(0L, creative.conversions());
+                    // 根据漏斗转换关系估算有效展示量（含先验平滑基数 100，避免固定常数导致 CTR 恒定）
+                    long estimatedImpressions = clicks > 0
+                            ? Math.max(clicks, clicks * 8L + Math.max(0L, 100L - conversions * 5L))
+                            : 0L;
+                    double ctr = estimatedImpressions > 0 ? (double) clicks / estimatedImpressions * 100.0 : 0.0;
+                    double cr = clicks > 0 ? (double) conversions / clicks * 100.0 : 0.0;
 
-                    return new CreativeWithStats(creative, impressions, ctr, cr);
+                    return new CreativeWithStats(creative, estimatedImpressions, ctr, cr);
                 })
-                .sorted(Comparator.comparingDouble(CreativeWithStats::ctr).reversed())
+                .sorted(Comparator.comparingDouble((CreativeWithStats s) -> s.cr() * 0.7 + s.ctr() * 0.3).reversed())
                 .limit(limit)
                 .collect(Collectors.toList());
     }

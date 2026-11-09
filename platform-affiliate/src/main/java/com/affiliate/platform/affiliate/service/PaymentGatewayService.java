@@ -44,6 +44,13 @@ public class PaymentGatewayService {
     private final CacheKeyGenerator keyGenerator;
     private final ObjectMapper objectMapper;
 
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private AffiliateSettlementService settlementService;
+
+    public void setSettlementService(AffiliateSettlementService settlementService) {
+        this.settlementService = settlementService;
+    }
+
     private static final Duration PAYMENT_METHOD_CACHE_TTL = Duration.ofMinutes(30);
     private static final Duration TRANSACTION_CACHE_TTL = Duration.ofMinutes(15);
     private static final Duration EXCHANGE_RATE_CACHE_TTL = Duration.ofHours(1);
@@ -253,7 +260,7 @@ public class PaymentGatewayService {
     }
 
     /**
-     * 创建批量支付
+     * 创建批量支付（联动结算发票中心自动生成待执行打款交易）
      */
     public PaymentBatch createPaymentBatch(
             List<String> invoiceIds,
@@ -262,10 +269,36 @@ public class PaymentGatewayService {
         String batchId = "batch_" + UUID.randomUUID().toString().replace("-", "");
 
         List<String> transactionIds = new ArrayList<>();
+        BigDecimal totalBatchAmount = BigDecimal.ZERO;
 
-        for (String invoiceId : invoiceIds) {
-            // TODO: 从 AffiliateSettlementService 获取 invoice 详情
-            // 简化实现
+        if (invoiceIds != null && settlementService != null) {
+            for (String invoiceId : invoiceIds) {
+                settlementService.findInvoice(invoiceId).ifPresent(invoice -> {
+                    List<PaymentMethodEntity> methods =
+                            paymentMethodRepository.findByAffiliateIdOrderByCreatedAtDesc(invoice.affiliateId());
+                    methods.stream()
+                            .filter(m -> PaymentMethodStatus.VERIFIED.name().equals(m.getStatus()))
+                            .sorted((a, b) -> Boolean.compare(Boolean.TRUE.equals(b.getIsPrimary()), Boolean.TRUE.equals(a.getIsPrimary())))
+                            .findFirst()
+                            .ifPresent(method -> {
+                                PaymentTransaction tx = createPayment(
+                                        invoice.affiliateId(),
+                                        invoice.id(),
+                                        invoice.amount(),
+                                        "USD",
+                                        method.getId()
+                                );
+                                transactionIds.add(tx.id());
+                            });
+                });
+            }
+            for (String txId : transactionIds) {
+                totalBatchAmount = totalBatchAmount.add(
+                        transactionRepository.findById(txId)
+                                .map(PaymentTransactionEntity::getAmount)
+                                .orElse(BigDecimal.ZERO)
+                );
+            }
         }
 
         PaymentBatch batch = new PaymentBatch(
@@ -273,8 +306,8 @@ public class PaymentGatewayService {
                 batchName,
                 transactionIds,
                 PaymentBatchStatus.CREATED,
-                BigDecimal.ZERO,
-                0,
+                totalBatchAmount,
+                transactionIds.size(),
                 0,
                 0,
                 Instant.now(),
@@ -282,7 +315,6 @@ public class PaymentGatewayService {
                 null
         );
 
-        // 批量操作暂时保留内存存储（V2同样处理）
         String cacheKey = keyGenerator.paymentBatch(batchId);
         cacheManager.put(cacheKey, batch, Duration.ofHours(24));
 

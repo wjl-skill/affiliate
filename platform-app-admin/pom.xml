@@ -80,6 +80,36 @@
             <version>0.2.0</version>
         </dependency>
         <dependency>
+            <groupId>com.affiliate</groupId>
+            <artifactId>platform-affiliate</artifactId>
+            <version>0.2.0</version>
+        </dependency>
+        <dependency>
+            <groupId>com.affiliate</groupId>
+            <artifactId>platform-dsp</artifactId>
+            <version>0.2.0</version>
+        </dependency>
+        <dependency>
+            <groupId>com.affiliate</groupId>
+            <artifactId>platform-ssp</artifactId>
+            <version>0.2.0</version>
+        </dependency>
+        <dependency>
+            <groupId>com.affiliate</groupId>
+            <artifactId>platform-adx</artifactId>
+            <version>0.2.0</version>
+        </dependency>
+        <dependency>
+            <groupId>com.affiliate</groupId>
+            <artifactId>platform-budget</artifactId>
+            <version>0.2.0</version>
+        </dependency>
+        <dependency>
+            <groupId>com.affiliate</groupId>
+            <artifactId>platform-event</artifactId>
+            <version>0.2.0</version>
+        </dependency>
+        <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-test</artifactId>
             <scope>test</scope>

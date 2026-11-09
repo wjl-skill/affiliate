@@ -1,0 +1,40 @@
+# ===================================================================
+# Nacos DataId: affiliate-gateway-routes.yaml
+# Group: AFFILIATE_GROUP
+# Namespace: prod (或 public)
+# 用途: Spring Cloud Gateway 动态路由热更新配置 (修改后网关秒级刷新路由表，零停机生效)
+# ===================================================================
+
+gateway:
+  dynamic-routes:
+    - id: rtb-openrtb-bidding-route
+      uri: lb://platform-app-rtb
+      order: 10
+      predicates:
+        - Path=/rtb/**,/api/v1/adx/**,/api/v1/dsp/**,/api/v1/ssp/**
+      filters:
+        - AddRequestHeader=X-Route-Plane, RTB-DATAPLANE
+
+    - id: tracker-click-postback-route
+      uri: lb://platform-app-tracker
+      order: 20
+      predicates:
+        - Path=/clk/**,/s2s/**,/affiliate/click/**,/affiliate/postback/**,/affiliate/skan/**,/api/v1/affiliate/click/**,/api/v1/affiliate/postback/**,/api/v1/affiliate/skan/**,/api/v1/skan/**
+      filters:
+        - AddRequestHeader=X-Route-Plane, TRACKER-DATAPLANE
+
+    - id: worker-supplement-outbox-route
+      uri: lb://platform-app-worker
+      order: 30
+      predicates:
+        - Path=/api/v1/affiliate/offers/supplement/**,/api/v1/affiliate/supplement/**,/api/v1/ops/outbox/**,/api/v1/outbox/**
+      filters:
+        - AddRequestHeader=X-Route-Plane, WORKER-PLANE
+
+    - id: admin-controlplane-route
+      uri: lb://platform-app-admin
+      order: 100
+      predicates:
+        - Path=/api/v1/**,/affiliate/anti-fraud/**
+      filters:
+        - AddRequestHeader=X-Route-Plane, ADMIN-CONTROLPLANE

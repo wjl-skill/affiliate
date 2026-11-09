@@ -180,8 +180,12 @@ public class MultiLevelCacheManager {
      * 按前缀失效缓存
      */
     public void evictByPattern(String pattern) {
-        // L1: 清除所有（简化实现）
-        l1Cache.invalidateAll();
+        if (pattern == null || pattern.isBlank()) {
+            return;
+        }
+        // L1: 将通配符 * 转换为前缀精准剔除匹配项，避免粗暴 invalidateAll()
+        String prefix = pattern.endsWith("*") ? pattern.substring(0, pattern.length() - 1) : pattern;
+        l1Cache.asMap().keySet().removeIf(k -> k != null && (k.startsWith(prefix) || k.equals(pattern)));
 
         // L2: 按模式删�?
         var redisKeys = redisTemplate.keys(pattern);

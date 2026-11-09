@@ -1,0 +1,21 @@
+# ===================================================================
+# Nacos DataId: platform-app-gateway-prod.yaml
+# Group: AFFILIATE_GROUP
+# Namespace: prod
+# 用途: Spring Cloud Gateway 生产环境网关限流、鉴权与连接池动态策略配置
+# ===================================================================
+
+server:
+  port: 8080
+
+app:
+  gateway:
+    auth:
+      enabled: true
+      default-tenant: public
+    rate-limit:
+      enabled: true
+      # 数据面 (/rtb/**, /clk/**, /s2s/**) 单 IP 秒级限流阈值
+      dataplane-qps: 10000
+      # 控制面 (/api/v1/**) 单客户端秒级限流阈值
+      controlplane-qps: 300

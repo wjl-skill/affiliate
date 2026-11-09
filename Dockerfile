@@ -4,9 +4,9 @@
 FROM maven:3.9.9-eclipse-temurin-21 AS builder
 WORKDIR /workspace
 
-ARG APP_MODULE=platform-api
+ARG APP_MODULE=platform-app-gateway
 
-# 预先拷贝根 POM 与全部 23 个子模块 POM，充分利用 Docker 缓存层
+# 预先拷贝根 POM 与全部 24 个子模块 POM，充分利用 Docker 缓存层
 COPY pom.xml ./
 COPY platform-common/pom.xml platform-common/
 COPY platform-infrastructure/pom.xml platform-infrastructure/
@@ -31,6 +31,7 @@ COPY platform-app-tracker/pom.xml platform-app-tracker/
 COPY platform-app-rtb/pom.xml platform-app-rtb/
 COPY platform-app-admin/pom.xml platform-app-admin/
 COPY platform-app-worker/pom.xml platform-app-worker/
+COPY platform-app-gateway/pom.xml platform-app-gateway/
 
 # 拷贝各子模块源码
 COPY platform-common/src platform-common/src
@@ -56,6 +57,7 @@ COPY platform-app-tracker/src platform-app-tracker/src
 COPY platform-app-rtb/src platform-app-rtb/src
 COPY platform-app-admin/src platform-app-admin/src
 COPY platform-app-worker/src platform-app-worker/src
+COPY platform-app-gateway/src platform-app-gateway/src
 
 # 执行指定微服务模块独立构建打包
 RUN mvn clean package -pl ${APP_MODULE} -am -DskipTests
@@ -65,7 +67,7 @@ RUN mvn clean package -pl ${APP_MODULE} -am -DskipTests
 # ===================================================================
 FROM eclipse-temurin:21-jre-alpine
 
-ARG APP_MODULE=platform-api
+ARG APP_MODULE=platform-app-gateway
 ARG APP_PORT=8080
 
 # 安装 curl 工具并创建非 root 用户运行

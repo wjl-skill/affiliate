@@ -98,7 +98,38 @@ services:
       - affiliate-network
 
   # =================================================================
-  # 5. 微服务 1: Tracker 转化追踪边缘数据面 (Port 8081)
+  # 5. 统一入口网关: Spring Cloud Gateway (Port 8080)
+  # =================================================================
+  platform-app-gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        APP_MODULE: platform-app-gateway
+        APP_PORT: 8080
+    container_name: platform-app-gateway
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    depends_on:
+      nacos:
+        condition: service_healthy
+    environment:
+      SPRING_PROFILES_ACTIVE: prod
+      SERVER_PORT: 8080
+      NACOS_ENABLED: "true"
+      NACOS_SERVER_ADDR: nacos:8848
+      NACOS_NAMESPACE: prod
+      NACOS_GROUP: AFFILIATE_GROUP
+      GATEWAY_AUTH_ENABLED: "true"
+      GATEWAY_RATELIMIT_ENABLED: "true"
+      GATEWAY_DATAPLANE_QPS: 10000
+      GATEWAY_CONTROLPLANE_QPS: 300
+    networks:
+      - affiliate-network
+
+  # =================================================================
+  # 6. 微服务 1: Tracker 转化追踪边缘数据面 (Port 8081)
   # =================================================================
   platform-app-tracker:
     build:
@@ -136,7 +167,7 @@ services:
       - affiliate-network
 
   # =================================================================
-  # 6. 微服务 2: RTB 毫秒级实时竞价数据面 (Port 8082)
+  # 7. 微服务 2: RTB 毫秒级实时竞价数据面 (Port 8082)
   # =================================================================
   platform-app-rtb:
     build:
@@ -174,7 +205,7 @@ services:
       - affiliate-network
 
   # =================================================================
-  # 7. 微服务 3: Admin 运营控制面与多维报表服务 (Port 8083)
+  # 8. 微服务 3: Admin 运营控制面与多维报表服务 (Port 8083)
   # =================================================================
   platform-app-admin:
     build:
@@ -213,7 +244,7 @@ services:
       - affiliate-network
 
   # =================================================================
-  # 8. 微服务 4: Worker 异步任务、Outbox 中继与高并发补量服务 (Port 8084)
+  # 9. 微服务 4: Worker 异步任务、Outbox 中继与高并发补量服务 (Port 8084)
   # =================================================================
   platform-app-worker:
     build:

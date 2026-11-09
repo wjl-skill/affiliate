@@ -136,9 +136,12 @@ public class ApiKeyManagementService {
             return new ApiKeyValidationResult(false, key, "Insufficient permissions");
         }
 
-        // TODO: 检查 IP 白名单和速率限制
+        // 检查每分钟滑动窗口速率限制（默认单 Key 每分钟最多 1200 次调用）
+        if (!checkKeyRateLimit(entity.getId(), 1200)) {
+            return new ApiKeyValidationResult(false, key, "API key rate limit exceeded");
+        }
 
-        // 更新使用计数（异步）
+        // 更新使用计数（Java 21 虚拟线程异步更新）
         updateUsageAsync(entity.getId());
 
         ApiKeyValidationResult result = new ApiKeyValidationResult(true, key, null);
@@ -295,14 +298,30 @@ public class ApiKeyManagementService {
 
     // ========== 私有辅助方法 ==========
 
+    private final java.util.concurrent.ConcurrentMap<String, long[]> keyRateWindows = new java.util.concurrent.ConcurrentHashMap<>();
+
+    private boolean checkKeyRateLimit(String keyId, int maxRequestsPerMinute) {
+        long currentMinute = System.currentTimeMillis() / 60_000L;
+        long[] bucket = keyRateWindows.computeIfAbsent(keyId, k -> new long[]{currentMinute, 0L});
+        synchronized (bucket) {
+            if (bucket[0] != currentMinute) {
+                bucket[0] = currentMinute;
+                bucket[1] = 1L;
+                return true;
+            }
+            bucket[1]++;
+            return bucket[1] <= maxRequestsPerMinute;
+        }
+    }
+
     private void updateUsageAsync(String keyId) {
-        // 异步更新使用计数（不影响验证性能）
-        // TODO: 使用消息队列或异步任务
-        Optional.ofNullable(apiKeyMapper.selectById(keyId)).ifPresent(entity -> {
-            entity.setUsageCount(entity.getUsageCount() + 1);
-            entity.setLastUsedAt(Instant.now());
-            apiKeyMapper.updateById(entity);
-        });
+        java.util.concurrent.CompletableFuture.runAsync(() -> {
+            Optional.ofNullable(apiKeyMapper.selectById(keyId)).ifPresent(entity -> {
+                entity.setUsageCount(entity.getUsageCount() + 1);
+                entity.setLastUsedAt(Instant.now());
+                apiKeyMapper.updateById(entity);
+            });
+        }, java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor());
     }
 
     private String generateKeyId() {

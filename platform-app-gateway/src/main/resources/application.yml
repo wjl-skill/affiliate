@@ -1,0 +1,132 @@
+# ===================================================================
+# Affiliate Platform Gateway 统一微服务 API 网关配置 (Spring Cloud Gateway + Nacos)
+# ===================================================================
+
+server:
+  port: ${SERVER_PORT:8080}
+  compression:
+    enabled: true
+    mime-types: application/json
+
+spring:
+  application:
+    name: platform-app-gateway
+  main:
+    web-application-type: reactive
+  threads:
+    virtual:
+      enabled: true
+
+  # 1. Nacos 微服务注册发现与动态配置中心配置
+  cloud:
+    nacos:
+      server-addr: ${NACOS_SERVER_ADDR:127.0.0.1:8848}
+      username: ${NACOS_USERNAME:nacos}
+      password: ${NACOS_PASSWORD:nacos}
+      discovery:
+        enabled: ${NACOS_ENABLED:false}
+        namespace: ${NACOS_NAMESPACE:public}
+        group: ${NACOS_GROUP:AFFILIATE_GROUP}
+        service: platform-app-gateway
+        cluster-name: ${NACOS_CLUSTER:GATEWAY}
+        weight: 1.0
+        metadata:
+          role: api-gateway
+          plane: ingress-edge
+      config:
+        enabled: ${NACOS_ENABLED:false}
+        namespace: ${NACOS_NAMESPACE:public}
+        group: ${NACOS_GROUP:AFFILIATE_GROUP}
+        file-extension: yaml
+        refresh-enabled: true
+        shared-configs:
+          - data-id: affiliate-common.yaml
+            group: ${NACOS_GROUP:AFFILIATE_GROUP}
+            refresh: true
+          - data-id: affiliate-gateway-routes.yaml
+            group: ${NACOS_GROUP:AFFILIATE_GROUP}
+            refresh: true
+
+    # 2. Spring Cloud Gateway 核心路由矩阵 (基于 Nacos lb:// 负载均衡转发至四大微服务)
+    gateway:
+      default-filters:
+        - DedupeResponseHeader=Access-Control-Allow-Origin Access-Control-Allow-Credentials, RETAIN_FIRST
+      globalcors:
+        add-to-simple-url-handler-mapping: true
+        corsConfigurations:
+          '[/**]':
+            allowedOriginPatterns: "*"
+            allowedMethods:
+              - GET
+              - POST
+              - PUT
+              - DELETE
+              - PATCH
+              - OPTIONS
+            allowedHeaders: "*"
+            allowCredentials: true
+            maxAge: 3600
+      httpclient:
+        connect-timeout: 1500
+        response-timeout: 5s
+        pool:
+          type: elastic
+          max-idle-time: 30s
+      routes:
+        # 路由 1: RTB 毫秒级竞价与曝光/胜出追踪 -> platform-app-rtb (8082)
+        - id: rtb-openrtb-bidding-route
+          uri: lb://platform-app-rtb
+          order: 10
+          predicates:
+            - Path=/rtb/**,/api/v1/adx/**,/api/v1/dsp/**,/api/v1/ssp/**
+          filters:
+            - AddRequestHeader=X-Route-Plane, RTB-DATAPLANE
+
+        # 路由 2: Tracker 点击重定向、S2S 转化回传与 SKAN 4.0 归因 -> platform-app-tracker (8081)
+        - id: tracker-click-postback-route
+          uri: lb://platform-app-tracker
+          order: 20
+          predicates:
+            - Path=/clk/**,/s2s/**,/affiliate/click/**,/affiliate/postback/**,/affiliate/skan/**,/api/v1/affiliate/click/**,/api/v1/affiliate/postback/**,/api/v1/affiliate/skan/**,/api/v1/skan/**
+          filters:
+            - AddRequestHeader=X-Route-Plane, TRACKER-DATAPLANE
+
+        # 路由 3: Worker 虚拟线程高并发自动补量与 Outbox 事件调度 -> platform-app-worker (8084)
+        - id: worker-supplement-outbox-route
+          uri: lb://platform-app-worker
+          order: 30
+          predicates:
+            - Path=/api/v1/affiliate/offers/supplement/**,/api/v1/affiliate/supplement/**,/api/v1/ops/outbox/**,/api/v1/outbox/**
+          filters:
+            - AddRequestHeader=X-Route-Plane, WORKER-PLANE
+
+        # 路由 4: Admin 运营管理控制面、多租户、财务账本、CDP/DMP、AI 与多维报表 -> platform-app-admin (8083)
+        - id: admin-controlplane-route
+          uri: lb://platform-app-admin
+          order: 100
+          predicates:
+            - Path=/api/v1/**,/affiliate/anti-fraud/**
+          filters:
+            - AddRequestHeader=X-Route-Plane, ADMIN-CONTROLPLANE
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus,gateway
+  endpoint:
+    health:
+      probes:
+        enabled: true
+    gateway:
+      enabled: true
+
+app:
+  gateway:
+    auth:
+      enabled: ${GATEWAY_AUTH_ENABLED:true}
+      default-tenant: ${GATEWAY_DEFAULT_TENANT:public}
+    rate-limit:
+      enabled: ${GATEWAY_RATELIMIT_ENABLED:true}
+      dataplane-qps: ${GATEWAY_DATAPLANE_QPS:5000}
+      controlplane-qps: ${GATEWAY_CONTROLPLANE_QPS:200}

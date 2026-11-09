@@ -32,6 +32,20 @@ public class OfferApprovalWorkflowService {
     private final CacheKeyGenerator keyGenerator;
     private final ObjectMapper objectMapper;
 
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private OfferService offerService;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private S2sPostbackService postbackService;
+
+    public void setOfferService(OfferService offerService) {
+        this.offerService = offerService;
+    }
+
+    public void setPostbackService(S2sPostbackService postbackService) {
+        this.postbackService = postbackService;
+    }
+
     private static final Duration APPLICATION_CACHE_TTL = Duration.ofMinutes(15);
     private static final Duration ACCESS_CACHE_TTL = Duration.ofMinutes(30);
 
@@ -156,9 +170,17 @@ public class OfferApprovalWorkflowService {
                 Boolean.class,
                 ACCESS_CACHE_TTL,
                 () -> {
-                    // TODO: 检查Offer是否公开，公开Offer所有人都可访问
-                    // 当前简化：只检查是否有已批准的申请
-                    return applicationRepository.hasAccess(offerId, affiliateId);
+                    if (applicationRepository.hasAccess(offerId, affiliateId)) {
+                        return true;
+                    }
+                    if (offerService != null) {
+                        return offerService.find(offerId)
+                                .map(offer -> offer.isAvailable()
+                                        && offer.title() != null
+                                        && !offer.title().toUpperCase().contains("PRIVATE"))
+                                .orElse(false);
+                    }
+                    return false;
                 }
         ).orElse(false);
     }
@@ -251,16 +273,30 @@ public class OfferApprovalWorkflowService {
     // ========== 私有辅助方法 ==========
 
     /**
-     * 尝试自动审批（基于规则）
+     * 尝试自动审批（基于渠道等级与账户风控状态）
      */
     private void tryAutoApprove(OfferApplicationEntity application) {
-        // TODO: 集成 AffiliatePartner 质量分
-        // 规则示例：
-        // - GOLD/VIP 渠道自动通过
-        // - 质量分 > 85 自动通过
-        // - 黑名单渠道自动拒绝
-
-        // 当前简化实现：标记为待审批
+        if (application == null || postbackService == null) {
+            return;
+        }
+        postbackService.findPartner(application.getAffiliateId()).ifPresent(partner -> {
+            if (partner.status() == com.affiliate.platform.affiliate.domain.AffiliatePartner.Status.SUSPENDED) {
+                application.setStatus(ApplicationStatus.REJECTED.name());
+                application.setReviewerId("SYSTEM_AUTO_GUARD");
+                application.setReviewNote("Auto-rejected: partner account is suspended");
+                application.setReviewedAt(Instant.now());
+                applicationRepository.save(application);
+            } else if (partner.status() == com.affiliate.platform.affiliate.domain.AffiliatePartner.Status.ACTIVE
+                    && (partner.tier() == com.affiliate.platform.affiliate.domain.AffiliatePartner.Tier.GOLD
+                    || partner.tier() == com.affiliate.platform.affiliate.domain.AffiliatePartner.Tier.VIP)) {
+                application.setStatus(ApplicationStatus.APPROVED.name());
+                application.setReviewerId("SYSTEM_AUTO_APPROVAL");
+                application.setReviewNote("Auto-approved for trusted " + partner.tier().name() + " partner");
+                application.setReviewedAt(Instant.now());
+                applicationRepository.save(application);
+                cacheManager.evict(keyGenerator.offerAccess(application.getOfferId(), application.getAffiliateId()));
+            }
+        });
     }
 
     private String generateApplicationId(String offerId, String affiliateId) {

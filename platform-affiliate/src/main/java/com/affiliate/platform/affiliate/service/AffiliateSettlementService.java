@@ -178,6 +178,32 @@ public class AffiliateSettlementService {
     }
 
     /**
+     * 根据发票 ID 查询结算发票详情
+     */
+    public Optional<AffiliateInvoice> findInvoice(String invoiceId) {
+        if (invoiceId == null || invoiceId.isBlank()) {
+            return Optional.empty();
+        }
+        if (invoiceMapper != null) {
+            AffiliateInvoiceEntity entity = invoiceMapper.selectById(invoiceId);
+            if (entity != null) {
+                String tenant = requestTenant().orElse(null);
+                if (tenant == null || tenant.equals(entity.getTenantId())) {
+                    return Optional.of(toDomain(entity));
+                }
+            }
+        }
+        AffiliateInvoice fallback = fallbackInvoices.get(invoiceId);
+        if (fallback != null) {
+            String tenant = requestTenant().orElse(null);
+            if (tenant == null || tenant.equals(fallback.tenantId())) {
+                return Optional.of(fallback);
+            }
+        }
+        return Optional.empty();
+    }
+
+    /**
      * 将结算发票标记为已支付 (GENERATED -> PAID)，仅限当前租户
      *
      * @param invoiceId 发票 ID
