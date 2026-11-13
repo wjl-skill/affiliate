@@ -1,13 +1,18 @@
 package com.affiliate.platform.reporting.olap;
 
+import com.affiliate.platform.event.DomainEvent;
+import com.affiliate.platform.event.InMemoryEventPublisher;
+import com.affiliate.platform.event.InMemoryOutboxStore;
 import com.affiliate.platform.reporting.PerformanceMetricsCalculator;
 import com.affiliate.platform.reporting.olap.OlapReportingEngine.OlapAggregationRow;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -89,5 +94,27 @@ class ClickHouseOlapClientTest {
         assertEquals(1, result.size());
         assertEquals("ch_dim_val", result.get(0).dimensionKey());
         assertEquals(2500L, result.get(0).clicks());
+    }
+
+    @Test
+    void testOlapEventStreamSubscriberRealTimeIngestion() {
+        InMemoryEventPublisher publisher = new InMemoryEventPublisher(new InMemoryOutboxStore());
+        OlapEventStreamSubscriber subscriber = new OlapEventStreamSubscriber(client, publisher);
+        subscriber.initSubscription();
+
+        publisher.publish(DomainEvent.create(
+                "impression.recorded.v1", "tenant_1", "imp_1",
+                Map.of("offerId", "off_1", "publisherId", "pub_1", "country", "US")
+        ));
+        publisher.publish(DomainEvent.create(
+                "click.recorded.v1", "tenant_1", "clk_1",
+                Map.of("offerId", "off_1", "publisherId", "pub_1", "country", "US", "sub1", "tiktok")
+        ));
+        publisher.publish(DomainEvent.create(
+                "conversion.approved.v1", "tenant_1", "conv_1",
+                Map.of("offerId", "off_1", "publisherId", "pub_1", "payout", 12.50, "revenue", 18.00)
+        ));
+
+        assertEquals(3L, subscriber.getTotalIngestedEvents());
     }
 }

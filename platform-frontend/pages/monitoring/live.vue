@@ -278,6 +278,56 @@
         </div>
       </div>
     </div>
+
+    <!-- Spring Cloud Gateway + Nacos 微服务拓扑与自适应熔断治理矩阵 -->
+    <div class="bg-white rounded-xl p-6 border border-slate-200 shadow-sm space-y-4">
+      <div class="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h4 class="text-sm font-bold text-slate-800 flex items-center gap-2">
+            <span>🌐 Spring Cloud Gateway + Nacos 2.4.3 微服务拓扑与熔断治理</span>
+            <span class="px-2 py-0.5 text-[10px] font-bold rounded bg-emerald-50 text-emerald-700 border border-emerald-200">
+              lb:// 响应式负载均衡
+            </span>
+          </h4>
+          <p class="text-xs text-slate-400 mt-0.5">
+            动态路由数: {{ gatewayRoutesCount }} 条 · 数据面限流: {{ dataplaneLimitQps }} QPS · 控制面限流: {{ controlplaneLimitQps }} QPS
+          </p>
+        </div>
+        <button
+          type="button"
+          class="px-3 py-1.5 text-xs font-bold rounded-lg bg-slate-800 hover:bg-slate-700 text-white transition-all"
+          @click="resetGatewayCircuitBreakers"
+        >
+          ⚡ 重置全部熔断器 (CLOSED)
+        </button>
+      </div>
+
+      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div
+          v-for="svc in microservicePlanes"
+          :key="svc.plane"
+          class="p-4 rounded-xl border border-slate-200 bg-slate-50/70 space-y-2"
+        >
+          <div class="flex items-center justify-between">
+            <span class="text-xs font-bold text-slate-800 font-mono">{{ svc.service }}</span>
+            <span
+              class="px-2 py-0.5 text-[10px] font-bold rounded"
+              :class="svc.cbState === 'CLOSED' ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'"
+            >
+              CB: {{ svc.cbState }}
+            </span>
+          </div>
+          <div class="flex items-center justify-between text-xs text-slate-500">
+            <span>物理平面: <strong class="text-slate-700">{{ svc.plane }}</strong></span>
+            <span class="font-mono">:{{ svc.port }}</span>
+          </div>
+          <div class="flex items-center justify-between text-[11px] text-slate-500 pt-1 border-t border-slate-200/70">
+            <span>调用: {{ svc.totalCalls }} · 失败率: {{ svc.failureRate }}%</span>
+            <span class="font-mono text-indigo-600">短路: {{ svc.shortCircuited }}</span>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -321,6 +371,26 @@ const banditArms = ref([
 // 实时作弊拦截流水
 const realtimeAlerts = ref<any[]>([])
 
+// Spring Cloud Gateway + Nacos 拓扑与熔断器状态
+const gatewayRoutesCount = ref(4)
+const dataplaneLimitQps = ref(5000)
+const controlplaneLimitQps = ref(200)
+const microservicePlanes = ref([
+  { plane: 'TRACKER', service: 'platform-app-tracker', port: 8081, cbState: 'CLOSED', totalCalls: 0, failureRate: 0.0, shortCircuited: 0 },
+  { plane: 'RTB', service: 'platform-app-rtb', port: 8082, cbState: 'CLOSED', totalCalls: 0, failureRate: 0.0, shortCircuited: 0 },
+  { plane: 'ADMIN', service: 'platform-app-admin', port: 8083, cbState: 'CLOSED', totalCalls: 0, failureRate: 0.0, shortCircuited: 0 },
+  { plane: 'WORKER', service: 'platform-app-worker', port: 8084, cbState: 'CLOSED', totalCalls: 0, failureRate: 0.0, shortCircuited: 0 }
+])
+
+const resetGatewayCircuitBreakers = async () => {
+  try {
+    await fetchApi('/api/v1/gateway/circuit-breakers/reset', { method: 'POST' })
+    await fetchMetrics()
+  } catch (e) {
+    // 忽略异常
+  }
+}
+
 const initHistory = () => {
   const now = new Date()
   const history: Array<{ time: string; qps: number }> = []
@@ -357,6 +427,28 @@ const fetchMetrics = async () => {
         payout: l.payout ? String(l.payout) : '0.00',
         time: l.timestamp ? new Date(l.timestamp).toTimeString().split(' ')[0] : new Date().toTimeString().split(' ')[0]
       }))
+    }
+
+    const gwTopology: any = await fetchApi('/api/v1/gateway/topology').catch(() => null)
+    if (gwTopology) {
+      gatewayRoutesCount.value = Number(gwTopology.activeRoutesCount || 4)
+      if (gwTopology.rateLimit) {
+        dataplaneLimitQps.value = Number(gwTopology.rateLimit.dataplaneQps || 5000)
+        controlplaneLimitQps.value = Number(gwTopology.rateLimit.controlplaneQps || 200)
+      }
+      if (gwTopology.circuitBreakers) {
+        microservicePlanes.value = microservicePlanes.value.map(item => {
+          const cb = gwTopology.circuitBreakers[item.plane]
+          if (!cb) return item
+          return {
+            ...item,
+            cbState: cb.state || 'CLOSED',
+            totalCalls: Number(cb.totalCalls || 0),
+            failureRate: Number(cb.failureRatePercent || 0),
+            shortCircuited: Number(cb.shortCircuitedCalls || 0)
+          }
+        })
+      }
     }
 
     // 增加一个脉冲采样

@@ -1,6 +1,7 @@
 package com.affiliate.platform.gateway;
 
 import com.affiliate.platform.gateway.config.NacosReactiveDiscoveryClientConfiguration;
+import com.affiliate.platform.gateway.filter.GatewayAdaptiveCircuitBreakerFilter;
 import com.affiliate.platform.gateway.filter.GatewayAuthAndTraceGlobalFilter;
 import com.affiliate.platform.gateway.filter.GatewayRateLimitGlobalFilter;
 import com.affiliate.platform.gateway.route.NacosDynamicRouteRepository;
@@ -226,9 +227,10 @@ class SpringCloudGatewayNacosTest {
         configManager.initConfigCenter();
         NacosDynamicRouteRepository routeRepo = new NacosDynamicRouteRepository(e -> {}, configManager);
         GatewayRateLimitGlobalFilter rateLimiter = new GatewayRateLimitGlobalFilter();
+        GatewayAdaptiveCircuitBreakerFilter circuitBreaker = new GatewayAdaptiveCircuitBreakerFilter();
 
         GatewayFallbackController controller = new GatewayFallbackController(
-                registry, configManager, routeRepo, null, rateLimiter
+                registry, configManager, routeRepo, null, rateLimiter, circuitBreaker
         );
 
         ResponseEntity<Map<String, Object>> rtbFallback = controller.rtbFallback().block();
@@ -240,5 +242,48 @@ class SpringCloudGatewayNacosTest {
         ResponseEntity<Map<String, Object>> topology = controller.getGatewayTopology().block();
         assertNotNull(topology);
         assertEquals("platform-app-gateway", topology.getBody().get("gateway"));
+        assertNotNull(topology.getBody().get("circuitBreakers"));
+    }
+
+    @Test
+    @DisplayName("6. 验证网关自适应滑动窗口熔断器 (CLOSED -> OPEN 降级 -> resetAll 恢复) 与金丝雀路由头透传")
+    void testGatewayAdaptiveCircuitBreakerAndCanaryRouting() {
+        GatewayAdaptiveCircuitBreakerFilter cbFilter = new GatewayAdaptiveCircuitBreakerFilter();
+        cbFilter.setMinCalls(4);
+
+        // 连续模拟 4 次下游 RTB 503 故障，触发熔断器进入 OPEN 状态
+        for (int i = 0; i < 4; i++) {
+            MockServerWebExchange failEx = MockServerWebExchange.from(
+                    MockServerHttpRequest.post("/rtb/openrtb/2.5/bid")
+                            .header("X-Canary-Version", "v2-gray")
+                            .build()
+            );
+            cbFilter.filter(failEx, ex -> {
+                ex.getResponse().setStatusCode(HttpStatus.SERVICE_UNAVAILABLE);
+                return Mono.empty();
+            }).block();
+        }
+
+        Map<String, Map<String, Object>> snapshots = cbFilter.getCircuitBreakerSnapshots();
+        assertEquals("OPEN", snapshots.get("RTB").get("state"));
+
+        // 第 5 次请求应在网关边缘直接短路降级，返回 OpenRTB 2.5 合规空 SeatBid 且 X-Circuit-Breaker-State=OPEN
+        AtomicBoolean downstreamCalled = new AtomicBoolean(false);
+        MockServerWebExchange shortCircuitEx = MockServerWebExchange.from(
+                MockServerHttpRequest.post("/rtb/openrtb/2.5/bid").build()
+        );
+        cbFilter.filter(shortCircuitEx, ex -> {
+            downstreamCalled.set(true);
+            return Mono.empty();
+        }).block();
+
+        assertFalse(downstreamCalled.get(), "Circuit breaker in OPEN state must short-circuit downstream call");
+        assertEquals(HttpStatus.OK, shortCircuitEx.getResponse().getStatusCode());
+        assertEquals("OPEN", shortCircuitEx.getResponse().getHeaders().getFirst("X-Circuit-Breaker-State"));
+        assertEquals(1L, snapshots.get("RTB").get("shortCircuitedCalls") instanceof Number n ? n.longValue() + 1L : 1L);
+
+        // 手动重置熔断器后恢复 CLOSED 状态
+        cbFilter.resetAll();
+        assertEquals("CLOSED", cbFilter.getCircuitBreakerSnapshots().get("RTB").get("state"));
     }
 }

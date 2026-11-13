@@ -1,5 +1,6 @@
 package com.affiliate.platform.gateway.web;
 
+import com.affiliate.platform.gateway.filter.GatewayAdaptiveCircuitBreakerFilter;
 import com.affiliate.platform.gateway.filter.GatewayRateLimitGlobalFilter;
 import com.affiliate.platform.gateway.route.NacosDynamicRouteRepository;
 import com.affiliate.platform.nacos.NacosDynamicConfigManager;
@@ -34,6 +35,17 @@ public class GatewayFallbackController {
     private final NacosDynamicRouteRepository dynamicRouteRepository;
     private final RouteDefinitionLocator routeDefinitionLocator;
     private final GatewayRateLimitGlobalFilter rateLimitFilter;
+    private final GatewayAdaptiveCircuitBreakerFilter circuitBreakerFilter;
+
+    public GatewayFallbackController(
+            NacosServiceRegistryManager registryManager,
+            NacosDynamicConfigManager configManager,
+            NacosDynamicRouteRepository dynamicRouteRepository,
+            RouteDefinitionLocator routeDefinitionLocator,
+            GatewayRateLimitGlobalFilter rateLimitFilter
+    ) {
+        this(registryManager, configManager, dynamicRouteRepository, routeDefinitionLocator, rateLimitFilter, null);
+    }
 
     @Autowired
     public GatewayFallbackController(
@@ -41,13 +53,15 @@ public class GatewayFallbackController {
             NacosDynamicConfigManager configManager,
             NacosDynamicRouteRepository dynamicRouteRepository,
             @Autowired(required = false) RouteDefinitionLocator routeDefinitionLocator,
-            GatewayRateLimitGlobalFilter rateLimitFilter
+            GatewayRateLimitGlobalFilter rateLimitFilter,
+            @Autowired(required = false) GatewayAdaptiveCircuitBreakerFilter circuitBreakerFilter
     ) {
         this.registryManager = registryManager;
         this.configManager = configManager;
         this.dynamicRouteRepository = dynamicRouteRepository;
         this.routeDefinitionLocator = routeDefinitionLocator;
         this.rateLimitFilter = rateLimitFilter;
+        this.circuitBreakerFilter = circuitBreakerFilter;
     }
 
     /**
@@ -110,9 +124,26 @@ public class GatewayFallbackController {
                     "controlplaneQps", rateLimitFilter.getControlplaneQps(),
                     "totalRejectedRequests", rateLimitFilter.getTotalRejected()
             ));
+            if (circuitBreakerFilter != null) {
+                result.put("circuitBreakers", circuitBreakerFilter.getCircuitBreakerSnapshots());
+            }
             result.put("nacosDynamicConfigKeys", configManager.getAllDynamicProperties().keySet());
             return ResponseEntity.ok(result);
         });
+    }
+
+    /**
+     * 一键重置网关所有平面的熔断器状态 (OPEN/HALF_OPEN -> CLOSED)
+     */
+    @PostMapping("/api/v1/gateway/circuit-breakers/reset")
+    public Mono<ResponseEntity<Map<String, Object>>> resetCircuitBreakers() {
+        if (circuitBreakerFilter != null) {
+            circuitBreakerFilter.resetAll();
+        }
+        return Mono.just(ResponseEntity.ok(Map.of(
+                "status", "RESET_TO_CLOSED",
+                "circuitBreakers", circuitBreakerFilter != null ? circuitBreakerFilter.getCircuitBreakerSnapshots() : Map.of()
+        )));
     }
 
     /**

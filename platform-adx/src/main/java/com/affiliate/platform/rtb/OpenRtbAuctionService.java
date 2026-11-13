@@ -76,6 +76,18 @@ public class OpenRtbAuctionService {
     // 自适应负载过载保护器
     private final RtbAdaptiveLoadShedder loadShedder;
 
+    // SSP + CDP + DSP 全栈智能竞价桥接器（可选增强）
+    @Autowired(required = false)
+    private RtbSmartBiddingBridge smartBiddingBridge;
+
+    public void setSmartBiddingBridge(RtbSmartBiddingBridge smartBiddingBridge) {
+        this.smartBiddingBridge = smartBiddingBridge;
+    }
+
+    public RtbSmartBiddingBridge getSmartBiddingBridge() {
+        return smartBiddingBridge;
+    }
+
     // 最近一次倒排索引刷新纳秒时间戳
     private volatile long lastIndexRefreshNanos = System.nanoTime();
 
@@ -220,6 +232,11 @@ public class OpenRtbAuctionService {
                 continue; // 广告位已下线，不参与竞价
             }
 
+            // SSP 动态底价自适应寻优增强
+            final AdSlot effectiveSlot = smartBiddingBridge != null
+                    ? smartBiddingBridge.enrichSlotWithAdaptiveFloor(slot, request)
+                    : slot;
+
             // 提取媒体请求的横幅尺寸（宽与高）
             int reqW = impression.banner() != null ? impression.banner().w() : 0;
             int reqH = impression.banner() != null ? impression.banner().h() : 0;
@@ -227,12 +244,18 @@ public class OpenRtbAuctionService {
             // 阶段 3：从内存倒排索引中 O(1) 瞬时召回符合尺寸的可用候选素材列表
             List<Creative> candidates = creativeIndex.findCandidates(reqW, reqH);
             if (candidates.isEmpty()) {
+                if (smartBiddingBridge != null) {
+                    smartBiddingBridge.recordSlotOutcome(effectiveSlot.id(), false, 0.0, 0);
+                }
                 continue; // 无可用尺寸匹配的素材
             }
 
-            // 阶段 4：执行竞价策略评分与底价加价计算
-            strategy.choose(request, impression, slot, candidates).ifPresent(decision -> {
+            // 阶段 4：执行竞价策略评分与底价加价计算（联动 CDP 画像与 DSP 深度 FM + Bid Shading）
+            strategy.choose(request, impression, effectiveSlot, candidates).ifPresent(decision -> {
                 String campaignId = "campaign_" + decision.advertiser();
+                double finalBidPrice = smartBiddingBridge != null
+                        ? smartBiddingBridge.calibrateSmartBidPrice(request, effectiveSlot, decision.advertiser(), decision.price())
+                        : decision.price();
 
                 // 阶段 5：滑动窗口频控校验（例如限制单用户 1 小时最多 10 次曝光）
                 boolean freqAllowed = freqCapService.checkAndIncrement(tenant, campaignId, userId, 10, Duration.ofHours(1));
@@ -242,7 +265,7 @@ public class OpenRtbAuctionService {
                 }
 
                 // 阶段 6：微秒级本地预算切片原子预占（CPM 出价换算为单次曝光预占金额）
-                BigDecimal impCost = BigDecimal.valueOf(decision.price() / 1000.0);
+                BigDecimal impCost = BigDecimal.valueOf(finalBidPrice / 1000.0);
                 BudgetService.Reservation reservation;
                 try {
                     reservation = localBudgetService.reserveFast(tenant, campaignId, userId, impCost);
@@ -253,7 +276,7 @@ public class OpenRtbAuctionService {
 
                 // 阶段 7：生成加密防篡改的胜出通知 URL (Win Notice)
                 String auctionId = auctions.nextId("auction");
-                String winToken = hmacService.generateToken(auctionId, reservation.id(), tenant, campaignId, decision.price(), "WIN");
+                String winToken = hmacService.generateToken(auctionId, reservation.id(), tenant, campaignId, finalBidPrice, "WIN");
                 String nurl = "/rtb/win?token=" + winToken;
 
                 // 阶段 8：组装胜出出价对象
@@ -261,20 +284,24 @@ public class OpenRtbAuctionService {
                 bids.add(new OpenRtb.Bid(
                         bidId,
                         impression.id(),
-                        decision.price(),
+                        finalBidPrice,
                         decision.creative().assetUrl(),
                         "example-advertiser.com",
                         nurl,
                         decision.creative().id()
                 ));
 
+                if (smartBiddingBridge != null) {
+                    smartBiddingBridge.recordSlotOutcome(effectiveSlot.id(), true, finalBidPrice, candidates.size());
+                }
+
                 // 阶段 9：异步落盘本次竞价出价记录，优先通过 Disruptor 环形批处理微批通道
                 Auction auctionRecord = new Auction(
                         auctionId,
                         request.id(),
-                        slot.id(),
+                        effectiveSlot.id(),
                         decision.creative().id(),
-                        decision.price(),
+                        finalBidPrice,
                         "USD",
                         decision.advertiser(),
                         Instant.now()
