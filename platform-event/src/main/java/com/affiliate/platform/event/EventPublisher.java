@@ -23,4 +23,12 @@ public interface EventPublisher {
      */
     default void subscribe(Consumer<DomainEvent<?>> subscriber) {
     }
+
+    /**
+     * 仅向当前进程内的实时流订阅者分发事件（供跨进程 Kafka Consumer 桥接使用，不重复写入 Outbox 或回发 Kafka）
+     *
+     * @param event 已从外部消息总线接收的领域事件
+     */
+    default void dispatchLocal(DomainEvent<?> event) {
+    }
 }

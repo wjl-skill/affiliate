@@ -10,6 +10,10 @@ import java.lang.reflect.Method;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.LocalTime;
+import java.time.ZoneOffset;
+import java.util.Collection;
+import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicLong;
@@ -75,28 +79,34 @@ public class DspOnlineFeedbackSubscriber {
         boolean isConversion = "conversion.approved.v1".equals(eventType);
 
         if ((isImpression || isClick || isConversion) && inferenceEngine != null) {
-            LocalDate today = LocalDate.now();
+            Instant occurredAt = event.occurredAt() != null ? event.occurredAt() : Instant.now();
+            LocalDate eventDate = LocalDate.ofInstant(occurredAt, ZoneOffset.UTC);
+            int hourOfDay = (int) extractDouble(payload, "hourOfDay", LocalTime.ofInstant(occurredAt, ZoneOffset.UTC).getHour());
+            String domain = extractString(payload, "domain", extractString(payload, "siteDomain", "publisher.app"));
+            int deviceCode = resolveDeviceCode(device);
+            Set<String> userTraits = extractTraits(payload);
+
             TrafficContext ctx = new TrafficContext(
-                    "app.publisher.com",
-                    1,
-                    today,
-                    12,
-                    today.getDayOfWeek(),
+                    domain,
+                    deviceCode,
+                    eventDate,
+                    hourOfDay,
+                    eventDate.getDayOfWeek(),
                     country,
-                    Set.of()
+                    userTraits
             );
             Campaign dummyCampaign = new Campaign(
                     campaignId,
                     tenantId,
                     "OnlineFeedback-" + campaignId,
-                    today.minusDays(7),
-                    today.plusDays(30),
+                    eventDate.minusDays(7),
+                    eventDate.plusDays(30),
                     BigDecimal.valueOf(1000),
                     BigDecimal.valueOf(Math.max(0.5, price)),
                     Set.of(),
                     Set.of(),
                     Campaign.Status.ACTIVE,
-                    Instant.now()
+                    occurredAt
             );
             inferenceEngine.updateModel(
                     ctx,
@@ -111,6 +121,35 @@ public class DspOnlineFeedbackSubscriber {
 
     public long getFeedbackCount() {
         return feedbackCount.get();
+    }
+
+    private static int resolveDeviceCode(String device) {
+        if (device == null) return 1;
+        String lower = device.trim().toLowerCase();
+        if ("desktop".equals(lower) || "2".equals(lower)) return 2;
+        if ("ctv".equals(lower) || "3".equals(lower)) return 3;
+        return 1;
+    }
+
+    private static Set<String> extractTraits(Object obj) {
+        if (obj instanceof Map<?, ?> map) {
+            Object raw = map.get("userTraits");
+            if (raw instanceof Collection<?> col) {
+                Set<String> result = new HashSet<>();
+                for (Object item : col) {
+                    if (item != null) result.add(String.valueOf(item));
+                }
+                return result;
+            }
+            if (raw instanceof String s && !s.isBlank()) {
+                Set<String> result = new HashSet<>();
+                for (String part : s.split(",")) {
+                    if (!part.isBlank()) result.add(part.trim());
+                }
+                return result;
+            }
+        }
+        return Set.of();
     }
 
     private static String extractString(Object obj, String field, String fallback) {

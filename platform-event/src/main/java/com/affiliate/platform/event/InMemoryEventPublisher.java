@@ -56,7 +56,14 @@ public class InMemoryEventPublisher implements EventPublisher {
         }
         outbox.append(event);
         events.add(event);
+        dispatchLocal(event);
+    }
 
+    @Override
+    public void dispatchLocal(DomainEvent<?> event) {
+        if (event == null) {
+            return;
+        }
         for (Consumer<DomainEvent<?>> subscriber : subscribers) {
             try {
                 subscriber.accept(event);

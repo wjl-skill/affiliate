@@ -13,8 +13,12 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalTime;
 import java.time.ZoneOffset;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.DoubleAdder;
 
 /**
  * RTB 全栈智能竞价协同桥接器 (Unified SSP + CDP + DSP Smart Bidding Pipeline Bridge)
@@ -33,6 +37,10 @@ public class RtbSmartBiddingBridge {
     private final RealtimeEventTraitEngine traitEngine;
     private final DeepCtrCvrInferenceEngine ctrCvrEngine;
     private final DynamicBidShadingEngine bidShadingEngine;
+
+    private final AtomicLong totalCalibrations = new AtomicLong(0);
+    private final AtomicLong cdpBoostedBids = new AtomicLong(0);
+    private final DoubleAdder totalShadedSavings = new DoubleAdder();
 
     @Autowired
     public RtbSmartBiddingBridge(
@@ -86,6 +94,7 @@ public class RtbSmartBiddingBridge {
             String advertiser,
             double baseStrategyPrice
     ) {
+        totalCalibrations.incrementAndGet();
         double floor = slot != null ? slot.floorPrice() : 0.10;
         double valuation = Math.max(floor, baseStrategyPrice);
 
@@ -93,6 +102,9 @@ public class RtbSmartBiddingBridge {
                 ? request.user().id()
                 : "anon";
         String country = extractCountry(request);
+        int deviceType = extractDeviceType(request);
+        String deviceLabel = resolveDeviceLabel(deviceType);
+        String siteDomain = extractDomain(request);
 
         // 1. CDP 实时画像人群溢价校准
         Set<String> userTraits = Set.of();
@@ -102,8 +114,10 @@ public class RtbSmartBiddingBridge {
                 userTraits = snapOpt.get().dynamicTraits();
                 if (userTraits.contains("whale_purchaser")) {
                     valuation *= 1.25; // 高价值大 R 用户溢价 25%
+                    cdpBoostedBids.incrementAndGet();
                 } else if (userTraits.contains("frequent_clicker")) {
                     valuation *= 1.10;
+                    cdpBoostedBids.incrementAndGet();
                 }
             }
         }
@@ -112,8 +126,8 @@ public class RtbSmartBiddingBridge {
         if (ctrCvrEngine != null) {
             LocalDate today = LocalDate.now(ZoneOffset.UTC);
             TrafficContext ctx = new TrafficContext(
-                    "publisher.app",
-                    extractDeviceType(request),
+                    siteDomain,
+                    deviceType,
                     today,
                     LocalTime.now(ZoneOffset.UTC).getHour(),
                     today.getDayOfWeek(),
@@ -142,16 +156,20 @@ public class RtbSmartBiddingBridge {
 
         // 3. DSP 一价拍卖 Bid Shading 最优出价折算（保障绝不低于媒体底价 floor）
         if (bidShadingEngine != null && valuation > floor) {
-            String segment = (slot != null ? slot.id() : "slot") + ":" + country + ":mobile";
+            String segment = (slot != null ? slot.id() : "slot") + ":" + country + ":" + deviceLabel;
             DynamicBidShadingEngine.ShadingResult shaded = bidShadingEngine.calculateShadedBid(
                     BigDecimal.valueOf(valuation),
                     BigDecimal.valueOf(floor),
                     segment
             );
             if (shaded.shadedBid() != null && shaded.shadedBid().doubleValue() >= floor) {
-                return BigDecimal.valueOf(Math.max(floor, shaded.shadedBid().doubleValue()))
+                double finalPrice = BigDecimal.valueOf(Math.max(floor, shaded.shadedBid().doubleValue()))
                         .setScale(4, RoundingMode.HALF_UP)
                         .doubleValue();
+                if (valuation > finalPrice) {
+                    totalShadedSavings.add(valuation - finalPrice);
+                }
+                return finalPrice;
             }
         }
 
@@ -167,6 +185,31 @@ public class RtbSmartBiddingBridge {
         if (yieldManager != null && slotId != null) {
             yieldManager.recordAuctionOutcome(slotId, cleared, winPrice, Math.max(1, candidateCount));
         }
+    }
+
+    public Map<String, Object> getMetricsSnapshot() {
+        Map<String, Object> metrics = new LinkedHashMap<>();
+        metrics.put("totalCalibrations", totalCalibrations.get());
+        metrics.put("cdpBoostedBids", cdpBoostedBids.get());
+        metrics.put("totalShadedSavingsUsd", BigDecimal.valueOf(totalShadedSavings.sum())
+                .setScale(4, RoundingMode.HALF_UP));
+        return metrics;
+    }
+
+    public static String resolveDeviceLabel(int devicetype) {
+        return switch (devicetype) {
+            case 2 -> "desktop";
+            case 3 -> "ctv";
+            default -> "mobile";
+        };
+    }
+
+    private static String extractDomain(OpenRtb.BidRequest request) {
+        if (request != null && request.site() != null && request.site().domain() != null
+                && !request.site().domain().isBlank()) {
+            return request.site().domain();
+        }
+        return "publisher.app";
     }
 
     private static String extractCountry(OpenRtb.BidRequest request) {

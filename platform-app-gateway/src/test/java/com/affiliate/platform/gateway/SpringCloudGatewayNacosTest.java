@@ -286,4 +286,45 @@ class SpringCloudGatewayNacosTest {
         cbFilter.resetAll();
         assertEquals("CLOSED", cbFilter.getCircuitBreakerSnapshots().get("RTB").get("state"));
     }
+
+    @Test
+    @DisplayName("7. 验证真环形滑动窗口防稀释、慢调用熔断及 Nacos 动态金丝雀权重分流")
+    void testRingBufferSlidingWindowSlowCallAndCanaryWeight() {
+        GatewayAdaptiveCircuitBreakerFilter cbFilter = new GatewayAdaptiveCircuitBreakerFilter();
+        cbFilter.setMinCalls(10);
+        cbFilter.setSlowCallRateThreshold(50.0);
+
+        // 先打入 120 次成功请求（超过默认窗口大小 100），验证滑动窗口不会被历史成功样本无限稀释
+        for (int i = 0; i < 120; i++) {
+            cbFilter.recordManualOutcome("WORKER", true, false);
+        }
+        assertEquals("CLOSED", cbFilter.getCircuitBreakerSnapshots().get("WORKER").get("state"));
+        assertEquals(100, cbFilter.getCircuitBreakerSnapshots().get("WORKER").get("windowSampleCount"));
+
+        // 接着打入 60 次慢调用（占最近 100 次窗口的 60% >= 50%）-> 触发慢调用熔断
+        for (int i = 0; i < 60; i++) {
+            cbFilter.recordManualOutcome("WORKER", true, true);
+        }
+        assertEquals("OPEN", cbFilter.getCircuitBreakerSnapshots().get("WORKER").get("state"));
+
+        // 验证 Nacos 热刷新金丝雀权重 100% 时自动染色
+        cbFilter.onNacosConfigRefresh(new NacosConfigRefreshEvent(
+                this,
+                "platform-app-gateway.yaml",
+                "AFFILIATE_GROUP",
+                Map.of("app.gateway.canary.weight-percent", "100")
+        ));
+        assertEquals(100, cbFilter.getCanaryWeightPercent());
+
+        MockServerWebExchange canaryEx = MockServerWebExchange.from(
+                MockServerHttpRequest.get("/api/v1/campaigns").build()
+        );
+        AtomicReference<String> downstreamCanary = new AtomicReference<>();
+        cbFilter.filter(canaryEx, ex -> {
+            downstreamCanary.set(ex.getRequest().getHeaders().getFirst("X-Canary-Version"));
+            return Mono.empty();
+        }).block();
+        assertEquals("canary-v2", downstreamCanary.get());
+        assertEquals("canary-v2", canaryEx.getResponse().getHeaders().getFirst("X-Canary-Routed"));
+    }
 }

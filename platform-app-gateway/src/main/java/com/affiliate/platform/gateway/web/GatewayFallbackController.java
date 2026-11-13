@@ -126,6 +126,7 @@ public class GatewayFallbackController {
             ));
             if (circuitBreakerFilter != null) {
                 result.put("circuitBreakers", circuitBreakerFilter.getCircuitBreakerSnapshots());
+                result.put("canaryWeightPercent", circuitBreakerFilter.getCanaryWeightPercent());
             }
             result.put("nacosDynamicConfigKeys", configManager.getAllDynamicProperties().keySet());
             return ResponseEntity.ok(result);

@@ -290,7 +290,7 @@
             </span>
           </h4>
           <p class="text-xs text-slate-400 mt-0.5">
-            动态路由数: {{ gatewayRoutesCount }} 条 · 数据面限流: {{ dataplaneLimitQps }} QPS · 控制面限流: {{ controlplaneLimitQps }} QPS
+            动态路由数: {{ gatewayRoutesCount }} 条 · 数据面限流: {{ dataplaneLimitQps }} QPS · 控制面限流: {{ controlplaneLimitQps }} QPS · 金丝雀灰度权重: {{ canaryWeightPercent }}%
           </p>
         </div>
         <button
@@ -322,7 +322,7 @@
             <span class="font-mono">:{{ svc.port }}</span>
           </div>
           <div class="flex items-center justify-between text-[11px] text-slate-500 pt-1 border-t border-slate-200/70">
-            <span>调用: {{ svc.totalCalls }} · 失败率: {{ svc.failureRate }}%</span>
+            <span>调用: {{ svc.totalCalls }} · 失败: {{ svc.failureRate }}% · 慢调: {{ svc.slowCallRate }}%</span>
             <span class="font-mono text-indigo-600">短路: {{ svc.shortCircuited }}</span>
           </div>
         </div>
@@ -375,11 +375,12 @@ const realtimeAlerts = ref<any[]>([])
 const gatewayRoutesCount = ref(4)
 const dataplaneLimitQps = ref(5000)
 const controlplaneLimitQps = ref(200)
+const canaryWeightPercent = ref(0)
 const microservicePlanes = ref([
-  { plane: 'TRACKER', service: 'platform-app-tracker', port: 8081, cbState: 'CLOSED', totalCalls: 0, failureRate: 0.0, shortCircuited: 0 },
-  { plane: 'RTB', service: 'platform-app-rtb', port: 8082, cbState: 'CLOSED', totalCalls: 0, failureRate: 0.0, shortCircuited: 0 },
-  { plane: 'ADMIN', service: 'platform-app-admin', port: 8083, cbState: 'CLOSED', totalCalls: 0, failureRate: 0.0, shortCircuited: 0 },
-  { plane: 'WORKER', service: 'platform-app-worker', port: 8084, cbState: 'CLOSED', totalCalls: 0, failureRate: 0.0, shortCircuited: 0 }
+  { plane: 'TRACKER', service: 'platform-app-tracker', port: 8081, cbState: 'CLOSED', totalCalls: 0, failureRate: 0.0, slowCallRate: 0.0, shortCircuited: 0 },
+  { plane: 'RTB', service: 'platform-app-rtb', port: 8082, cbState: 'CLOSED', totalCalls: 0, failureRate: 0.0, slowCallRate: 0.0, shortCircuited: 0 },
+  { plane: 'ADMIN', service: 'platform-app-admin', port: 8083, cbState: 'CLOSED', totalCalls: 0, failureRate: 0.0, slowCallRate: 0.0, shortCircuited: 0 },
+  { plane: 'WORKER', service: 'platform-app-worker', port: 8084, cbState: 'CLOSED', totalCalls: 0, failureRate: 0.0, slowCallRate: 0.0, shortCircuited: 0 }
 ])
 
 const resetGatewayCircuitBreakers = async () => {
@@ -432,6 +433,9 @@ const fetchMetrics = async () => {
     const gwTopology: any = await fetchApi('/api/v1/gateway/topology').catch(() => null)
     if (gwTopology) {
       gatewayRoutesCount.value = Number(gwTopology.activeRoutesCount || 4)
+      if (gwTopology.canaryWeightPercent !== undefined) {
+        canaryWeightPercent.value = Number(gwTopology.canaryWeightPercent || 0)
+      }
       if (gwTopology.rateLimit) {
         dataplaneLimitQps.value = Number(gwTopology.rateLimit.dataplaneQps || 5000)
         controlplaneLimitQps.value = Number(gwTopology.rateLimit.controlplaneQps || 200)
@@ -445,6 +449,7 @@ const fetchMetrics = async () => {
             cbState: cb.state || 'CLOSED',
             totalCalls: Number(cb.totalCalls || 0),
             failureRate: Number(cb.failureRatePercent || 0),
+            slowCallRate: Number(cb.slowCallRatePercent || 0),
             shortCircuited: Number(cb.shortCircuitedCalls || 0)
           }
         })

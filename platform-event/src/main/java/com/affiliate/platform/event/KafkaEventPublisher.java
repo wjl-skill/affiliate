@@ -29,6 +29,9 @@ public class KafkaEventPublisher implements EventPublisher {
     private final ApplicationEventPublisher applicationEventPublisher;
     private final List<Consumer<DomainEvent<?>>> subscribers = new CopyOnWriteArrayList<>();
 
+    @Autowired(required = false)
+    private KafkaEventStreamBridge streamBridge;
+
     public KafkaEventPublisher(KafkaTemplate<String, Object> template, OutboxStore outbox) {
         this(template, outbox, null);
     }
@@ -52,20 +55,11 @@ public class KafkaEventPublisher implements EventPublisher {
         // 1. 本地发件箱落盘保障最终一致性
         outbox.append(event);
 
-        // 2. 触发本地实时订阅者与 Spring 事件监听
-        for (Consumer<DomainEvent<?>> subscriber : subscribers) {
-            try {
-                subscriber.accept(event);
-            } catch (Exception ex) {
-                log.warn("[KafkaEventBus] Local subscriber error handling event {}: {}", event.eventId(), ex.getMessage());
-            }
+        // 2. 触发本地实时订阅者与 Spring 事件监听，并登记去重缓存防止同进程 Kafka 回环消费
+        if (streamBridge != null && event.eventId() != null) {
+            streamBridge.markLocallyProcessed(event.eventId());
         }
-        if (applicationEventPublisher != null) {
-            try {
-                applicationEventPublisher.publishEvent(event);
-            } catch (Exception ignored) {
-            }
-        }
+        dispatchLocal(event);
 
         // 3. 根据事件类型动态路由至对应 Kafka Topic，以 aggregateId 作为分区键保证顺序性
         String topic = "affiliate." + event.eventType();
@@ -84,6 +78,26 @@ public class KafkaEventPublisher implements EventPublisher {
             log.warn("Synchronous submission to Kafka failed for event {} to topic {}, deferring to OutboxRelayScheduler: {}",
                     event.eventId(), topic, ex.getMessage());
             outbox.recordFailure(event.eventId());
+        }
+    }
+
+    @Override
+    public void dispatchLocal(DomainEvent<?> event) {
+        if (event == null) {
+            return;
+        }
+        for (Consumer<DomainEvent<?>> subscriber : subscribers) {
+            try {
+                subscriber.accept(event);
+            } catch (Exception ex) {
+                log.warn("[KafkaEventBus] Local subscriber error handling event {}: {}", event.eventId(), ex.getMessage());
+            }
+        }
+        if (applicationEventPublisher != null) {
+            try {
+                applicationEventPublisher.publishEvent(event);
+            } catch (Exception ignored) {
+            }
         }
     }
 

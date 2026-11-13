@@ -162,7 +162,13 @@ class Phase4SmartBiddingAndPlaneIsolationTest {
         assertTrue(smartBidPrice >= enrichedSlot.floorPrice(),
                 "Calibrated smart bid price must be >= effective slot floor price");
 
-        // Step 4: 验证拍卖结果回传 SSP 收益管理器
+        // Step 4: 验证拍卖结果回传 SSP 收益管理器及智能竞价可观测指标
         bridge.recordSlotOutcome(enrichedSlot.id(), true, smartBidPrice, 3);
+        Map<String, Object> metrics = bridge.getMetricsSnapshot();
+        assertEquals(1L, metrics.get("totalCalibrations"));
+        assertEquals(1L, metrics.get("cdpBoostedBids"));
+        assertEquals("desktop", RtbSmartBiddingBridge.resolveDeviceLabel(2));
+        assertEquals("ctv", RtbSmartBiddingBridge.resolveDeviceLabel(3));
+        assertEquals("mobile", RtbSmartBiddingBridge.resolveDeviceLabel(1));
     }
 }

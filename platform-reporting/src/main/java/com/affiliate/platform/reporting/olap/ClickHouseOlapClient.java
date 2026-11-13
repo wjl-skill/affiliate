@@ -201,6 +201,43 @@ public class ClickHouseOlapClient {
     }
 
     /**
+     * 通过 ClickHouse HTTP JSONEachRow 协议异步微批写入事实明细表
+     *
+     * @param rows 待写入的规范化事件行列表
+     * @return 是否成功写入远程 ClickHouse
+     */
+    public boolean insertFactEventsBatch(List<Map<String, Object>> rows) {
+        if (!enabled || rows == null || rows.isEmpty() || !isAvailable()) {
+            return false;
+        }
+        try {
+            StringBuilder ndjson = new StringBuilder();
+            for (Map<String, Object> row : rows) {
+                ndjson.append(objectMapper.writeValueAsString(row)).append('\n');
+            }
+            String insertSql = "INSERT INTO " + database + ".affiliate_performance_events FORMAT JSONEachRow";
+            String encodedQuery = java.net.URLEncoder.encode(insertSql, java.nio.charset.StandardCharsets.UTF_8);
+            HttpRequest.Builder reqBuilder = HttpRequest.newBuilder()
+                    .uri(URI.create(clickhouseUrl + "/?query=" + encodedQuery))
+                    .timeout(Duration.ofSeconds(3))
+                    .header("Content-Type", "application/x-ndjson")
+                    .POST(HttpRequest.BodyPublishers.ofString(ndjson.toString()));
+            if (!username.isBlank()) {
+                String auth = Base64.getEncoder().encodeToString((username + ":" + password).getBytes());
+                reqBuilder.header("Authorization", "Basic " + auth);
+            }
+            HttpResponse<String> resp = httpClient.send(reqBuilder.build(), HttpResponse.BodyHandlers.ofString());
+            if (resp.statusCode() == 200) {
+                return true;
+            }
+            log.warn("[ClickHouseOlapClient] Batch insert returned status {}: {}", resp.statusCode(), resp.body());
+        } catch (Exception ex) {
+            log.debug("[ClickHouseOlapClient] Batch insert skipped/failed: {}", ex.getMessage());
+        }
+        return false;
+    }
+
+    /**
      * 解析 ClickHouse JSONEachRow 文本流
      */
     public List<OlapAggregationRow> parseJsonEachRow(String jsonContent) {

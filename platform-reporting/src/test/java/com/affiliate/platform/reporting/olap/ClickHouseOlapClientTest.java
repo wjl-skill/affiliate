@@ -116,5 +116,18 @@ class ClickHouseOlapClientTest {
         ));
 
         assertEquals(3L, subscriber.getTotalIngestedEvents());
+        assertEquals(3, subscriber.getPendingQueueSize());
+
+        int flushed = subscriber.flushBatch();
+        assertEquals(3, flushed);
+        assertEquals(0, subscriber.getPendingQueueSize());
+        assertEquals(1L, subscriber.getTotalFlushedBatches());
+
+        // 验证多维度物化视图均已同步到 ClickHouseOlapClient 降级缓存
+        List<OlapAggregationRow> byOffer = client.executeAggregation("tenant_1", LocalDate.now(), LocalDate.now(), "offerId", 10);
+        assertFalse(byOffer.isEmpty());
+        assertEquals("off_1", byOffer.get(0).dimensionKey());
+        assertEquals(1L, byOffer.get(0).clicks());
+        assertEquals(1L, byOffer.get(0).conversions());
     }
 }
