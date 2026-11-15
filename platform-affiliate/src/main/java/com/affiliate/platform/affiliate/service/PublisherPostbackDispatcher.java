@@ -86,6 +86,7 @@ public class PublisherPostbackDispatcher {
         url = url.replace("{click_id}", urlEncode(conversion.clickId()));
         url = url.replace("{payout}", conversion.payout() != null ? conversion.payout().toPlainString() : "0.00");
         url = url.replace("{txid}", urlEncode(conversion.txId()));
+        url = url.replace("{tx_id}", urlEncode(conversion.txId()));
         url = url.replace("{currency}", "USD");
 
         if (session != null) {

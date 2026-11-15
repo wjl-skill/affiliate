@@ -172,8 +172,177 @@ public class HeaderBiddingOrchestrator {
                 clearingPrice,
                 validOffers.size(),
                 timedOutCount.get(),
-                durationMs
+                durationMs,
+                eligible
         );
+    }
+
+    /**
+     * 携带完整 OpenRTB 流量上下文的并发头部竞价拍卖（支持向买方透传底价、国家、设备、超时预算与 CDP 受众标签）
+     */
+    public HeaderBiddingAuctionResult orchestrateContextualAuction(
+            HeaderBidRequestContext context,
+            List<DemandPartnerAdapter> candidateAdapters,
+            int maxBidders
+    ) {
+        if (context == null) {
+            return HeaderBiddingAuctionResult.noBids("unknown", 0, 0);
+        }
+        String slotId = context.slotId();
+        if (candidateAdapters == null || candidateAdapters.isEmpty()) {
+            return HeaderBiddingAuctionResult.noBids(slotId, 0, 0);
+        }
+
+        Instant start = Instant.now();
+        long now = System.currentTimeMillis();
+        totalAuctionRounds.incrementAndGet();
+
+        List<DemandPartnerAdapter> selectedAdapters = selectTopBidders(candidateAdapters, maxBidders, now);
+        if (selectedAdapters.isEmpty()) {
+            return HeaderBiddingAuctionResult.noBids(slotId, 0, 0);
+        }
+
+        Map<CompletableFuture<BidOffer>, DemandPartnerAdapter> futureToAdapter = new LinkedHashMap<>();
+        for (DemandPartnerAdapter adapter : selectedAdapters) {
+            String partnerId = adapter.partnerId();
+            BidderMetrics metrics = getOrCreateMetrics(partnerId);
+            metrics.requests.incrementAndGet();
+
+            CompletableFuture<BidOffer> future = CompletableFuture.supplyAsync(
+                    () -> adapter.requestBid(context), auctionExecutor
+            );
+            futureToAdapter.put(future, adapter);
+        }
+
+        long timeoutMs = context.timeoutMs() > 0 ? context.timeoutMs() : 100L;
+        CompletableFuture<Void> allOf = CompletableFuture.allOf(
+                futureToAdapter.keySet().toArray(new CompletableFuture[0])
+        );
+        try {
+            allOf.get(timeoutMs, TimeUnit.MILLISECONDS);
+        } catch (Exception e) {
+            log.debug("Contextual header bidding timeout or partial buyer degradation: {}", e.getMessage());
+        }
+
+        List<BidOffer> validOffers = new ArrayList<>();
+        AtomicInteger timedOutCount = new AtomicInteger(0);
+
+        for (Map.Entry<CompletableFuture<BidOffer>, DemandPartnerAdapter> entry : futureToAdapter.entrySet()) {
+            CompletableFuture<BidOffer> f = entry.getKey();
+            DemandPartnerAdapter adapter = entry.getValue();
+            String partnerId = adapter.partnerId();
+            BidderMetrics metrics = getOrCreateMetrics(partnerId);
+
+            if (f.isDone() && !f.isCompletedExceptionally() && !f.isCancelled()) {
+                try {
+                    BidOffer offer = f.getNow(null);
+                    if (offer != null && offer.cpmPrice() != null && offer.cpmPrice().signum() > 0) {
+                        validOffers.add(offer);
+                        metrics.recordSuccess(offer.cpmPrice().doubleValue());
+                    } else {
+                        metrics.recordEmptyResponse();
+                    }
+                } catch (Exception e) {
+                    metrics.recordFailure(now);
+                }
+            } else {
+                timedOutCount.incrementAndGet();
+                metrics.recordTimeout(now);
+                f.cancel(true);
+            }
+        }
+
+        BigDecimal hardFloor = context.hardFloor() != null ? context.hardFloor() : BigDecimal.ZERO;
+        BigDecimal softFloor = context.softFloor() != null ? context.softFloor() : hardFloor;
+
+        List<BidOffer> eligible = validOffers.stream()
+                .filter(o -> o.cpmPrice().compareTo(hardFloor) >= 0)
+                .sorted((a, b) -> b.cpmPrice().compareTo(a.cpmPrice()))
+                .toList();
+
+        long durationMs = Duration.between(start, Instant.now()).toMillis();
+
+        if (eligible.isEmpty()) {
+            return new HeaderBiddingAuctionResult(slotId, false, null, hardFloor, validOffers.size(), timedOutCount.get(), durationMs, List.of());
+        }
+
+        BidOffer winner = eligible.get(0);
+        BigDecimal secondHighest = eligible.size() > 1 ? eligible.get(1).cpmPrice() : hardFloor;
+        BigDecimal clearingPrice;
+        if (winner.cpmPrice().compareTo(softFloor) >= 0) {
+            clearingPrice = winner.cpmPrice();
+        } else {
+            clearingPrice = secondHighest.max(hardFloor).min(winner.cpmPrice());
+        }
+
+        BidderMetrics winnerMetrics = bidderMetricsMap.get(winner.bidderId());
+        if (winnerMetrics != null) {
+            winnerMetrics.wins.incrementAndGet();
+        }
+
+        return new HeaderBiddingAuctionResult(
+                slotId,
+                true,
+                winner,
+                clearingPrice,
+                validOffers.size(),
+                timedOutCount.get(),
+                durationMs,
+                eligible
+        );
+    }
+
+    /**
+     * 端到端 SSP 统一变现流水线：串联 DynamicYieldManager 自适应底价 -> HeaderBidding 并发询价 -> Mediation 4 层仲裁 -> 成交反馈闭环
+     */
+    public MediationService.MediationResult orchestrateUnifiedYieldPipeline(
+            com.affiliate.platform.domain.AdSlot slot,
+            String country,
+            int deviceType,
+            int hourOfDay,
+            Set<String> userSegments,
+            long timeoutMs,
+            int maxBidders,
+            List<DemandPartnerAdapter> candidateAdapters,
+            MediationService.GuaranteedContract guaranteedContract,
+            List<MediationService.PreferredDealBid> pmpDeals,
+            String backfillHtml,
+            DynamicYieldManager yieldManager,
+            MediationService mediationService
+    ) {
+        DynamicYieldManager.FloorPriceResult floorResult = yieldManager != null
+                ? yieldManager.resolveEwmaAdaptiveFloor(slot, country, deviceType, hourOfDay)
+                : new DynamicYieldManager.FloorPriceResult(BigDecimal.valueOf(slot.floorPrice()), BigDecimal.valueOf(slot.floorPrice()));
+
+        HeaderBidRequestContext ctx = new HeaderBidRequestContext(
+                slot.id(),
+                slot,
+                country,
+                deviceType,
+                floorResult.hardFloor(),
+                floorResult.softFloor(),
+                timeoutMs,
+                userSegments != null ? userSegments : Set.of()
+        );
+
+        HeaderBiddingAuctionResult hbResult = orchestrateContextualAuction(ctx, candidateAdapters, maxBidders);
+
+        List<MediationService.BidCandidate> hbCandidates = hbResult.eligibleOffers().stream()
+                .map(o -> new MediationService.BidCandidate(o.bidderId(), o.cpmPrice(), o.adMarkup()))
+                .toList();
+
+        MediationService effectiveMediation = mediationService != null ? mediationService : new MediationService();
+        MediationService.MediationResult result = effectiveMediation.arbitrateUnifiedAuction(
+                guaranteedContract, pmpDeals, hbCandidates, floorResult, backfillHtml
+        );
+
+        if (yieldManager != null) {
+            boolean cleared = !result.isBackfill();
+            double winPrice = result.winningPrice() != null ? result.winningPrice().doubleValue() : 0.0;
+            yieldManager.recordAuctionOutcome(slot.id(), cleared, winPrice, hbResult.respondedBidders());
+        }
+
+        return result;
     }
 
     /**
@@ -309,9 +478,24 @@ public class HeaderBiddingOrchestrator {
         }
     }
 
+    public record HeaderBidRequestContext(
+            String slotId,
+            com.affiliate.platform.domain.AdSlot slot,
+            String country,
+            int deviceType,
+            BigDecimal hardFloor,
+            BigDecimal softFloor,
+            long timeoutMs,
+            Set<String> userSegments
+    ) {}
+
     public interface DemandPartnerAdapter {
         String partnerId();
         BidOffer requestBid(String slotId);
+
+        default BidOffer requestBid(HeaderBidRequestContext context) {
+            return requestBid(context != null ? context.slotId() : null);
+        }
     }
 
     public record BidOffer(
@@ -329,10 +513,24 @@ public class HeaderBiddingOrchestrator {
             BigDecimal clearingPrice,
             int respondedBidders,
             int timedOutBidders,
-            long executionTimeMs
+            long executionTimeMs,
+            List<BidOffer> eligibleOffers
     ) {
+        public HeaderBiddingAuctionResult(
+                String slotId,
+                boolean hasWinner,
+                BidOffer winningBid,
+                BigDecimal clearingPrice,
+                int respondedBidders,
+                int timedOutBidders,
+                long executionTimeMs
+        ) {
+            this(slotId, hasWinner, winningBid, clearingPrice, respondedBidders, timedOutBidders, executionTimeMs,
+                    winningBid != null ? List.of(winningBid) : List.of());
+        }
+
         public static HeaderBiddingAuctionResult noBids(String slotId, int responded, int timedOut) {
-            return new HeaderBiddingAuctionResult(slotId, false, null, BigDecimal.ZERO, responded, timedOut, 0);
+            return new HeaderBiddingAuctionResult(slotId, false, null, BigDecimal.ZERO, responded, timedOut, 0, List.of());
         }
     }
 }

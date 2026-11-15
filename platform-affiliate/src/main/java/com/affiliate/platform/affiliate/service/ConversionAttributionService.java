@@ -182,11 +182,12 @@ public class ConversionAttributionService {
                     .map(this::toTouchPoint)
                     .collect(Collectors.toList());
 
-            // 根据模型分配归因权重
+            // 根据模型分配归因权重（透传确定性 conversionTime 保障历史重放幂等）
             List<AttributionCredit> credits = calculateAttributionCredits(
                     touchPoints,
                     conversionValue,
-                    model != null ? model : DEFAULT_MODEL
+                    model != null ? model : DEFAULT_MODEL,
+                    conversionTime
             );
 
             // 保存归因结果
@@ -325,13 +326,23 @@ public class ConversionAttributionService {
             BigDecimal conversionValue,
             AttributionModel model
     ) {
+        return calculateAttributionCredits(touchPoints, conversionValue, model, Instant.now());
+    }
+
+    public List<AttributionCredit> calculateAttributionCredits(
+            List<TouchPoint> touchPoints,
+            BigDecimal conversionValue,
+            AttributionModel model,
+            Instant conversionTime
+    ) {
+        Instant effectiveTime = conversionTime != null ? conversionTime : Instant.now();
         return switch (model) {
             case FIRST_CLICK -> firstClickAttribution(touchPoints, conversionValue);
             case LAST_CLICK -> lastClickAttribution(touchPoints, conversionValue);
             case LINEAR -> linearAttribution(touchPoints, conversionValue);
-            case TIME_DECAY -> timeDecayAttribution(touchPoints, conversionValue);
+            case TIME_DECAY -> timeDecayAttribution(touchPoints, conversionValue, effectiveTime);
             case POSITION_BASED -> positionBasedAttribution(touchPoints, conversionValue);
-            case DATA_DRIVEN -> dataDrivenAttribution(touchPoints, conversionValue);
+            case DATA_DRIVEN -> dataDrivenAttribution(touchPoints, conversionValue, effectiveTime);
             case DIRECT -> List.of(); // 直接转化无触点
         };
     }
@@ -347,6 +358,14 @@ public class ConversionAttributionService {
      * 5. 最终权重精确归一化与金额分位无损平账。
      */
     public List<AttributionCredit> dataDrivenAttribution(List<TouchPoint> touchPoints, BigDecimal value) {
+        return dataDrivenAttribution(touchPoints, value, Instant.now());
+    }
+
+    public List<AttributionCredit> dataDrivenAttribution(
+            List<TouchPoint> touchPoints,
+            BigDecimal value,
+            Instant conversionTime
+    ) {
         if (touchPoints == null || touchPoints.isEmpty()) {
             return List.of();
         }
@@ -354,7 +373,7 @@ public class ConversionAttributionService {
             return lastClickAttribution(touchPoints, value);
         }
 
-        Instant conversionTime = Instant.now();
+        Instant effectiveConvTime = conversionTime != null ? conversionTime : Instant.now();
         double lambda = Math.log(2) / 7.0; // 7天半衰期衰减系数
 
         // 统计各 affiliate 累计触点频次用于边际递减计算
@@ -375,7 +394,7 @@ public class ConversionAttributionService {
             };
 
             // 2. 连续平滑时间衰减 (以天为连续浮点单位)
-            double daysAgo = Math.max(0.0, Duration.between(tp.timestamp(), conversionTime).toMillis() / (1000.0 * 86400.0));
+            double daysAgo = Math.max(0.0, Duration.between(tp.timestamp(), effectiveConvTime).toMillis() / (1000.0 * 86400.0));
             double recencyWeight = Math.exp(-lambda * daysAgo);
 
             // 3. 边际递减效应
@@ -496,14 +515,22 @@ public class ConversionAttributionService {
     }
 
     private List<AttributionCredit> timeDecayAttribution(List<TouchPoint> touchPoints, BigDecimal value) {
-        Instant conversionTime = Instant.now();
+        return timeDecayAttribution(touchPoints, value, Instant.now());
+    }
+
+    public List<AttributionCredit> timeDecayAttribution(
+            List<TouchPoint> touchPoints,
+            BigDecimal value,
+            Instant conversionTime
+    ) {
+        Instant effectiveConvTime = conversionTime != null ? conversionTime : Instant.now();
         double lambda = 0.1;
 
         List<WeightedTouchPoint> weightedPoints = new ArrayList<>();
         double totalWeight = 0.0;
 
         for (TouchPoint tp : touchPoints) {
-            double daysAgo = Math.max(0.0, Duration.between(tp.timestamp(), conversionTime).toMillis() / (1000.0 * 86400.0));
+            double daysAgo = Math.max(0.0, Duration.between(tp.timestamp(), effectiveConvTime).toMillis() / (1000.0 * 86400.0));
             double weight = Math.exp(-lambda * daysAgo);
             weightedPoints.add(new WeightedTouchPoint(tp, weight));
             totalWeight += weight;

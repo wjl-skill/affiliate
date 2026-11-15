@@ -90,12 +90,12 @@ public class S2sPostbackController {
                     "message", "广告主身份鉴权失败：缺少有效 API Key 或签名已过期/不匹配"
             ));
         }
-        return process(clickId, txId, saleAmount);
+        return process(clickId, txId, saleAmount, request);
     }
 
     @PostMapping("/affiliate/postback")
     public ResponseEntity<Map<String, Object>> handlePostPostback(
-            @RequestParam(name = "click_id") String clickId,
+            @RequestParam(name = "click_id", required = false) String clickId,
             @RequestParam(name = "txid") String txId,
             @RequestParam(name = "sale_amount", required = false, defaultValue = "0.00") BigDecimal saleAmount,
             HttpServletRequest request
@@ -117,7 +117,7 @@ public class S2sPostbackController {
                     "message", "广告主身份鉴权失败：缺少有效 API Key 或签名已过期/不匹配"
             ));
         }
-        return process(clickId, txId, saleAmount);
+        return process(clickId, txId, saleAmount, request);
     }
 
     private String resolveClientIp(HttpServletRequest request) {
@@ -222,11 +222,31 @@ public class S2sPostbackController {
         }
     }
 
-    private ResponseEntity<Map<String, Object>> process(String clickId, String txId, BigDecimal saleAmount) {
-        Conversion conversion = postbackService.processPostback(clickId, txId, saleAmount, Instant.now());
+    private ResponseEntity<Map<String, Object>> process(String clickId, String txId, BigDecimal saleAmount, HttpServletRequest request) {
+        String goalId = request != null ? request.getParameter("goal_id") : null;
+        String offerId = request != null ? request.getParameter("offer_id") : null;
+        String convIp = request != null ? request.getParameter("ip") : null;
+        String convUa = request != null ? request.getParameter("ua") : null;
+        String devStr = request != null ? request.getParameter("device_type") : null;
 
-        // 仅当转化状态为 APPROVED 时累加 Sub-ID 真实转化与佣金报表，并使用真实会话 sub1
-        if (conversion.status() == Conversion.Status.APPROVED) {
+        Conversion conversion;
+        if (goalId != null || offerId != null || convIp != null || convUa != null || devStr != null) {
+            int devType = 0;
+            if (devStr != null && !devStr.isBlank()) {
+                try {
+                    devType = Integer.parseInt(devStr.trim());
+                } catch (NumberFormatException ignored) {
+                }
+            }
+            conversion = postbackService.processPostback(
+                    clickId, txId, saleAmount, goalId, offerId, convIp, convUa, devType, Instant.now()
+            );
+        } else {
+            conversion = postbackService.processPostback(clickId, txId, saleAmount, Instant.now());
+        }
+
+        // 当转化状态为 APPROVED 或通过初审的 PENDING 时累加 Sub-ID 实时转化与佣金报表（对齐 ClickHouse 物化视图与消费者语义）
+        if (conversion.status() == Conversion.Status.APPROVED || conversion.status() == Conversion.Status.PENDING) {
             String effectiveSub1 = (conversion.sub1() != null && !conversion.sub1().isBlank())
                     ? conversion.sub1()
                     : "sub1";

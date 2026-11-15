@@ -23,8 +23,15 @@ public class DeepCtrCvrInferenceEngine {
 
     // 隐向量维度
     public static final int EMBEDDING_DIM = 8;
-    // 哈希分桶大小
-    public static final int HASH_BUCKET_SIZE = 1024;
+    // 哈希分桶大小（升级为 65,536 桶并按特征域 Namespace 物理隔离，彻底消除跨域哈希碰撞）
+    public static final int HASH_BUCKET_SIZE = 65536;
+    private static final int FIELD_NAMESPACE_COUNT = 8;
+    private static final int BUCKETS_PER_FIELD = HASH_BUCKET_SIZE / FIELD_NAMESPACE_COUNT;
+
+    // 分段细粒度锁（64 分片），消除在线 SGD 更新时的全局互斥锁竞争
+    private static final int LOCK_STRIPES = 64;
+    private final java.util.concurrent.locks.ReentrantLock[] stripedLocks =
+            new java.util.concurrent.locks.ReentrantLock[LOCK_STRIPES];
 
     // 先验基线偏置 (CTR 先验约为 2.5% ~ 3.0%, CVR 先验约为 1.2% ~ 2.0%)
     private static final double DEFAULT_CTR_BIAS = -3.50;
@@ -44,6 +51,9 @@ public class DeepCtrCvrInferenceEngine {
     private final AtomicLong onlineUpdateCount = new AtomicLong(0);
 
     public DeepCtrCvrInferenceEngine() {
+        for (int i = 0; i < LOCK_STRIPES; i++) {
+            stripedLocks[i] = new java.util.concurrent.locks.ReentrantLock();
+        }
         initDefaultWeights();
     }
 
@@ -70,7 +80,7 @@ public class DeepCtrCvrInferenceEngine {
      * @return 预估结果结构体
      */
     public PredictionResult predict(TrafficContext context, Campaign campaign, BigDecimal floorPrice) {
-        int[] featureIndices = extractFeatureIndices(context, campaign, floorPrice);
+        int[] featureIndices = extractExtendedFeatureIndices(context, campaign, floorPrice);
 
         double pCtr = computeFmProbability(0, featureIndices, DEFAULT_CTR_BIAS);
         double pCvr = computeFmProbability(1, featureIndices, DEFAULT_CVR_BIAS);
@@ -103,9 +113,9 @@ public class DeepCtrCvrInferenceEngine {
     }
 
     /**
-     * 支持自定义学习率的在线 SGD 模型权重更新
+     * 支持自定义学习率的分片细粒度锁在线 SGD 模型权重更新（消除全局 synchronized 瓶颈）
      */
-    public synchronized void updateModel(
+    public void updateModel(
             TrafficContext context,
             Campaign campaign,
             BigDecimal floorPrice,
@@ -114,17 +124,23 @@ public class DeepCtrCvrInferenceEngine {
             double learningRate
     ) {
         double effectiveLr = (learningRate > 0.0 && learningRate <= 1.0) ? learningRate : DEFAULT_LEARNING_RATE;
-        int[] featureIndices = extractFeatureIndices(context, campaign, floorPrice);
+        int[] featureIndices = extractExtendedFeatureIndices(context, campaign, floorPrice);
+        int stripe = Math.floorMod(java.util.Arrays.hashCode(featureIndices), LOCK_STRIPES);
+        java.util.concurrent.locks.ReentrantLock lock = stripedLocks[stripe];
+        lock.lock();
+        try {
+            // 1. 更新 CTR 任务权重（曝光样本均参与 CTR 更新）
+            updateTaskWeights(0, featureIndices, DEFAULT_CTR_BIAS, clicked ? 1.0 : 0.0, effectiveLr, DEFAULT_L2_REG);
 
-        // 1. 更新 CTR 任务权重（曝光样本均参与 CTR 更新）
-        updateTaskWeights(0, featureIndices, DEFAULT_CTR_BIAS, clicked ? 1.0 : 0.0, effectiveLr, DEFAULT_L2_REG);
+            // 2. 更新 CVR 任务权重（仅在产生点击或明确产生转化时更新 CVR，避免未点击曝光稀释 CVR 正负样本比）
+            if (clicked || converted) {
+                updateTaskWeights(1, featureIndices, DEFAULT_CVR_BIAS, converted ? 1.0 : 0.0, effectiveLr, DEFAULT_L2_REG);
+            }
 
-        // 2. 更新 CVR 任务权重（仅在产生点击或明确产生转化时更新 CVR，避免未点击曝光稀释 CVR 正负样本比）
-        if (clicked || converted) {
-            updateTaskWeights(1, featureIndices, DEFAULT_CVR_BIAS, converted ? 1.0 : 0.0, effectiveLr, DEFAULT_L2_REG);
+            onlineUpdateCount.incrementAndGet();
+        } finally {
+            lock.unlock();
         }
-
-        onlineUpdateCount.incrementAndGet();
     }
 
     private void updateTaskWeights(
@@ -216,32 +232,111 @@ public class DeepCtrCvrInferenceEngine {
     }
 
     /**
-     * 将上下文与广告活动特征映射为 Hash 分桶索引
+     * 将上下文与广告活动特征映射为按特征域 (Field Namespace) 隔离的 Hash 分桶索引（6 维基础特征，100% 向后兼容）
      */
     public int[] extractFeatureIndices(TrafficContext context, Campaign campaign, BigDecimal floorPrice) {
         int[] indices = new int[6];
 
         String domain = context != null ? context.domain() : "unknown";
-        indices[0] = Math.abs(domain.hashCode()) % HASH_BUCKET_SIZE;
+        indices[0] = fieldBucketIndex(0, domain);
 
         int device = context != null ? context.deviceType() : 1;
-        indices[1] = Math.abs(("device:" + device).hashCode()) % HASH_BUCKET_SIZE;
+        indices[1] = fieldBucketIndex(1, "device:" + device);
 
         String country = context != null ? context.country() : "US";
-        indices[2] = Math.abs(("geo:" + country).hashCode()) % HASH_BUCKET_SIZE;
+        indices[2] = fieldBucketIndex(2, "geo:" + country);
 
         int hour = context != null ? context.hourOfDay() : 12;
-        indices[3] = Math.abs(("hour:" + hour).hashCode()) % HASH_BUCKET_SIZE;
+        indices[3] = fieldBucketIndex(3, "hour:" + hour);
 
         String advId = (campaign != null && campaign.advertiserId() != null) ? campaign.advertiserId() : "global";
-        indices[4] = Math.abs(("adv:" + advId).hashCode()) % HASH_BUCKET_SIZE;
+        indices[4] = fieldBucketIndex(4, "adv:" + advId);
 
         double floor = floorPrice != null ? floorPrice.doubleValue() : 1.0;
         int floorTier = (int) Math.min(Math.max(0, floor / 0.5), 20);
-        indices[5] = Math.abs(("floor_tier:" + floorTier).hashCode()) % HASH_BUCKET_SIZE;
+        indices[5] = fieldBucketIndex(5, "floor_tier:" + floorTier);
 
         return indices;
     }
+
+    /**
+     * 扩展 8 维特征索引提取：在 6 维基础特征上增加「媒体域名 × 广告主」显式交叉特征与「CDP 受众分群组合」特征，
+     * 且每个特征域严格落入各自专属的 8,192 桶子空间，0 跨特征域碰撞。
+     */
+    public int[] extractExtendedFeatureIndices(TrafficContext context, Campaign campaign, BigDecimal floorPrice) {
+        int[] base = extractFeatureIndices(context, campaign, floorPrice);
+        int[] extended = new int[8];
+        System.arraycopy(base, 0, extended, 0, 6);
+
+        String domain = context != null ? context.domain() : "unknown";
+        String advId = (campaign != null && campaign.advertiserId() != null) ? campaign.advertiserId() : "global";
+        extended[6] = fieldBucketIndex(6, "cross_dom_adv:" + domain + "x" + advId);
+
+        String segmentsKey = (context != null && context.userSegments() != null && !context.userSegments().isEmpty())
+                ? String.join(",", new java.util.TreeSet<>(context.userSegments()))
+                : "seg:none";
+        extended[7] = fieldBucketIndex(7, segmentsKey);
+
+        return extended;
+    }
+
+    private static int fieldBucketIndex(int fieldId, String rawFeature) {
+        int offset = (fieldId % FIELD_NAMESPACE_COUNT) * BUCKETS_PER_FIELD;
+        int localBucket = Math.floorMod(rawFeature != null ? rawFeature.hashCode() : 0, BUCKETS_PER_FIELD);
+        return offset + localBucket;
+    }
+
+    /**
+     * 导出当前在线学习的 FM 模型权重快照（用于持久化 Checkpointing 与跨节点热恢复）
+     */
+    public ModelSnapshot exportSnapshot() {
+        double[][] copiedLinear = new double[2][HASH_BUCKET_SIZE];
+        double[][][] copiedLatent = new double[2][HASH_BUCKET_SIZE][EMBEDDING_DIM];
+        for (int t = 0; t < 2; t++) {
+            System.arraycopy(linearWeights[t], 0, copiedLinear[t], 0, HASH_BUCKET_SIZE);
+            for (int i = 0; i < HASH_BUCKET_SIZE; i++) {
+                System.arraycopy(latentEmbeddings[t][i], 0, copiedLatent[t][i], 0, EMBEDDING_DIM);
+            }
+        }
+        return new ModelSnapshot(copiedLinear, copiedLatent, onlineUpdateCount.get(), System.currentTimeMillis());
+    }
+
+    /**
+     * 导入并热恢复 FM 模型权重快照
+     */
+    public void importSnapshot(ModelSnapshot snapshot) {
+        if (snapshot == null || snapshot.linearWeights() == null || snapshot.latentEmbeddings() == null) {
+            return;
+        }
+        for (java.util.concurrent.locks.ReentrantLock lock : stripedLocks) {
+            lock.lock();
+        }
+        try {
+            for (int t = 0; t < Math.min(2, snapshot.linearWeights().length); t++) {
+                int len = Math.min(HASH_BUCKET_SIZE, snapshot.linearWeights()[t].length);
+                System.arraycopy(snapshot.linearWeights()[t], 0, linearWeights[t], 0, len);
+            }
+            for (int t = 0; t < Math.min(2, snapshot.latentEmbeddings().length); t++) {
+                int len = Math.min(HASH_BUCKET_SIZE, snapshot.latentEmbeddings()[t].length);
+                for (int i = 0; i < len; i++) {
+                    int dim = Math.min(EMBEDDING_DIM, snapshot.latentEmbeddings()[t][i].length);
+                    System.arraycopy(snapshot.latentEmbeddings()[t][i], 0, latentEmbeddings[t][i], 0, dim);
+                }
+            }
+            onlineUpdateCount.set(Math.max(0L, snapshot.updateCount()));
+        } finally {
+            for (int i = stripedLocks.length - 1; i >= 0; i--) {
+                stripedLocks[i].unlock();
+            }
+        }
+    }
+
+    public record ModelSnapshot(
+            double[][] linearWeights,
+            double[][][] latentEmbeddings,
+            long updateCount,
+            long exportedAtMillis
+    ) {}
 
     public record PredictionResult(
             double pCtr,

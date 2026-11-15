@@ -252,9 +252,17 @@ public class OpenRtbAuctionService {
 
             // 阶段 4：执行竞价策略评分与底价加价计算（联动 CDP 画像与 DSP 深度 FM + Bid Shading）
             strategy.choose(request, impression, effectiveSlot, candidates).ifPresent(decision -> {
-                String campaignId = "campaign_" + decision.advertiser();
+                com.affiliate.platform.dsp.Campaign recalledCampaign = smartBiddingBridge != null
+                        ? smartBiddingBridge.recallBestCampaign(request).orElse(null)
+                        : null;
+                String effectiveAdvertiser = (recalledCampaign != null && recalledCampaign.advertiserId() != null && !recalledCampaign.advertiserId().isBlank())
+                        ? recalledCampaign.advertiserId()
+                        : decision.advertiser();
+                String campaignId = (recalledCampaign != null && recalledCampaign.id() != null && !recalledCampaign.id().isBlank())
+                        ? recalledCampaign.id()
+                        : "campaign_" + effectiveAdvertiser;
                 double finalBidPrice = smartBiddingBridge != null
-                        ? smartBiddingBridge.calibrateSmartBidPrice(request, effectiveSlot, decision.advertiser(), decision.price())
+                        ? smartBiddingBridge.calibrateSmartBidPrice(request, effectiveSlot, effectiveAdvertiser, decision.price())
                         : decision.price();
 
                 // 阶段 5：滑动窗口频控校验（例如限制单用户 1 小时最多 10 次曝光）
@@ -274,10 +282,12 @@ public class OpenRtbAuctionService {
                     return; // 预算不足，放弃出价
                 }
 
-                // 阶段 7：生成加密防篡改的胜出通知 URL (Win Notice)
+                // 阶段 7：生成加密防篡改的胜出通知 URL (Win Notice) 与落败通知 URL (Loss Notice)
                 String auctionId = auctions.nextId("auction");
                 String winToken = hmacService.generateToken(auctionId, reservation.id(), tenant, campaignId, finalBidPrice, "WIN");
+                String lossToken = hmacService.generateToken(auctionId, reservation.id(), tenant, campaignId, finalBidPrice, "LOSS");
                 String nurl = "/rtb/win?token=" + winToken;
+                String lurl = "/rtb/loss?token=" + lossToken;
 
                 // 阶段 8：组装胜出出价对象
                 String bidId = UUID.randomUUID().toString();
@@ -288,7 +298,9 @@ public class OpenRtbAuctionService {
                         decision.creative().assetUrl(),
                         "example-advertiser.com",
                         nurl,
-                        decision.creative().id()
+                        decision.creative().id(),
+                        null,
+                        lurl
                 ));
 
                 if (smartBiddingBridge != null) {
@@ -303,7 +315,7 @@ public class OpenRtbAuctionService {
                         decision.creative().id(),
                         finalBidPrice,
                         "USD",
-                        decision.advertiser(),
+                        effectiveAdvertiser,
                         Instant.now()
                 );
                 if (disruptorLedger != null) {

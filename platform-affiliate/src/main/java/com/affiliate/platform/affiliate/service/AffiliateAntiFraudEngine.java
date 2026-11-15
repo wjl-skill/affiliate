@@ -50,11 +50,23 @@ public class AffiliateAntiFraudEngine {
     private volatile long maxCtitSeconds = DEFAULT_MAX_CTIT_SECONDS;
     private volatile boolean enableDatacenterCheck = true;
     private volatile boolean enableBotUaCheck = true;
+    private volatile boolean autoApproveLowRisk = false;
 
     // 常见数据中心与自动化测试 IP 常见前缀特征库 (Datacenter CIDRs)
     private static final Set<String> DATACENTER_IP_PREFIXES = Set.of(
             "3.0.", "3.1.", "34.", "35.", "52.", "54.", "104.", "143.244.", "159.65.", "165.227.", "198.199."
     );
+
+    // 支持标准 IPv4/IPv6 CIDR 掩码网段特征库（如 AWS/GCP/Cloudflare/DO 机房网段）
+    private final Set<String> datacenterCidrs = ConcurrentHashMap.newKeySet();
+    {
+        datacenterCidrs.addAll(Set.of(
+                "18.128.0.0/9",
+                "13.32.0.0/15",
+                "157.230.0.0/16",
+                "2600:1f18::/32"
+        ));
+    }
 
     // 爬虫与自动化测试 User-Agent 特征特征词
     private static final List<String> BOT_UA_KEYWORDS = List.of(
@@ -133,6 +145,14 @@ public class AffiliateAntiFraudEngine {
 
     public AntiFraudRuleConfig getRuleConfig() {
         return new AntiFraudRuleConfig(minCtitSeconds, maxCtitSeconds, enableDatacenterCheck, enableBotUaCheck);
+    }
+
+    public boolean isAutoApproveLowRisk() {
+        return autoApproveLowRisk;
+    }
+
+    public void setAutoApproveLowRisk(boolean autoApproveLowRisk) {
+        this.autoApproveLowRisk = autoApproveLowRisk;
     }
 
     /**
@@ -392,10 +412,10 @@ public class AffiliateAntiFraudEngine {
             passed = false;
             blockedInspections.incrementAndGet();
         } else if (riskScore >= 35) {
-            recommendedStatus = Conversion.Status.PENDING; // 需人工审核
+            recommendedStatus = Conversion.Status.PENDING; // 中风险：强制拦截进入人工审核队列
             passed = true;
         } else {
-            recommendedStatus = Conversion.Status.PENDING; // 正常排期审核
+            recommendedStatus = autoApproveLowRisk ? Conversion.Status.APPROVED : Conversion.Status.PENDING;
             passed = true;
         }
 
@@ -416,11 +436,59 @@ public class AffiliateAntiFraudEngine {
     }
 
     public boolean isDatacenterIp(String ip) {
-        if (ip == null) return false;
+        if (ip == null || ip.isBlank()) return false;
+        String cleanIp = ip.trim();
         for (String prefix : DATACENTER_IP_PREFIXES) {
-            if (ip.startsWith(prefix)) return true;
+            if (cleanIp.startsWith(prefix)) return true;
+        }
+        for (String cidr : datacenterCidrs) {
+            if (ipInCidr(cleanIp, cidr)) return true;
         }
         return false;
+    }
+
+    public void addDatacenterCidr(String cidr) {
+        if (cidr != null && cidr.contains("/")) {
+            datacenterCidrs.add(cidr.trim());
+        }
+    }
+
+    /**
+     * 标准 IPv4 / IPv6 CIDR 子网掩码位匹配器（基于 InetAddress 字节流高位掩码比对）
+     */
+    public static boolean ipInCidr(String ip, String cidr) {
+        if (ip == null || cidr == null || !cidr.contains("/")) {
+            return false;
+        }
+        try {
+            String[] parts = cidr.trim().split("/", 2);
+            int prefixLen = Integer.parseInt(parts[1]);
+            byte[] ipBytes = java.net.InetAddress.getByName(ip.trim()).getAddress();
+            byte[] netBytes = java.net.InetAddress.getByName(parts[0].trim()).getAddress();
+            if (ipBytes.length != netBytes.length) {
+                return false;
+            }
+            int maxBits = ipBytes.length * 8;
+            if (prefixLen < 0 || prefixLen > maxBits) {
+                return false;
+            }
+            int fullBytes = prefixLen / 8;
+            int remainderBits = prefixLen % 8;
+            for (int i = 0; i < fullBytes; i++) {
+                if (ipBytes[i] != netBytes[i]) {
+                    return false;
+                }
+            }
+            if (remainderBits > 0) {
+                int mask = (0xFF << (8 - remainderBits)) & 0xFF;
+                if ((ipBytes[fullBytes] & mask) != (netBytes[fullBytes] & mask)) {
+                    return false;
+                }
+            }
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
     }
 
     public boolean isBotUserAgent(String ua) {

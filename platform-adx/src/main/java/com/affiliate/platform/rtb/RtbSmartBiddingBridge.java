@@ -37,9 +37,16 @@ public class RtbSmartBiddingBridge {
     private final RealtimeEventTraitEngine traitEngine;
     private final DeepCtrCvrInferenceEngine ctrCvrEngine;
     private final DynamicBidShadingEngine bidShadingEngine;
+    @Autowired(required = false)
+    private CampaignService campaignService;
+    @Autowired(required = false)
+    private CampaignInvertedIndex campaignInvertedIndex;
+    @Autowired(required = false)
+    private BidModifierEngine bidModifierEngine;
 
     private final AtomicLong totalCalibrations = new AtomicLong(0);
     private final AtomicLong cdpBoostedBids = new AtomicLong(0);
+    private final AtomicLong dspIndexRecalledBids = new AtomicLong(0);
     private final DoubleAdder totalShadedSavings = new DoubleAdder();
 
     @Autowired
@@ -53,6 +60,88 @@ public class RtbSmartBiddingBridge {
         this.traitEngine = traitEngine;
         this.ctrCvrEngine = ctrCvrEngine;
         this.bidShadingEngine = bidShadingEngine;
+    }
+
+    public void setCampaignService(CampaignService campaignService) {
+        this.campaignService = campaignService;
+    }
+
+    public void setCampaignInvertedIndex(CampaignInvertedIndex campaignInvertedIndex) {
+        this.campaignInvertedIndex = campaignInvertedIndex;
+    }
+
+    public void setBidModifierEngine(BidModifierEngine bidModifierEngine) {
+        this.bidModifierEngine = bidModifierEngine;
+    }
+
+    /**
+     * 解析廣告位的完整软硬双底价决策结果
+     */
+    public DynamicYieldManager.FloorPriceResult resolveAdaptiveFloorResult(AdSlot slot, OpenRtb.BidRequest request) {
+        if (slot == null) {
+            return new DynamicYieldManager.FloorPriceResult(BigDecimal.ZERO, BigDecimal.ZERO);
+        }
+        if (yieldManager == null) {
+            BigDecimal base = BigDecimal.valueOf(slot.floorPrice());
+            return new DynamicYieldManager.FloorPriceResult(base, base);
+        }
+        String country = extractCountry(request);
+        int deviceType = extractDeviceType(request);
+        int hour = LocalTime.now(ZoneOffset.UTC).getHour();
+        return yieldManager.resolveAdaptiveFloor(slot, country, deviceType, hour);
+    }
+
+    /**
+     * 基于无锁多维倒排索引 (CampaignInvertedIndex) 与广告组定向规则 (AdGroup) 召回最优候选活动
+     */
+    public Optional<Campaign> recallBestCampaign(OpenRtb.BidRequest request) {
+        TrafficContext ctx = buildTrafficContext(request);
+        if (campaignService != null) {
+            var adGroupMatches = campaignService.matchAdGroups(ctx);
+            if (!adGroupMatches.isEmpty()) {
+                dspIndexRecalledBids.incrementAndGet();
+                return Optional.of(adGroupMatches.get(0).campaign());
+            }
+            var campMatches = campaignService.match(ctx);
+            if (!campMatches.isEmpty()) {
+                dspIndexRecalledBids.incrementAndGet();
+                return Optional.of(campMatches.get(0));
+            }
+        }
+        if (campaignInvertedIndex != null) {
+            var campMatches = campaignInvertedIndex.match(ctx);
+            if (!campMatches.isEmpty()) {
+                dspIndexRecalledBids.incrementAndGet();
+                return Optional.of(campMatches.get(0));
+            }
+        }
+        return Optional.empty();
+    }
+
+    public TrafficContext buildTrafficContext(OpenRtb.BidRequest request) {
+        String userId = (request != null && request.user() != null && request.user().id() != null)
+                ? request.user().id()
+                : "anon";
+        String country = extractCountry(request);
+        int deviceType = extractDeviceType(request);
+        String siteDomain = extractDomain(request);
+        java.util.Set<String> mergedSegments = new java.util.HashSet<>();
+        if (request != null && request.user() != null && request.user().segments() != null) {
+            mergedSegments.addAll(request.user().segments());
+        }
+        if (traitEngine != null && !"anon".equals(userId)) {
+            traitEngine.getSnapshot(userId).ifPresent(snap -> mergedSegments.addAll(snap.dynamicTraits()));
+        }
+        LocalDate today = LocalDate.now(ZoneOffset.UTC);
+        return new TrafficContext(
+                siteDomain,
+                deviceType,
+                today,
+                LocalTime.now(ZoneOffset.UTC).getHour(),
+                today.getDayOfWeek(),
+                country,
+                mergedSegments
+        );
     }
 
     /**
@@ -122,7 +211,8 @@ public class RtbSmartBiddingBridge {
             }
         }
 
-        // 2. DSP 深度 FM 因子分解机 pCTR * pCVR 估值融合
+        // 2. DSP 深度 FM 因子分解机 pCTR * pCVR 估值融合（优先召回真实 Campaign 与 AdGroup）
+        Campaign matchedCampaign = recallBestCampaign(request).orElse(null);
         if (ctrCvrEngine != null) {
             LocalDate today = LocalDate.now(ZoneOffset.UTC);
             TrafficContext ctx = new TrafficContext(
@@ -134,7 +224,7 @@ public class RtbSmartBiddingBridge {
                     country,
                     userTraits
             );
-            Campaign synthCampaign = new Campaign(
+            Campaign targetCampaign = matchedCampaign != null ? matchedCampaign : new Campaign(
                     "campaign_" + advertiser,
                     advertiser != null && !advertiser.isBlank() ? advertiser : "adv_default",
                     advertiser != null && !advertiser.isBlank() ? advertiser : "adv_default",
@@ -148,10 +238,26 @@ public class RtbSmartBiddingBridge {
                     Instant.now()
             );
             DeepCtrCvrInferenceEngine.PredictionResult pred =
-                    ctrCvrEngine.predict(ctx, synthCampaign, BigDecimal.valueOf(floor));
+                    ctrCvrEngine.predict(ctx, targetCampaign, BigDecimal.valueOf(floor));
             // 结合先验基准 CTR(2.5%) 计算相对价值增益因子 [0.85, 1.35]
             double ctrLift = Math.max(0.85, Math.min(1.35, pred.pCtr() / 0.025));
             valuation = Math.max(floor, valuation * ctrLift);
+
+            // 若配置了 BidModifierEngine，叠加多维倍率并受 Campaign maxBid 约束
+            if (bidModifierEngine != null) {
+                BigDecimal maxBidLimit = targetCampaign.maxBid() != null && targetCampaign.maxBid().signum() > 0
+                        ? targetCampaign.maxBid()
+                        : BigDecimal.valueOf(50.0);
+                BigDecimal modified = bidModifierEngine.calculateAdjustedBid(
+                        BigDecimal.valueOf(valuation),
+                        deviceType,
+                        country,
+                        ctx.hourOfDay(),
+                        BigDecimal.ONE,
+                        maxBidLimit
+                );
+                valuation = Math.max(floor, modified.doubleValue());
+            }
         }
 
         // 3. DSP 一价拍卖 Bid Shading 最优出价折算（保障绝不低于媒体底价 floor）
@@ -191,6 +297,7 @@ public class RtbSmartBiddingBridge {
         Map<String, Object> metrics = new LinkedHashMap<>();
         metrics.put("totalCalibrations", totalCalibrations.get());
         metrics.put("cdpBoostedBids", cdpBoostedBids.get());
+        metrics.put("dspIndexRecalledBids", dspIndexRecalledBids.get());
         metrics.put("totalShadedSavingsUsd", BigDecimal.valueOf(totalShadedSavings.sum())
                 .setScale(4, RoundingMode.HALF_UP));
         return metrics;

@@ -115,6 +115,72 @@ public class DynamicYieldManager {
     }
 
     /**
+     * 基于 EWMA 指数滑动衰减窗口的自适应底价计算（消除全生命周期累计均值僵化问题，快速响应日内流量波峰波谷）
+     */
+    public FloorPriceResult resolveEwmaAdaptiveFloor(AdSlot slot, String country, int deviceType, int hour) {
+        FloorPriceResult baseResult = resolveFloor(slot, country, deviceType, hour);
+        MarketYieldStats stats = marketStatsMap.get(slot.id());
+
+        if (stats == null || stats.totalAuctions.get() < 5) {
+            return baseResult;
+        }
+
+        double recentFillRate = stats.ewmaFillRate();
+        double multiplier = 1.0;
+
+        if (recentFillRate < 0.50) {
+            multiplier = Math.max(0.70, 0.70 + (recentFillRate / 0.50) * 0.30);
+        } else if (recentFillRate > 0.80) {
+            multiplier = Math.min(1.50, 1.0 + ((recentFillRate - 0.80) / 0.20) * 0.50);
+        }
+
+        // 若近期平均竞争买方数 >= 4 且 EWMA 成交均价显著高于软底价，适度上浮软底价以捕获高竞争溢价
+        double softBoost = (stats.ewmaBidders() >= 4.0 && recentFillRate > 0.70) ? 1.10 : 1.0;
+
+        BigDecimal adjustedHard = baseResult.hardFloor()
+                .multiply(BigDecimal.valueOf(multiplier))
+                .setScale(4, RoundingMode.HALF_UP);
+
+        BigDecimal adjustedSoft = baseResult.softFloor()
+                .multiply(BigDecimal.valueOf(multiplier * softBoost))
+                .setScale(4, RoundingMode.HALF_UP);
+
+        if (adjustedSoft.compareTo(adjustedHard) < 0) {
+            adjustedSoft = adjustedHard;
+        }
+
+        return new FloorPriceResult(adjustedHard, adjustedSoft);
+    }
+
+    /**
+     * 软硬底价双轨出清定价计算器 (Hard/Soft Floor Hybrid Clearing Price Calculator)：
+     * - 若最高出价 < hardFloor -> 流拍 (返回 BigDecimal.ZERO)；
+     * - 若最高出价 >= softFloor -> 第一价格直接成交；
+     * - 若处于 [hardFloor, softFloor) 缓冲区间 -> 取 max(hardFloor, secondBid) 进行次高价柔化保护，激励买方诚实出价。
+     */
+    public BigDecimal calculateHybridClearingPrice(
+            FloorPriceResult floor,
+            BigDecimal highestBid,
+            BigDecimal secondHighestBid
+    ) {
+        if (highestBid == null || highestBid.signum() <= 0) {
+            return BigDecimal.ZERO;
+        }
+        BigDecimal hard = (floor != null && floor.hardFloor() != null) ? floor.hardFloor() : BigDecimal.ZERO;
+        BigDecimal soft = (floor != null && floor.softFloor() != null) ? floor.softFloor() : hard;
+
+        if (highestBid.compareTo(hard) < 0) {
+            return BigDecimal.ZERO;
+        }
+        if (highestBid.compareTo(soft) >= 0) {
+            return highestBid.setScale(4, RoundingMode.HALF_UP);
+        }
+        BigDecimal second = secondHighestBid != null ? secondHighestBid : BigDecimal.ZERO;
+        BigDecimal flooredSecond = second.max(hard).min(highestBid);
+        return flooredSecond.setScale(4, RoundingMode.HALF_UP);
+    }
+
+    /**
      * 记录拍卖出清反馈，更新该广告位的市场收益画像
      *
      * @param slotId      广告位标识
@@ -145,26 +211,51 @@ public class DynamicYieldManager {
     public record FloorPriceResult(BigDecimal hardFloor, BigDecimal softFloor) {}
 
     /**
-     * 广告位市场收益统计指标
+     * 广告位市场收益统计指标（支持全周期累计指标与 EWMA 指数滑动衰减近期指标）
      */
     public static class MarketYieldStats {
+        private static final double EWMA_ALPHA = 0.20;
         public final AtomicLong totalAuctions = new AtomicLong(0);
         public final AtomicLong filledAuctions = new AtomicLong(0);
         public final AtomicLong totalBidders = new AtomicLong(0);
         private double totalRevenue = 0.0;
+        private double ewmaFill = 0.50;
+        private double ewmaPrice = 0.0;
+        private double ewmaBidderCount = 1.0;
 
         public synchronized void record(boolean cleared, double price, int bidders) {
-            totalAuctions.incrementAndGet();
+            long total = totalAuctions.incrementAndGet();
             totalBidders.addAndGet(bidders);
+            double fillSample = cleared ? 1.0 : 0.0;
+            if (total == 1) {
+                ewmaFill = fillSample;
+                ewmaBidderCount = bidders;
+            } else {
+                ewmaFill = EWMA_ALPHA * fillSample + (1.0 - EWMA_ALPHA) * ewmaFill;
+                ewmaBidderCount = EWMA_ALPHA * bidders + (1.0 - EWMA_ALPHA) * ewmaBidderCount;
+            }
             if (cleared) {
-                filledAuctions.incrementAndGet();
+                long filled = filledAuctions.incrementAndGet();
                 totalRevenue += price;
+                ewmaPrice = (filled == 1) ? price : (EWMA_ALPHA * price + (1.0 - EWMA_ALPHA) * ewmaPrice);
             }
         }
 
         public double calculateFillRate() {
             long total = totalAuctions.get();
             return total == 0 ? 0.0 : (double) filledAuctions.get() / total;
+        }
+
+        public synchronized double ewmaFillRate() {
+            return totalAuctions.get() == 0 ? 0.0 : ewmaFill;
+        }
+
+        public synchronized double ewmaWinningPrice() {
+            return ewmaPrice;
+        }
+
+        public synchronized double ewmaBidders() {
+            return ewmaBidderCount;
         }
 
         public synchronized double avgWinningPrice() {

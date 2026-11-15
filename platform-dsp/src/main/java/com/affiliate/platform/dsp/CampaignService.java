@@ -10,7 +10,12 @@ import org.springframework.stereotype.Service;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
  * 需求方广告活动业务管理服务 (DSP Campaign Service)
@@ -29,6 +34,8 @@ public class CampaignService {
 
     // 无锁倒排索引
     private final CampaignInvertedIndex invertedIndex;
+    // 活动下属广告组内存索引：campaignId -> List<AdGroup>
+    private final ConcurrentMap<String, List<AdGroup>> adGroupsByCampaign = new ConcurrentHashMap<>();
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private DeepBiddingOptimizer biddingOptimizer;
     @org.springframework.beans.factory.annotation.Autowired(required = false)
@@ -91,6 +98,63 @@ public class CampaignService {
         return repository.find(id)
                 .orElseThrow(() -> new NotFoundException("campaign", id));
     }
+
+    public Optional<Campaign> findOptional(String id) {
+        if (id == null || id.isBlank()) {
+            return Optional.empty();
+        }
+        Campaign indexed = invertedIndex.getSnapshot().activeCampaignMap().get(id);
+        if (indexed != null) {
+            return Optional.of(indexed);
+        }
+        return repository != null ? repository.find(id) : Optional.empty();
+    }
+
+    /**
+     * 注册或更新广告组 (AdGroup)，关联至所属 Campaign
+     */
+    public AdGroup registerAdGroup(AdGroup adGroup) {
+        if (adGroup == null || adGroup.campaignId() == null) {
+            throw new IllegalArgumentException("adGroup and campaignId must not be null");
+        }
+        List<AdGroup> list = adGroupsByCampaign.computeIfAbsent(
+                adGroup.campaignId(), k -> new CopyOnWriteArrayList<>()
+        );
+        list.removeIf(existing -> existing.id() != null && existing.id().equals(adGroup.id()));
+        list.add(adGroup);
+        return adGroup;
+    }
+
+    public List<AdGroup> findAdGroupsByCampaign(String campaignId) {
+        if (campaignId == null) {
+            return List.of();
+        }
+        return List.copyOf(adGroupsByCampaign.getOrDefault(campaignId, List.of()));
+    }
+
+    /**
+     * Campaign -> AdGroup 二级联动召回：先通过无锁倒排索引召回活跃 Campaign，再过滤符合分时段、地域与人群包的 AdGroup
+     */
+    public List<MatchedAdGroupCandidate> matchAdGroups(TrafficContext ctx) {
+        List<Campaign> matchedCampaigns = match(ctx);
+        if (matchedCampaigns.isEmpty()) {
+            return List.of();
+        }
+        List<MatchedAdGroupCandidate> result = new ArrayList<>();
+        for (Campaign campaign : matchedCampaigns) {
+            List<AdGroup> groups = adGroupsByCampaign.get(campaign.id());
+            if (groups != null && !groups.isEmpty()) {
+                for (AdGroup group : groups) {
+                    if (group.matches(ctx)) {
+                        result.add(new MatchedAdGroupCandidate(campaign, group));
+                    }
+                }
+            }
+        }
+        return result;
+    }
+
+    public record MatchedAdGroupCandidate(Campaign campaign, AdGroup adGroup) {}
 
     /**
      * 切换活动的投放状态（激活或暂停），并发布 campaign.status_changed.v1 事件

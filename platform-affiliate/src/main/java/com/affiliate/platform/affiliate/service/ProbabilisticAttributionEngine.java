@@ -23,12 +23,26 @@ public class ProbabilisticAttributionEngine {
 
     public static final double DEFAULT_CONFIDENCE_THRESHOLD = 0.80;
     private static final Duration FINGERPRINT_TTL = Duration.ofHours(24);
+    private static final String REDIS_POOL_PREFIX = "aff:prob:pool:";
 
     // 存储近 24 小时内的点击候选特征存根: key = offerId + ":" + ipSubnet
     private final ConcurrentMap<String, List<FingerprintCandidate>> candidatePool = new ConcurrentHashMap<>();
 
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private org.springframework.data.redis.core.StringRedisTemplate redisTemplate;
+
+    public ProbabilisticAttributionEngine() {}
+
+    public ProbabilisticAttributionEngine(org.springframework.data.redis.core.StringRedisTemplate redisTemplate) {
+        this.redisTemplate = redisTemplate;
+    }
+
+    public void setRedisTemplate(org.springframework.data.redis.core.StringRedisTemplate redisTemplate) {
+        this.redisTemplate = redisTemplate;
+    }
+
     /**
-     * 注册点击指纹存根
+     * 注册点击指纹存根（同时写入本地高速池与可选 Redis 分布式池，支持多节点 Tracker/Postback 集群共享）
      */
     public void registerClickFingerprint(ClickSession session) {
         if (session == null || session.ip() == null) return;
@@ -56,6 +70,17 @@ public class ProbabilisticAttributionEngine {
             newList.add(candidate);
             return newList;
         });
+
+        if (redisTemplate != null) {
+            try {
+                String redisKey = REDIS_POOL_PREFIX + poolKey;
+                String serialized = serializeCandidate(candidate);
+                redisTemplate.opsForList().rightPush(redisKey, serialized);
+                redisTemplate.expire(redisKey, FINGERPRINT_TTL);
+            } catch (Exception ignored) {
+                // Redis 异常时平滑降级为本地内存池
+            }
+        }
     }
 
     /**
@@ -81,8 +106,8 @@ public class ProbabilisticAttributionEngine {
 
         String subnet = extractSubnet(ip);
         String poolKey = offerId + ":" + subnet;
-        List<FingerprintCandidate> candidates = candidatePool.get(poolKey);
-        if (candidates == null || candidates.isEmpty()) {
+        List<FingerprintCandidate> candidates = loadMergedCandidates(poolKey);
+        if (candidates.isEmpty()) {
             return ProbabilisticMatchResult.noMatch();
         }
 
@@ -154,7 +179,37 @@ public class ProbabilisticAttributionEngine {
             score *= 0.85; // 超过 12 小时打 85 折
         }
 
-        return Math.min(score, 1.0);
+        return Math.round(Math.min(score, 1.0) * 10000.0) / 10000.0;
+    }
+
+    private List<FingerprintCandidate> loadMergedCandidates(String poolKey) {
+        Map<String, FingerprintCandidate> merged = new LinkedHashMap<>();
+        List<FingerprintCandidate> local = candidatePool.get(poolKey);
+        if (local != null) {
+            synchronized (local) {
+                cleanExpired(local);
+                for (FingerprintCandidate c : local) {
+                    merged.put(c.clickId(), c);
+                }
+            }
+        }
+        if (redisTemplate != null) {
+            try {
+                String redisKey = REDIS_POOL_PREFIX + poolKey;
+                List<String> rawList = redisTemplate.opsForList().range(redisKey, 0, -1);
+                if (rawList != null) {
+                    Instant cutoff = Instant.now().minus(FINGERPRINT_TTL);
+                    for (String raw : rawList) {
+                        FingerprintCandidate parsed = deserializeCandidate(raw);
+                        if (parsed != null && !parsed.createdAt().isBefore(cutoff)) {
+                            merged.putIfAbsent(parsed.clickId(), parsed);
+                        }
+                    }
+                }
+            } catch (Exception ignored) {
+            }
+        }
+        return new ArrayList<>(merged.values());
     }
 
     private void cleanExpired(List<FingerprintCandidate> list) {
@@ -162,10 +217,86 @@ public class ProbabilisticAttributionEngine {
         list.removeIf(c -> c.createdAt().isBefore(cutoff));
     }
 
-    private String extractSubnet(String ip) {
-        if (ip == null) return "unknown";
-        int lastDot = ip.lastIndexOf('.');
-        return lastDot > 0 ? ip.substring(0, lastDot) : ip;
+    /**
+     * 提取客户端 IP 子网前缀：
+     * - IPv4 提取 /24 C 段子网（如 203.0.113.45 -> 203.0.113）；
+     * - IPv6 提取标准 /48 运营商路由前缀（前 6 字节 48 bits，兼容 :: 压缩格式）。
+     */
+    public String extractSubnet(String ip) {
+        if (ip == null || ip.isBlank()) return "unknown";
+        String clean = ip.trim();
+        if (clean.contains(":")) {
+            try {
+                byte[] addr = java.net.InetAddress.getByName(clean).getAddress();
+                if (addr.length == 16) {
+                    return String.format("ipv6_48:%02x%02x:%02x%02x:%02x%02x",
+                            addr[0] & 0xFF, addr[1] & 0xFF,
+                            addr[2] & 0xFF, addr[3] & 0xFF,
+                            addr[4] & 0xFF, addr[5] & 0xFF);
+                }
+            } catch (Exception ignored) {
+            }
+            String[] parts = clean.split(":");
+            if (parts.length >= 3) {
+                return ("ipv6_48:" + parts[0] + ":" + parts[1] + ":" + parts[2]).toLowerCase(Locale.ROOT);
+            }
+            return clean.toLowerCase(Locale.ROOT);
+        }
+        int lastDot = clean.lastIndexOf('.');
+        return lastDot > 0 ? clean.substring(0, lastDot) : clean;
+    }
+
+    private static String serializeCandidate(FingerprintCandidate c) {
+        java.util.Base64.Encoder enc = java.util.Base64.getUrlEncoder().withoutPadding();
+        return String.join("|",
+                enc.encodeToString(nullToEmpty(c.clickId()).getBytes(StandardCharsets.UTF_8)),
+                enc.encodeToString(nullToEmpty(c.tenantId()).getBytes(StandardCharsets.UTF_8)),
+                enc.encodeToString(nullToEmpty(c.offerId()).getBytes(StandardCharsets.UTF_8)),
+                enc.encodeToString(nullToEmpty(c.affiliateId()).getBytes(StandardCharsets.UTF_8)),
+                enc.encodeToString(nullToEmpty(c.sub1()).getBytes(StandardCharsets.UTF_8)),
+                enc.encodeToString(nullToEmpty(c.sub2()).getBytes(StandardCharsets.UTF_8)),
+                enc.encodeToString(nullToEmpty(c.sub3()).getBytes(StandardCharsets.UTF_8)),
+                enc.encodeToString(nullToEmpty(c.sub4()).getBytes(StandardCharsets.UTF_8)),
+                enc.encodeToString(nullToEmpty(c.sub5()).getBytes(StandardCharsets.UTF_8)),
+                enc.encodeToString(nullToEmpty(c.ip()).getBytes(StandardCharsets.UTF_8)),
+                enc.encodeToString(nullToEmpty(c.userAgent()).getBytes(StandardCharsets.UTF_8)),
+                enc.encodeToString(nullToEmpty(c.country()).getBytes(StandardCharsets.UTF_8)),
+                String.valueOf(c.deviceType()),
+                enc.encodeToString(nullToEmpty(c.uaHash()).getBytes(StandardCharsets.UTF_8)),
+                String.valueOf(c.createdAt().toEpochMilli())
+        );
+    }
+
+    private static FingerprintCandidate deserializeCandidate(String raw) {
+        if (raw == null || raw.isBlank()) return null;
+        String[] parts = raw.split("\\|", -1);
+        if (parts.length < 15) return null;
+        java.util.Base64.Decoder dec = java.util.Base64.getUrlDecoder();
+        return new FingerprintCandidate(
+                emptyToNull(new String(dec.decode(parts[0]), StandardCharsets.UTF_8)),
+                emptyToNull(new String(dec.decode(parts[1]), StandardCharsets.UTF_8)),
+                emptyToNull(new String(dec.decode(parts[2]), StandardCharsets.UTF_8)),
+                emptyToNull(new String(dec.decode(parts[3]), StandardCharsets.UTF_8)),
+                emptyToNull(new String(dec.decode(parts[4]), StandardCharsets.UTF_8)),
+                emptyToNull(new String(dec.decode(parts[5]), StandardCharsets.UTF_8)),
+                emptyToNull(new String(dec.decode(parts[6]), StandardCharsets.UTF_8)),
+                emptyToNull(new String(dec.decode(parts[7]), StandardCharsets.UTF_8)),
+                emptyToNull(new String(dec.decode(parts[8]), StandardCharsets.UTF_8)),
+                emptyToNull(new String(dec.decode(parts[9]), StandardCharsets.UTF_8)),
+                emptyToNull(new String(dec.decode(parts[10]), StandardCharsets.UTF_8)),
+                emptyToNull(new String(dec.decode(parts[11]), StandardCharsets.UTF_8)),
+                Integer.parseInt(parts[12]),
+                emptyToNull(new String(dec.decode(parts[13]), StandardCharsets.UTF_8)),
+                Instant.ofEpochMilli(Long.parseLong(parts[14]))
+        );
+    }
+
+    private static String nullToEmpty(String s) {
+        return s == null ? "" : s;
+    }
+
+    private static String emptyToNull(String s) {
+        return (s == null || s.isEmpty()) ? null : s;
     }
 
     private String hashString(String input) {

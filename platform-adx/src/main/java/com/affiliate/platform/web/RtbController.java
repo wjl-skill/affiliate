@@ -45,11 +45,34 @@ public class RtbController {
     // 领域事件总线
     private final EventPublisher eventPublisher;
 
-    // 竞价胜出通知幂等防重放缓存（有界容量 200,000，2 小时过期，防止同一 Win Token 重复扣费与重复发事件）
+    // 竞价胜出/落败通知幂等防重放缓存（有界容量 200,000，2 小时过期，防止同一 Token 重复扣费/退费与重复发事件）
     private final Cache<String, Boolean> confirmedWinTokens = CacheBuilder.newBuilder()
             .maximumSize(200_000)
             .expireAfterWrite(Duration.ofHours(2))
             .build();
+
+    // RTB 点击归因会话高速缓存（贯通 RTB 点击跳转与后续广告主 S2S Postback 归因）
+    private final Cache<String, RtbClickSession> rtbClickSessions = CacheBuilder.newBuilder()
+            .maximumSize(200_000)
+            .expireAfterWrite(Duration.ofHours(24))
+            .build();
+
+    public record RtbClickSession(
+            String clickId,
+            String auctionId,
+            String tenantId,
+            String campaignId,
+            double bidPrice,
+            String targetLandingUrl,
+            long clickedAtEpochSec
+    ) {}
+
+    public java.util.Optional<RtbClickSession> findRtbClickSession(String clickId) {
+        if (clickId == null || clickId.isBlank()) {
+            return java.util.Optional.empty();
+        }
+        return java.util.Optional.ofNullable(rtbClickSessions.getIfPresent(clickId));
+    }
 
     public RtbController(
             OpenRtbAuctionService service,
@@ -80,8 +103,15 @@ public class RtbController {
      * @param token 竞价响应中下发的带防篡改签名的加密 Token
      * @return 确认状态响应
      */
-    @GetMapping("/rtb/win")
     public ResponseEntity<Map<String, Object>> winNotice(@RequestParam("token") String token) {
+        return winNotice(token, null);
+    }
+
+    @GetMapping("/rtb/win")
+    public ResponseEntity<Map<String, Object>> winNotice(
+            @RequestParam("token") String token,
+            @RequestParam(value = "secondPrice", required = false) Double secondPrice
+    ) {
         // 1. 核验并解析防篡改 Token（校验签名与 1 小时有效期）
         HmacTokenService.TrackingPayload payload = hmacService.verifyAndParse(token);
 
@@ -108,13 +138,72 @@ public class RtbController {
             budgetService.confirm(reservation);
         }
 
-        // 4. 发布 auction.win.v1 领域事件进入可靠发件箱
-        eventPublisher.publish(DomainEvent.create("auction.win.v1", payload.tenantId(), payload.auctionId(), payload));
+        // 4. 发布 auction.win.v1 领域事件进入可靠发件箱（若携带真实次高价 secondPrice 则一并透传给 Bid Shading 引擎）
+        Object eventPayload = secondPrice != null
+                ? Map.of(
+                        "auctionId", payload.auctionId(),
+                        "reservationId", payload.reservationId(),
+                        "tenantId", payload.tenantId(),
+                        "campaignId", payload.campaignId(),
+                        "price", payload.price(),
+                        "secondPrice", secondPrice,
+                        "timestamp", payload.timestamp(),
+                        "eventType", payload.eventType()
+                )
+                : payload;
+        eventPublisher.publish(DomainEvent.create("auction.win.v1", payload.tenantId(), payload.auctionId(), eventPayload));
 
         return ResponseEntity.ok(Map.of(
                 "status", "CONFIRMED",
                 "auctionId", payload.auctionId(),
                 "price", payload.price()
+        ));
+    }
+
+    /**
+     * 广告竞价落败通知端点 (Loss Notice URL 回调 - OpenRTB lurl)
+     * <p>
+     * 立即释放本地切片/主预算预占单，并发布 {@code auction.loss.v1} 驱动 DSP Bid Shading 上调竞争水位。
+     */
+    @GetMapping("/rtb/loss")
+    public ResponseEntity<Map<String, Object>> lossNotice(
+            @RequestParam("token") String token,
+            @RequestParam(value = "lossReason", required = false, defaultValue = "102") int lossReason
+    ) {
+        HmacTokenService.TrackingPayload payload = hmacService.verifyAndParse(token);
+
+        if (confirmedWinTokens.asMap().putIfAbsent(payload.auctionId(), Boolean.FALSE) != null) {
+            return ResponseEntity.ok(Map.of(
+                    "status", "ALREADY_PROCESSED",
+                    "auctionId", payload.auctionId()
+            ));
+        }
+
+        BudgetService.Reservation reservation = new BudgetService.Reservation(
+                payload.reservationId(),
+                payload.tenantId(),
+                payload.campaignId(),
+                null,
+                BigDecimal.valueOf(payload.price() / 1000.0)
+        );
+        if (service != null && service.getLocalBudgetService() != null) {
+            service.getLocalBudgetService().release(reservation);
+        } else if (budgetService != null) {
+            budgetService.release(reservation);
+        }
+
+        Map<String, Object> lossPayload = Map.of(
+                "auctionId", payload.auctionId(),
+                "campaignId", payload.campaignId(),
+                "price", payload.price(),
+                "lossReason", lossReason
+        );
+        eventPublisher.publish(DomainEvent.create("auction.loss.v1", payload.tenantId(), payload.auctionId(), lossPayload));
+
+        return ResponseEntity.ok(Map.of(
+                "status", "LOSS_RECORDED",
+                "auctionId", payload.auctionId(),
+                "lossReason", lossReason
         ));
     }
 
@@ -148,10 +237,28 @@ public class RtbController {
             HttpServletResponse response
     ) throws IOException {
         HmacTokenService.TrackingPayload payload = hmacService.verifyAndParse(token);
+        String clickId = "rtb_clk_" + java.util.UUID.randomUUID().toString().replace("-", "");
+        String resolvedLanding = sanitizeRedirectUrl(
+                landingUrl != null
+                        ? landingUrl.replace("{click_id}", clickId).replace("${CLICK_ID}", clickId)
+                        : "https://example.com"
+        );
+        RtbClickSession session = new RtbClickSession(
+                clickId,
+                payload.auctionId(),
+                payload.tenantId(),
+                payload.campaignId(),
+                payload.price(),
+                resolvedLanding,
+                java.time.Instant.now().getEpochSecond()
+        );
+        rtbClickSessions.put(clickId, session);
+
         // 发布 click.recorded.v1 领域事件
         eventPublisher.publish(DomainEvent.create("click.recorded.v1", payload.tenantId(), payload.auctionId(), payload));
+        response.setHeader("X-RTB-Click-Id", clickId);
         // 校验并消毒重定向目标 URL（防止 javascript:/data: 伪协议与 CRLF 响应头注入）
-        response.sendRedirect(sanitizeRedirectUrl(landingUrl));
+        response.sendRedirect(resolvedLanding);
     }
 
     private static String sanitizeRedirectUrl(String rawUrl) {

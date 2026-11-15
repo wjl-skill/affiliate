@@ -42,6 +42,25 @@ public class SkanAttributionEngine {
     // 幂等记录索引：key 为 "tenantId:adNetworkId:transactionId:postbackSequenceIndex"
     private final ConcurrentMap<String, SkanAttributionResult> processedResults = new ConcurrentHashMap<>();
 
+    // 同一 Transaction ID 的跨时间窗序列单调演进状态追踪：key 为 "tenantId:adNetworkId:transactionId" -> [maxSeqIndex, lastFineCv]
+    private final ConcurrentMap<String, int[]> txSequenceTracker = new ConcurrentHashMap<>();
+    private final java.util.concurrent.atomic.AtomicLong sequenceAnomalyCount = new java.util.concurrent.atomic.AtomicLong(0);
+
+    @FunctionalInterface
+    public interface SkanSignatureVerifier {
+        boolean verify(SkanPostbackPayload payload);
+    }
+
+    private volatile SkanSignatureVerifier signatureVerifier;
+
+    public void setSignatureVerifier(SkanSignatureVerifier signatureVerifier) {
+        this.signatureVerifier = signatureVerifier;
+    }
+
+    public long getSequenceAnomalyCount() {
+        return sequenceAnomalyCount.get();
+    }
+
     // 广告网络流水归集：key 为 "tenantId:adNetworkId" -> 结果列表
     private final ConcurrentMap<String, List<SkanAttributionResult>> networkIndex = new ConcurrentHashMap<>();
 
@@ -130,6 +149,15 @@ public class SkanAttributionEngine {
             return existing;
         }
 
+        // 1.5 可选 Apple PKCS#7 / ECDSA 签名验证与 3 阶段时间窗序列单调性校验
+        boolean signatureValid = signatureVerifier == null || signatureVerifier.verify(payload);
+        if (!signatureValid) {
+            throw new SecurityException("SKAN postback attribution-signature verification failed for txId=" + txId);
+        }
+        boolean sequenceValid = validateAndRecordSequenceProgression(
+                effectiveTenant, adNetworkId, txId, seqIndex, payload.conversionValue()
+        );
+
         // 2. 解构 4 位 Source Identifier (如 "8421" -> Campaign: 21, Placement: 4, Creative: 8)
         SourceIdComponents components = parseSourceIdentifier(payload.sourceIdentifier());
 
@@ -143,6 +171,7 @@ public class SkanAttributionEngine {
         // 4. 生成统一归因流水凭据
         String recordId = UUID.randomUUID().toString();
         Instant now = Instant.now();
+        String status = sequenceValid ? "PROCESSED" : "SEQUENCE_ANOMALY";
         SkanAttributionResult result = new SkanAttributionResult(
                 recordId,
                 effectiveTenant,
@@ -159,7 +188,7 @@ public class SkanAttributionEngine {
                 payload.fidelityType(),
                 payload.version() != null ? payload.version() : "4.0",
                 now,
-                "PROCESSED"
+                status
         );
 
         // 原子登记
@@ -291,6 +320,37 @@ public class SkanAttributionEngine {
         return list != null ? new ArrayList<>(list) : List.of();
     }
 
+    /**
+     * 校验同一 Transaction ID 的跨时间窗序列单调递增与细粒度转化值 (Fine CV) 单调不减约束
+     */
+    private boolean validateAndRecordSequenceProgression(
+            String tenantId,
+            String adNetworkId,
+            String txId,
+            int seqIndex,
+            Integer fineCv
+    ) {
+        String txKey = tenantId + ":" + adNetworkId + ":" + txId;
+        int currentCv = fineCv != null ? fineCv : -1;
+        java.util.concurrent.atomic.AtomicBoolean valid = new java.util.concurrent.atomic.AtomicBoolean(true);
+
+        txSequenceTracker.compute(txKey, (k, state) -> {
+            if (state == null) {
+                return new int[]{seqIndex, currentCv};
+            }
+            int prevSeq = state[0];
+            int prevCv = state[1];
+            // 若新到达的序列号低于已处理的最大序列号（时间窗倒退），或后续时间窗的细粒度 CV 反而低于前序时间窗，标记为序列异常
+            if (seqIndex < prevSeq || (seqIndex > prevSeq && currentCv >= 0 && prevCv >= 0 && currentCv < prevCv)) {
+                valid.set(false);
+                sequenceAnomalyCount.incrementAndGet();
+                return state;
+            }
+            return new int[]{Math.max(prevSeq, seqIndex), Math.max(prevCv, currentCv)};
+        });
+        return valid.get();
+    }
+
     public int getProcessedCount() {
         return processedResults.size();
     }
@@ -298,6 +358,8 @@ public class SkanAttributionEngine {
     public void clear() {
         processedResults.clear();
         networkIndex.clear();
+        txSequenceTracker.clear();
+        sequenceAnomalyCount.set(0);
     }
 
     public record SourceIdComponents(

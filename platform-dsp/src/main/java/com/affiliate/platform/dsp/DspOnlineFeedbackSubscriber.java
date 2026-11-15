@@ -34,7 +34,10 @@ public class DspOnlineFeedbackSubscriber {
     private final DeepCtrCvrInferenceEngine inferenceEngine;
     private final DynamicBidShadingEngine bidShadingEngine;
     private final EventPublisher eventPublisher;
+    @Autowired(required = false)
+    private CampaignInvertedIndex campaignInvertedIndex;
     private final AtomicLong feedbackCount = new AtomicLong(0);
+    private final AtomicLong lossFeedbackCount = new AtomicLong(0);
 
     @Autowired
     public DspOnlineFeedbackSubscriber(
@@ -45,6 +48,10 @@ public class DspOnlineFeedbackSubscriber {
         this.inferenceEngine = inferenceEngine;
         this.bidShadingEngine = bidShadingEngine;
         this.eventPublisher = eventPublisher;
+    }
+
+    public void setCampaignInvertedIndex(CampaignInvertedIndex campaignInvertedIndex) {
+        this.campaignInvertedIndex = campaignInvertedIndex;
     }
 
     @PostConstruct
@@ -69,7 +76,16 @@ public class DspOnlineFeedbackSubscriber {
 
         if ("auction.win.v1".equals(eventType) && bidShadingEngine != null) {
             String segment = slotId + ":" + country + ":" + device;
-            bidShadingEngine.recordWin(segment, price, price * 0.90);
+            double secondPrice = extractDouble(payload, "secondPrice", price * 0.90);
+            bidShadingEngine.recordWin(segment, price, secondPrice);
+            feedbackCount.incrementAndGet();
+            return;
+        }
+
+        if ("auction.loss.v1".equals(eventType) && bidShadingEngine != null) {
+            String segment = slotId + ":" + country + ":" + device;
+            bidShadingEngine.recordLoss(segment, price);
+            lossFeedbackCount.incrementAndGet();
             feedbackCount.incrementAndGet();
             return;
         }
@@ -95,22 +111,28 @@ public class DspOnlineFeedbackSubscriber {
                     country,
                     userTraits
             );
-            Campaign dummyCampaign = new Campaign(
-                    campaignId,
-                    tenantId,
-                    "OnlineFeedback-" + campaignId,
-                    eventDate.minusDays(7),
-                    eventDate.plusDays(30),
-                    BigDecimal.valueOf(1000),
-                    BigDecimal.valueOf(Math.max(0.5, price)),
-                    Set.of(),
-                    Set.of(),
-                    Campaign.Status.ACTIVE,
-                    occurredAt
-            );
+            Campaign effectiveCampaign = null;
+            if (campaignInvertedIndex != null && campaignId != null) {
+                effectiveCampaign = campaignInvertedIndex.getSnapshot().activeCampaignMap().get(campaignId);
+            }
+            if (effectiveCampaign == null) {
+                effectiveCampaign = new Campaign(
+                        campaignId,
+                        tenantId,
+                        "OnlineFeedback-" + campaignId,
+                        eventDate.minusDays(7),
+                        eventDate.plusDays(30),
+                        BigDecimal.valueOf(1000),
+                        BigDecimal.valueOf(Math.max(0.5, price)),
+                        Set.of(),
+                        Set.of(),
+                        Campaign.Status.ACTIVE,
+                        occurredAt
+                );
+            }
             inferenceEngine.updateModel(
                     ctx,
-                    dummyCampaign,
+                    effectiveCampaign,
                     BigDecimal.valueOf(0.50),
                     isClick || isConversion,
                     isConversion
@@ -121,6 +143,10 @@ public class DspOnlineFeedbackSubscriber {
 
     public long getFeedbackCount() {
         return feedbackCount.get();
+    }
+
+    public long getLossFeedbackCount() {
+        return lossFeedbackCount.get();
     }
 
     private static int resolveDeviceCode(String device) {

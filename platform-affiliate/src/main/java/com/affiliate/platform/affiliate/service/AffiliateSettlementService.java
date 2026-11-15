@@ -51,7 +51,7 @@ public class AffiliateSettlementService {
                 .orElseThrow(() -> new IllegalArgumentException("conversion not found: " + conversionId));
         Conversion approved = conv.approve();
         postbackService.updateConversion(approved);
-        return approved;
+        return postbackService.dispatchApprovedPostback(approved);
     }
 
     public Conversion reject(String conversionId, String reason) {

@@ -49,6 +49,16 @@ public class S2sPostbackService {
         return this.aiFraudInvestigationService;
     }
 
+    private volatile boolean asyncPostbackDispatch = false;
+
+    public void setAsyncPostbackDispatch(boolean asyncPostbackDispatch) {
+        this.asyncPostbackDispatch = asyncPostbackDispatch;
+    }
+
+    public boolean isAsyncPostbackDispatch() {
+        return this.asyncPostbackDispatch;
+    }
+
     private final ClickTrackerService clickTracker;
     private final OfferService offerService;
     private final AffiliateAntiFraudEngine antiFraudEngine;
@@ -321,10 +331,11 @@ public class S2sPostbackService {
                 session = clickTracker.findSession(clickId);
             }
 
-            // 若 click_id 缺失或未命中，且启用了概率性指纹引擎，则尝试基于 IP + UA 模糊匹配
+            // 若 click_id 缺失或未命中，且启用了概率性指纹引擎，则尝试基于 IP + UA + 真实解析国家模糊匹配
             if (session == null && probabilisticEngine != null && offerIdFallback != null && ip != null) {
+                String resolvedCountry = resolveCountryFromIp(ip, "US");
                 ProbabilisticAttributionEngine.ProbabilisticMatchResult match =
-                        probabilisticEngine.matchAttribution(offerIdFallback, ip, userAgent, "US", deviceType);
+                        probabilisticEngine.matchAttribution(offerIdFallback, ip, userAgent, resolvedCountry, deviceType);
                 if (match.matched()) {
                     session = match.matchedSession();
                 }
@@ -343,8 +354,11 @@ public class S2sPostbackService {
             }
 
             // 2. 反欺诈与 CTIT 质检 (使用商业级多维设备与地理质检评分)
+            String convCountry = (ip != null && !ip.isBlank() && !ip.equals(session.ip()))
+                    ? resolveCountryFromIp(ip, session.country())
+                    : session.country();
             AffiliateAntiFraudEngine.FraudInspectionResult fraudRes = antiFraudEngine.inspectConversion(
-                    session, txId, current, ip, userAgent, null, deviceType
+                    session, txId, current, ip, userAgent, convCountry, deviceType
             );
             long ctit = Duration.between(session.createdAt(), current).toSeconds();
 
@@ -403,7 +417,11 @@ public class S2sPostbackService {
                     current
             );
 
-            if (fraudRes.passed() && partner != null) {
+            boolean shouldDispatchNow = fraudRes.passed() && partner != null
+                    && (!antiFraudEngine.isAutoApproveLowRisk()
+                        || fraudRes.recommendedStatus() == Conversion.Status.APPROVED);
+
+            if (shouldDispatchNow && !asyncPostbackDispatch) {
                 PublisherPostbackDispatcher.PostbackDeliveryLog deliveryLog =
                         postbackDispatcher.dispatch(partner, draftConversion, session);
                 if (deliveryLog != null) {
@@ -418,6 +436,19 @@ public class S2sPostbackService {
                     : draftConversion.withPostbackStatus(finalPostbackStatus);
 
             saveConversion(result);
+
+            if (shouldDispatchNow && asyncPostbackDispatch) {
+                final ClickSession asyncSession = session;
+                postbackDispatcher.dispatchAsync(partner, result, asyncSession)
+                        .thenAccept(deliveryLog -> {
+                            if (deliveryLog != null) {
+                                Conversion.PostbackStatus asyncStatus = deliveryLog.success()
+                                        ? Conversion.PostbackStatus.DELIVERED
+                                        : Conversion.PostbackStatus.FAILED;
+                                updateConversion(result.withPostbackStatus(asyncStatus));
+                            }
+                        });
+            }
 
             // 异步触发 AI 作弊异常调查取证 (通过上下文感知的 Java 21 虚拟线程执行，不阻塞主归因链响应)
             if (aiFraudInvestigationService != null && (result.status() == Conversion.Status.FRAUD_SUSPECTED || result.status() == Conversion.Status.REJECTED)) {
@@ -528,6 +559,57 @@ public class S2sPostbackService {
         if (conversion != null && conversion.id() != null) {
             saveConversion(conversion);
         }
+    }
+
+    /**
+     * 当人工复核通过一笔暂挂的 PENDING 转化时，补发尚未投递的下游渠道 Postback
+     */
+    public Conversion dispatchApprovedPostback(Conversion conversion) {
+        if (conversion == null || conversion.postbackStatus() != Conversion.PostbackStatus.PENDING) {
+            return conversion;
+        }
+        AffiliatePartner partner = findPartner(conversion.affiliateId()).orElse(null);
+        if (partner == null || postbackDispatcher == null) {
+            return conversion;
+        }
+        ClickSession session = clickTracker != null ? clickTracker.findSession(conversion.clickId()) : null;
+        if (asyncPostbackDispatch) {
+            postbackDispatcher.dispatchAsync(partner, conversion, session)
+                    .thenAccept(deliveryLog -> {
+                        if (deliveryLog != null) {
+                            Conversion.PostbackStatus status = deliveryLog.success()
+                                    ? Conversion.PostbackStatus.DELIVERED
+                                    : Conversion.PostbackStatus.FAILED;
+                            updateConversion(conversion.withPostbackStatus(status));
+                        }
+                    });
+            return conversion;
+        } else {
+            PublisherPostbackDispatcher.PostbackDeliveryLog deliveryLog =
+                    postbackDispatcher.dispatch(partner, conversion, session);
+            if (deliveryLog != null) {
+                Conversion.PostbackStatus status = deliveryLog.success()
+                        ? Conversion.PostbackStatus.DELIVERED
+                        : Conversion.PostbackStatus.FAILED;
+                Conversion updated = conversion.withPostbackStatus(status);
+                updateConversion(updated);
+                return updated;
+            }
+            return conversion;
+        }
+    }
+
+    private static String resolveCountryFromIp(String ip, String fallbackCountry) {
+        if (ip != null && !ip.isBlank()) {
+            try {
+                String detected = com.affiliate.platform.geo.IpLocationResolver.getCountryCode(ip);
+                if (detected != null && !detected.isBlank() && !"ZZ".equalsIgnoreCase(detected)) {
+                    return detected;
+                }
+            } catch (Exception ignored) {
+            }
+        }
+        return (fallbackCountry != null && !fallbackCountry.isBlank()) ? fallbackCountry : "US";
     }
 
     public List<Conversion> listConversions() {

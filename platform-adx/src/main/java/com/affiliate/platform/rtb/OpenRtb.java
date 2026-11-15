@@ -164,11 +164,17 @@ public final class OpenRtb {
             String adomain,
             String nurl,
             String crid,
-            String dealid
+            String dealid,
+            String lurl
     ) {
         // 向后兼容 7 参数构造器
         public Bid(String id, String impid, double price, String adm, String adomain, String nurl, String crid) {
-            this(id, impid, price, adm, adomain, nurl, crid, null);
+            this(id, impid, price, adm, adomain, nurl, crid, null, null);
+        }
+
+        // 向后兼容 8 参数构造器
+        public Bid(String id, String impid, double price, String adm, String adomain, String nurl, String crid, String dealid) {
+            this(id, impid, price, adm, adomain, nurl, crid, dealid, null);
         }
     }
 }
