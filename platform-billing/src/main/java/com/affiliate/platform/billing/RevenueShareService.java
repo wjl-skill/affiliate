@@ -27,13 +27,17 @@ public class RevenueShareService {
      * @return 分成明细结果
      */
     public PayoutSplit split(BigDecimal grossSpend, double platformFeeRate) {
+        return split(grossSpend, platformFeeRate, 4);
+    }
+
+    public PayoutSplit split(BigDecimal grossSpend, double platformFeeRate, int scale) {
         if (grossSpend == null || grossSpend.signum() <= 0) {
             return new PayoutSplit(BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, platformFeeRate);
         }
 
         double rate = Math.max(0.0, Math.min(1.0, platformFeeRate));
-        BigDecimal fee = grossSpend.multiply(BigDecimal.valueOf(rate)).setScale(4, RoundingMode.HALF_UP);
-        BigDecimal payout = grossSpend.subtract(fee).setScale(4, RoundingMode.HALF_UP);
+        BigDecimal fee = grossSpend.multiply(BigDecimal.valueOf(rate)).setScale(scale, RoundingMode.HALF_UP);
+        BigDecimal payout = grossSpend.subtract(fee).setScale(scale, RoundingMode.HALF_UP);
 
         return new PayoutSplit(grossSpend, fee, payout, rate);
     }

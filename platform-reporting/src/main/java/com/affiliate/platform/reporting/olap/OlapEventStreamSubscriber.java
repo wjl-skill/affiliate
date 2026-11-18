@@ -46,7 +46,9 @@ public class OlapEventStreamSubscriber {
 
     private static final Logger log = LoggerFactory.getLogger(OlapEventStreamSubscriber.class);
     private static final int MAX_PENDING_QUEUE_SIZE = 10_000;
+    private static final int HIGH_WATERMARK_SIZE = (int) (MAX_PENDING_QUEUE_SIZE * 0.80);
     private static final int DEFAULT_BATCH_SIZE = 200;
+    private static final int MAX_DIMENSION_CARDINALITY = 50_000;
 
     static final class MutableCubeBucket {
         final String dimensionValue;
@@ -64,8 +66,8 @@ public class OlapEventStreamSubscriber {
     private final ClickHouseOlapClient clickHouseClient;
     private final EventPublisher eventPublisher;
 
-    // tenantId -> dimensionName -> dimensionValue -> bucket
-    private final ConcurrentMap<String, ConcurrentMap<String, ConcurrentMap<String, MutableCubeBucket>>> tenantDimensionCubes =
+    // tenantId -> dimensionName -> bounded LRU map(dimensionValue -> bucket)
+    private final ConcurrentMap<String, ConcurrentMap<String, Map<String, MutableCubeBucket>>> tenantDimensionCubes =
             new ConcurrentHashMap<>();
     private final ConcurrentLinkedQueue<DomainEvent<?>> pendingQueue = new ConcurrentLinkedQueue<>();
     private final AtomicInteger pendingQueueSize = new AtomicInteger(0);
@@ -102,7 +104,12 @@ public class OlapEventStreamSubscriber {
             return;
         }
 
-        if (pendingQueueSize.get() >= MAX_PENDING_QUEUE_SIZE) {
+        int currentSize = pendingQueueSize.get();
+        if (currentSize >= HIGH_WATERMARK_SIZE) {
+            flushBatch();
+            currentSize = pendingQueueSize.get();
+        }
+        if (currentSize >= MAX_PENDING_QUEUE_SIZE) {
             droppedEvents.incrementAndGet();
             return;
         }
@@ -200,10 +207,20 @@ public class OlapEventStreamSubscriber {
             double payout,
             double rev
     ) {
-        ConcurrentMap<String, MutableCubeBucket> cube = tenantDimensionCubes
+        Map<String, MutableCubeBucket> cube = tenantDimensionCubes
                 .computeIfAbsent(tenantId, k -> new ConcurrentHashMap<>())
-                .computeIfAbsent(dimensionName, k -> new ConcurrentHashMap<>());
-        MutableCubeBucket bucket = cube.computeIfAbsent(dimensionValue, MutableCubeBucket::new);
+                .computeIfAbsent(dimensionName, k -> java.util.Collections.synchronizedMap(
+                        new LinkedHashMap<>(256, 0.75f, true) {
+                            @Override
+                            protected boolean removeEldestEntry(Map.Entry<String, MutableCubeBucket> eldest) {
+                                return size() > MAX_DIMENSION_CARDINALITY;
+                            }
+                        }
+                ));
+        MutableCubeBucket bucket;
+        synchronized (cube) {
+            bucket = cube.computeIfAbsent(dimensionValue, MutableCubeBucket::new);
+        }
 
         switch (eventType) {
             case "impression.recorded.v1" -> bucket.impressions++;
@@ -231,29 +248,32 @@ public class OlapEventStreamSubscriber {
         if (clickHouseClient == null) {
             return;
         }
-        ConcurrentMap<String, ConcurrentMap<String, MutableCubeBucket>> dims = tenantDimensionCubes.get(tenantId);
+        ConcurrentMap<String, Map<String, MutableCubeBucket>> dims = tenantDimensionCubes.get(tenantId);
         if (dims == null) {
             return;
         }
-        ConcurrentMap<String, MutableCubeBucket> cube = dims.get(dimensionName);
+        Map<String, MutableCubeBucket> cube = dims.get(dimensionName);
         if (cube == null) {
             return;
         }
-        List<OlapAggregationRow> rows = new ArrayList<>(cube.size());
-        for (MutableCubeBucket b : cube.values()) {
-            DerivedMetrics derived = PerformanceMetricsCalculator.calculate(
-                    b.impressions, b.clicks, b.conversions, b.spend, b.revenue
-            );
-            BigDecimal profit = b.revenue.subtract(b.spend).setScale(4, RoundingMode.HALF_UP);
-            rows.add(new OlapAggregationRow(
-                    b.dimensionValue,
-                    b.clicks,
-                    b.conversions,
-                    b.spend,
-                    b.revenue,
-                    profit,
-                    derived
-            ));
+        List<OlapAggregationRow> rows;
+        synchronized (cube) {
+            rows = new ArrayList<>(cube.size());
+            for (MutableCubeBucket b : cube.values()) {
+                DerivedMetrics derived = PerformanceMetricsCalculator.calculate(
+                        b.impressions, b.clicks, b.conversions, b.spend, b.revenue
+                );
+                BigDecimal profit = b.revenue.subtract(b.spend).setScale(4, RoundingMode.HALF_UP);
+                rows.add(new OlapAggregationRow(
+                        b.dimensionValue,
+                        b.clicks,
+                        b.conversions,
+                        b.spend,
+                        b.revenue,
+                        profit,
+                        derived
+                ));
+            }
         }
         clickHouseClient.registerMockResult(tenantId, dimensionName, rows);
     }

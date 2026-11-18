@@ -70,6 +70,18 @@ public class S2sPostbackService {
     private final StringRedisTemplate redisTemplate;
     private final com.affiliate.platform.affiliate.metrics.AffiliateMetrics metrics;
     private final org.springframework.kafka.core.KafkaTemplate<String, Object> kafkaTemplate;
+    @Autowired(required = false)
+    private com.affiliate.platform.event.EventPublisher eventPublisher;
+
+    private final com.github.benmanes.caffeine.cache.Cache<String, Boolean> emittedApprovedConversionIds =
+            com.github.benmanes.caffeine.cache.Caffeine.newBuilder()
+                    .maximumSize(50_000)
+                    .expireAfterWrite(Duration.ofHours(24))
+                    .build();
+
+    public void setEventPublisher(com.affiliate.platform.event.EventPublisher eventPublisher) {
+        this.eventPublisher = eventPublisher;
+    }
 
     // 有界内存转化缓存（基于 Caffeine W-TinyLFU，最大容量 50,000，防止长期运行内存无限堆积）
     private final com.github.benmanes.caffeine.cache.Cache<String, Conversion> conversionCache =
@@ -325,10 +337,13 @@ public class S2sPostbackService {
                 );
             }
 
-            // 1. 提取点击会话存根 (支持精准 click_id 检索与概率性设备指纹兜底)
+            // 1. 提取点击会话存根 (支持精准 click_id 检索、RTB 跨节点 rtb_clk_* 会话与概率性设备指纹兜底)
             ClickSession session = null;
             if (clickId != null && !clickId.isBlank()) {
-                session = clickTracker.findSession(clickId);
+                session = clickTracker != null ? clickTracker.findSession(clickId) : null;
+                if (session == null && clickId.startsWith("rtb_clk_")) {
+                    session = resolveRtbClickSession(clickId, offerIdFallback, ip, userAgent, deviceType);
+                }
             }
 
             // 若 click_id 缺失或未命中，且启用了概率性指纹引擎，则尝试基于 IP + UA + 真实解析国家模糊匹配
@@ -536,6 +551,29 @@ public class S2sPostbackService {
                 log.warn("Kafka conversion dispatch failed for {}, falling back to direct db: {}", conv.id(), ex.getMessage());
             }
         }
+        if (eventPublisher != null && conv.status() == Conversion.Status.APPROVED
+                && emittedApprovedConversionIds.asMap().putIfAbsent(conv.id(), Boolean.TRUE) == null) {
+            try {
+                java.util.Map<String, Object> evtPayload = new java.util.LinkedHashMap<>();
+                evtPayload.put("conversionId", conv.id());
+                evtPayload.put("clickId", conv.clickId());
+                evtPayload.put("offerId", conv.offerId());
+                evtPayload.put("affiliateId", conv.affiliateId());
+                evtPayload.put("campaignId", conv.offerId());
+                evtPayload.put("revenue", conv.revenue() != null ? conv.revenue().doubleValue() : 0.0);
+                evtPayload.put("payout", conv.payout() != null ? conv.payout().doubleValue() : 0.0);
+                evtPayload.put("saleAmount", conv.saleAmount() != null ? conv.saleAmount().doubleValue() : 0.0);
+                if (conv.sub1() != null) evtPayload.put("sub1", conv.sub1());
+                eventPublisher.publish(com.affiliate.platform.event.DomainEvent.create(
+                        "conversion.approved.v1",
+                        conv.tenantId() != null ? conv.tenantId() : "public",
+                        conv.id(),
+                        evtPayload
+                ));
+            } catch (Exception ex) {
+                log.debug("EventPublisher conversion.approved.v1 emit failed for {}: {}", conv.id(), ex.getMessage());
+            }
+        }
         if (conversionMapper != null) {
             if (conversionMapper.selectById(conv.id()) != null) {
                 conversionMapper.updateById(entity);
@@ -545,6 +583,54 @@ public class S2sPostbackService {
             return;
         }
         fallbackConversions.put(conv.id(), conv);
+    }
+
+    private ClickSession resolveRtbClickSession(
+            String clickId,
+            String offerIdFallback,
+            String ip,
+            String userAgent,
+            int deviceType
+    ) {
+        if (redisTemplate == null || clickId == null) {
+            return null;
+        }
+        try {
+            String raw = redisTemplate.opsForValue().get("rtb:click:sess:" + clickId);
+            if (raw == null || raw.isBlank()) {
+                return null;
+            }
+            String[] parts = raw.split("\\|\\|", -1);
+            if (parts.length < 6) {
+                return null;
+            }
+            String tenantId = parts[1].isBlank() ? "public" : parts[1];
+            String campaignId = parts[2].isBlank() ? "unknown" : parts[2];
+            String auctionId = parts[3].isBlank() ? "unknown" : parts[3];
+            long clickedAtMs = Long.parseLong(parts[5]);
+            Instant clickedAt = Instant.ofEpochMilli(clickedAtMs);
+            String effectiveOfferId = (offerIdFallback != null && !offerIdFallback.isBlank()) ? offerIdFallback : campaignId;
+            String resolvedCountry = resolveCountryFromIp(ip, "US");
+            int effectiveDevice = deviceType > 0 ? deviceType : 1;
+            return new ClickSession(
+                    clickId,
+                    tenantId,
+                    effectiveOfferId,
+                    "rtb_direct",
+                    auctionId,
+                    campaignId,
+                    null, null, null,
+                    ip != null ? ip : "0.0.0.0",
+                    userAgent != null ? userAgent : "Mozilla/5.0",
+                    resolvedCountry,
+                    effectiveDevice,
+                    clickedAt,
+                    clickedAt.plus(Duration.ofDays(30))
+            );
+        } catch (Exception ex) {
+            log.debug("Failed to resolve RTB click session {} from Redis: {}", clickId, ex.getMessage());
+            return null;
+        }
     }
 
     public Optional<Conversion> findConversion(String conversionId) {

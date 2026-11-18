@@ -69,6 +69,24 @@ public class MediaPlatformConnectorRegistry {
         return Collections.unmodifiableSet(set);
     }
 
+    /**
+     * 将已注册的媒体变现连接器批量封装为 SSP Header Bidding 买方适配器列表
+     */
+    public List<com.affiliate.platform.ssp.HeaderBiddingOrchestrator.DemandPartnerAdapter> buildDemandPartnerAdapters(
+            Map<String, com.affiliate.platform.domain.PartnerConnection> connectionsByProvider,
+            java.math.BigDecimal fallbackFloorCpm
+    ) {
+        List<com.affiliate.platform.ssp.HeaderBiddingOrchestrator.DemandPartnerAdapter> adapters = new ArrayList<>();
+        for (String provider : getSupportedProviders()) {
+            AdPlatformConnector connector = getConnector(provider);
+            com.affiliate.platform.domain.PartnerConnection conn = connectionsByProvider != null
+                    ? connectionsByProvider.get(provider)
+                    : null;
+            adapters.add(new ConnectorDemandPartnerAdapter(connector, conn, fallbackFloorCpm));
+        }
+        return adapters;
+    }
+
     public static String normalizeProvider(String provider) {
         if (provider == null) return "";
         String clean = provider.trim().toUpperCase().replace("-", "_");

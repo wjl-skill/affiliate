@@ -261,8 +261,18 @@ public class OpenRtbAuctionService {
                 String campaignId = (recalledCampaign != null && recalledCampaign.id() != null && !recalledCampaign.id().isBlank())
                         ? recalledCampaign.id()
                         : "campaign_" + effectiveAdvertiser;
+
+                // 阶段 4.1：DSP PID 日内预算平滑概率节流与乘数单次评估（耗尽或节流时直接短路，节省 FM 推理算力）
+                RtbSmartBiddingBridge.PacingCheckResult pacingCheck = smartBiddingBridge != null
+                        ? smartBiddingBridge.checkAndEvaluatePacing(recalledCampaign, campaignId)
+                        : new RtbSmartBiddingBridge.PacingCheckResult(false, 1.0);
+                if (pacingCheck.throttled()) {
+                    metrics.recordPacingThrottled();
+                    return;
+                }
+
                 double finalBidPrice = smartBiddingBridge != null
-                        ? smartBiddingBridge.calibrateSmartBidPrice(request, effectiveSlot, effectiveAdvertiser, decision.price())
+                        ? smartBiddingBridge.calibrateSmartBidPrice(request, effectiveSlot, effectiveAdvertiser, decision.price(), pacingCheck.bidMultiplier())
                         : decision.price();
 
                 // 阶段 5：滑动窗口频控校验（例如限制单用户 1 小时最多 10 次曝光）
@@ -280,6 +290,9 @@ public class OpenRtbAuctionService {
                 } catch (IllegalStateException budgetDepleted) {
                     metrics.recordBudgetExhausted();
                     return; // 预算不足，放弃出价
+                }
+                if (smartBiddingBridge != null) {
+                    smartBiddingBridge.recordCampaignSpend(campaignId, impCost.doubleValue());
                 }
 
                 // 阶段 7：生成加密防篡改的胜出通知 URL (Win Notice) 与落败通知 URL (Loss Notice)

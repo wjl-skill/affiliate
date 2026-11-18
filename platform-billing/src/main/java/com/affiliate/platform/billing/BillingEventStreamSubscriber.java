@@ -30,19 +30,44 @@ import java.util.concurrent.atomic.AtomicLong;
 public class BillingEventStreamSubscriber {
 
     private static final Logger log = LoggerFactory.getLogger(BillingEventStreamSubscriber.class);
-    private static final BigDecimal PUBLISHER_SHARE_RATIO = new BigDecimal("0.80");
+    private static final double DEFAULT_PLATFORM_FEE_RATE = 0.20;
 
     private final BillingService billingService;
     private final EventPublisher eventPublisher;
+    private final RevenueShareService revenueShareService;
+    private final java.util.concurrent.ConcurrentMap<String, Double> platformFeeRates = new java.util.concurrent.ConcurrentHashMap<>();
     private final AtomicLong processedWinCount = new AtomicLong(0);
+    private final AtomicLong processedConversionCount = new AtomicLong(0);
 
     @Autowired
     public BillingEventStreamSubscriber(
             BillingService billingService,
             @Autowired(required = false) EventPublisher eventPublisher
     ) {
+        this(billingService, eventPublisher, new RevenueShareService());
+    }
+
+    public BillingEventStreamSubscriber(
+            BillingService billingService,
+            EventPublisher eventPublisher,
+            RevenueShareService revenueShareService
+    ) {
         this.billingService = billingService;
         this.eventPublisher = eventPublisher;
+        this.revenueShareService = revenueShareService != null ? revenueShareService : new RevenueShareService();
+    }
+
+    public void setPlatformFeeRate(String tenantId, String slotId, double feeRate) {
+        String key = (tenantId != null ? tenantId : "public") + ":" + (slotId != null ? slotId : "*");
+        platformFeeRates.put(key, Math.max(0.0, Math.min(1.0, feeRate)));
+    }
+
+    public double resolvePlatformFeeRate(String tenantId, String slotId) {
+        String t = tenantId != null ? tenantId : "public";
+        if (slotId != null && platformFeeRates.containsKey(t + ":" + slotId)) {
+            return platformFeeRates.get(t + ":" + slotId);
+        }
+        return platformFeeRates.getOrDefault(t + ":*", DEFAULT_PLATFORM_FEE_RATE);
     }
 
     @PostConstruct
@@ -58,6 +83,8 @@ public class BillingEventStreamSubscriber {
         }
         if ("auction.win.v1".equals(event.eventType())) {
             handleAuctionWin(event);
+        } else if ("conversion.approved.v1".equals(event.eventType())) {
+            handleConversionApproved(event);
         }
     }
 
@@ -75,12 +102,15 @@ public class BillingEventStreamSubscriber {
             return;
         }
 
-        // CPM (千次展示价格) 折算为单次胜出实际结算金额 (保留 6 位小数)
+        // CPM (千次展示价格) 折算为单次胜出实际结算金额 (保留 6 位小数)，并按动态分成比例拆解
         BigDecimal totalCharge = BigDecimal.valueOf(cpmPrice)
                 .divide(BigDecimal.valueOf(1000), 6, RoundingMode.HALF_UP);
-        BigDecimal publisherShare = totalCharge.multiply(PUBLISHER_SHARE_RATIO)
-                .setScale(6, RoundingMode.HALF_UP);
-        BigDecimal platformFee = totalCharge.subtract(publisherShare);
+        double feeRate = resolvePlatformFeeRate(tenantId, slotId);
+        RevenueShareService.PayoutSplit split = revenueShareService.split(totalCharge, feeRate, 6);
+        BigDecimal platformFee = split.platformFee();
+        BigDecimal publisherShare = split.publisherPayout();
+        int pubPct = (int) Math.round((1.0 - feeRate) * 100);
+        int feePct = (int) Math.round(feeRate * 100);
 
         Instant now = event.occurredAt() != null ? event.occurredAt() : Instant.now();
 
@@ -110,7 +140,7 @@ public class BillingEventStreamSubscriber {
                 publisherShare,
                 "USD",
                 "win_pub_credit:" + auctionId,
-                "Publisher 80% Revenue Share",
+                "Publisher " + pubPct + "% Revenue Share",
                 now
         ));
 
@@ -125,7 +155,7 @@ public class BillingEventStreamSubscriber {
                 platformFee,
                 "USD",
                 "win_fee_credit:" + auctionId,
-                "ADX Platform 20% Take-Rate",
+                "ADX Platform " + feePct + "% Take-Rate",
                 now
         ));
 
@@ -134,8 +164,83 @@ public class BillingEventStreamSubscriber {
                 auctionId, totalCharge);
     }
 
+    private void handleConversionApproved(DomainEvent<?> event) {
+        String tenantId = event.tenantId() != null ? event.tenantId() : "public";
+        Object payload = event.payload();
+        String conversionId = extractString(payload, "conversionId",
+                event.aggregateId() != null ? event.aggregateId() : UUID.randomUUID().toString());
+        String offerId = extractString(payload, "offerId", extractString(payload, "campaignId", "offer_default"));
+        String affiliateId = extractString(payload, "affiliateId", "aff_default");
+
+        double revenueVal = extractDouble(payload, "revenue", 0.0);
+        double payoutVal = extractDouble(payload, "payout", 0.0);
+        if (revenueVal <= 0.0 && payoutVal <= 0.0) {
+            return;
+        }
+
+        BigDecimal grossRevenue = BigDecimal.valueOf(Math.max(revenueVal, payoutVal)).setScale(6, RoundingMode.HALF_UP);
+        BigDecimal affiliatePayout = BigDecimal.valueOf(Math.max(0.0, payoutVal)).setScale(6, RoundingMode.HALF_UP);
+        if (affiliatePayout.compareTo(grossRevenue) > 0) {
+            affiliatePayout = grossRevenue;
+        }
+        BigDecimal platformMargin = grossRevenue.subtract(affiliatePayout);
+        Instant now = event.occurredAt() != null ? event.occurredAt() : Instant.now();
+
+        billingService.record(new BillingService.BillingEntry(
+                "ble_" + UUID.randomUUID().toString().replace("-", ""),
+                tenantId,
+                offerId,
+                conversionId,
+                BillingService.EntryType.ADVERTISER_CHARGE,
+                BillingService.EntryDirection.DEBIT,
+                grossRevenue,
+                "USD",
+                "conv_debit:" + conversionId,
+                "Affiliate Conversion Charge (" + offerId + ")",
+                now
+        ));
+
+        if (affiliatePayout.signum() > 0) {
+            billingService.record(new BillingService.BillingEntry(
+                    "ble_" + UUID.randomUUID().toString().replace("-", ""),
+                    tenantId,
+                    affiliateId,
+                    conversionId,
+                    BillingService.EntryType.PUBLISHER_REVENUE,
+                    BillingService.EntryDirection.CREDIT,
+                    affiliatePayout,
+                    "USD",
+                    "conv_aff_credit:" + conversionId,
+                    "Affiliate Conversion Payout (" + affiliateId + ")",
+                    now
+            ));
+        }
+
+        if (platformMargin.signum() > 0) {
+            billingService.record(new BillingService.BillingEntry(
+                    "ble_" + UUID.randomUUID().toString().replace("-", ""),
+                    tenantId,
+                    "platform_treasury",
+                    conversionId,
+                    BillingService.EntryType.PLATFORM_FEE,
+                    BillingService.EntryDirection.CREDIT,
+                    platformMargin,
+                    "USD",
+                    "conv_fee_credit:" + conversionId,
+                    "Affiliate Platform Conversion Margin",
+                    now
+            ));
+        }
+
+        processedConversionCount.incrementAndGet();
+    }
+
     public long getProcessedWinCount() {
         return processedWinCount.get();
+    }
+
+    public long getProcessedConversionCount() {
+        return processedConversionCount.get();
     }
 
     private static String extractString(Object obj, String field, String fallback) {

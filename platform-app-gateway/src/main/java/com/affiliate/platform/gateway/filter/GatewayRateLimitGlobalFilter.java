@@ -50,6 +50,20 @@ public class GatewayRateLimitGlobalFilter implements GlobalFilter, Ordered {
     @Value("${app.gateway.rate-limit.controlplane-qps:200}")
     private volatile int controlplaneQps = 200;
 
+    @Value("${app.gateway.rate-limit.distributed-enabled:true}")
+    private volatile boolean distributedEnabled = true;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private org.springframework.data.redis.core.ReactiveStringRedisTemplate redisTemplate;
+
+    public void setRedisTemplate(org.springframework.data.redis.core.ReactiveStringRedisTemplate redisTemplate) {
+        this.redisTemplate = redisTemplate;
+    }
+
+    public void setDistributedEnabled(boolean distributedEnabled) {
+        this.distributedEnabled = distributedEnabled;
+    }
+
     static final class SecondWindowCounter {
         final AtomicLong windowSecond = new AtomicLong(0);
         final AtomicInteger count = new AtomicInteger(0);
@@ -118,13 +132,40 @@ public class GatewayRateLimitGlobalFilter implements GlobalFilter, Ordered {
         }
 
         String clientKey = resolveClientKey(request, isDataPlane);
-        evictIfOverCapacity();
-
         long currentSec = System.currentTimeMillis() / 1000L;
-        SecondWindowCounter counter = counters.computeIfAbsent(clientKey, k -> new SecondWindowCounter());
-        int currentCount = counter.incrementAndGet(currentSec);
-        int remaining = Math.max(0, limitQps - currentCount);
 
+        if (distributedEnabled && redisTemplate != null) {
+            String redisKey = "gw:rl:" + clientKey + ":" + currentSec;
+            return redisTemplate.opsForValue().increment(redisKey)
+                    .flatMap(count -> {
+                        if (count != null && count == 1L) {
+                            return redisTemplate.expire(redisKey, java.time.Duration.ofSeconds(2))
+                                    .thenReturn(count.intValue());
+                        }
+                        return Mono.just(count != null ? count.intValue() : 1);
+                    })
+                    .onErrorResume(ex -> Mono.just(incrementLocalCounter(clientKey, currentSec)))
+                    .flatMap(currentCount -> evaluateAndProceed(exchange, chain, isDataPlane, limitQps, currentCount));
+        }
+
+        int currentCount = incrementLocalCounter(clientKey, currentSec);
+        return evaluateAndProceed(exchange, chain, isDataPlane, limitQps, currentCount);
+    }
+
+    private int incrementLocalCounter(String clientKey, long currentSec) {
+        evictIfOverCapacity();
+        SecondWindowCounter counter = counters.computeIfAbsent(clientKey, k -> new SecondWindowCounter());
+        return counter.incrementAndGet(currentSec);
+    }
+
+    private Mono<Void> evaluateAndProceed(
+            ServerWebExchange exchange,
+            GatewayFilterChain chain,
+            boolean isDataPlane,
+            int limitQps,
+            int currentCount
+    ) {
+        int remaining = Math.max(0, limitQps - currentCount);
         ServerHttpResponse response = exchange.getResponse();
         response.getHeaders().set("X-RateLimit-Limit", String.valueOf(limitQps));
         response.getHeaders().set("X-RateLimit-Remaining", String.valueOf(remaining));

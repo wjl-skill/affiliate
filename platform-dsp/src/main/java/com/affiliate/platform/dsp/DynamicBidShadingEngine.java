@@ -145,6 +145,32 @@ public class DynamicBidShadingEngine {
         profileMap.clear();
     }
 
+    public ShadingProfileSnapshot exportSnapshot() {
+        java.util.Map<String, ProfileState> copy = new java.util.LinkedHashMap<>();
+        profileMap.forEach((seg, p) -> copy.put(seg, new ProfileState(p.marketMidPrice, p.marketSteepness, p.sampleCount)));
+        return new ShadingProfileSnapshot(copy, System.currentTimeMillis());
+    }
+
+    public void importSnapshot(ShadingProfileSnapshot snapshot) {
+        if (snapshot == null || snapshot.profiles() == null) {
+            return;
+        }
+        snapshot.profiles().forEach((seg, state) -> {
+            if (seg != null && state != null) {
+                MarketPricingProfile p = profileMap.computeIfAbsent(seg, k -> new MarketPricingProfile());
+                synchronized (p) {
+                    p.marketMidPrice = state.marketMidPrice();
+                    p.marketSteepness = state.marketSteepness();
+                    p.sampleCount = state.sampleCount();
+                }
+            }
+        });
+    }
+
+    public record ProfileState(double marketMidPrice, double marketSteepness, long sampleCount) {}
+
+    public record ShadingProfileSnapshot(java.util.Map<String, ProfileState> profiles, long exportedAtMillis) {}
+
     /**
      * 胜率估算曲线 (Logistic Curve)
      */

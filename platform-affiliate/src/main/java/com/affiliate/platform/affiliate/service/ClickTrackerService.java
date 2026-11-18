@@ -65,6 +65,12 @@ public class ClickTrackerService {
 
     private final org.springframework.kafka.core.KafkaTemplate<String, Object> kafkaTemplate;
     private final com.affiliate.platform.affiliate.metrics.AffiliateMetrics metrics;
+    @Autowired(required = false)
+    private com.affiliate.platform.event.EventPublisher eventPublisher;
+
+    public void setEventPublisher(com.affiliate.platform.event.EventPublisher eventPublisher) {
+        this.eventPublisher = eventPublisher;
+    }
 
     public ClickTrackerService() {
         this(null, null, null, null, null);
@@ -239,6 +245,27 @@ public class ClickTrackerService {
                 offer.landingPageUrl(), clickId, offer.id(), affiliateId,
                 sub1, sub2, sub3, sub4, sub5, ip, country, deviceType
         );
+
+        if (eventPublisher != null) {
+            try {
+                java.util.Map<String, Object> evtPayload = new java.util.LinkedHashMap<>();
+                evtPayload.put("clickId", clickId);
+                evtPayload.put("offerId", offer.id());
+                evtPayload.put("campaignId", offer.id());
+                evtPayload.put("affiliateId", affiliateId);
+                evtPayload.put("country", country != null ? country : "US");
+                evtPayload.put("deviceType", deviceType == 2 ? "desktop" : (deviceType == 3 ? "ctv" : "mobile"));
+                if (sub1 != null) evtPayload.put("sub1", sub1);
+                eventPublisher.publish(com.affiliate.platform.event.DomainEvent.create(
+                        "click.recorded.v1",
+                        offer.tenantId() != null ? offer.tenantId() : "public",
+                        clickId,
+                        evtPayload
+                ));
+            } catch (Exception ex) {
+                log.debug("EventPublisher click.recorded.v1 emit failed for {}: {}", clickId, ex.getMessage());
+            }
+        }
 
         metrics.recordClickSuccess(System.nanoTime() - startNanos);
         return new ClickTrackingResult(clickId, redirectUrl, session);

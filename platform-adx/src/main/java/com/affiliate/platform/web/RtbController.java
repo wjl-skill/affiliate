@@ -45,6 +45,13 @@ public class RtbController {
     // 领域事件总线
     private final EventPublisher eventPublisher;
 
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private org.springframework.data.redis.core.StringRedisTemplate redisTemplate;
+
+    public void setRedisTemplate(org.springframework.data.redis.core.StringRedisTemplate redisTemplate) {
+        this.redisTemplate = redisTemplate;
+    }
+
     // 竞价胜出/落败通知幂等防重放缓存（有界容量 200,000，2 小时过期，防止同一 Token 重复扣费/退费与重复发事件）
     private final Cache<String, Boolean> confirmedWinTokens = CacheBuilder.newBuilder()
             .maximumSize(200_000)
@@ -191,6 +198,9 @@ public class RtbController {
         } else if (budgetService != null) {
             budgetService.release(reservation);
         }
+        if (service != null && service.getSmartBiddingBridge() != null) {
+            service.getSmartBiddingBridge().refundCampaignSpend(payload.campaignId(), payload.price() / 1000.0);
+        }
 
         Map<String, Object> lossPayload = Map.of(
                 "auctionId", payload.auctionId(),
@@ -243,6 +253,7 @@ public class RtbController {
                         ? landingUrl.replace("{click_id}", clickId).replace("${CLICK_ID}", clickId)
                         : "https://example.com"
         );
+        long nowEpochSec = java.time.Instant.now().getEpochSecond();
         RtbClickSession session = new RtbClickSession(
                 clickId,
                 payload.auctionId(),
@@ -250,9 +261,24 @@ public class RtbController {
                 payload.campaignId(),
                 payload.price(),
                 resolvedLanding,
-                java.time.Instant.now().getEpochSecond()
+                nowEpochSec
         );
         rtbClickSessions.put(clickId, session);
+
+        if (redisTemplate != null) {
+            try {
+                String serialized = String.join("||",
+                        clickId,
+                        payload.tenantId() != null ? payload.tenantId() : "public",
+                        payload.campaignId() != null ? payload.campaignId() : "unknown",
+                        payload.auctionId() != null ? payload.auctionId() : "unknown",
+                        String.valueOf(payload.price()),
+                        String.valueOf(nowEpochSec * 1000L)
+                );
+                redisTemplate.opsForValue().set("rtb:click:sess:" + clickId, serialized, Duration.ofDays(30));
+            } catch (Exception ignored) {
+            }
+        }
 
         // 发布 click.recorded.v1 领域事件
         eventPublisher.publish(DomainEvent.create("click.recorded.v1", payload.tenantId(), payload.auctionId(), payload));

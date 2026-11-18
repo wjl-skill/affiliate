@@ -19,6 +19,8 @@ spring:
 
   # Nacos 微服务注册发现与配置中心配置
   cloud:
+    compatibility-verifier:
+      enabled: false
     nacos:
       server-addr: ${NACOS_SERVER_ADDR:127.0.0.1:8848}
       username: ${NACOS_USERNAME:nacos}

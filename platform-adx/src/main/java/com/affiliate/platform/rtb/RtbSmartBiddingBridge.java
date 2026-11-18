@@ -43,10 +43,24 @@ public class RtbSmartBiddingBridge {
     private CampaignInvertedIndex campaignInvertedIndex;
     @Autowired(required = false)
     private BidModifierEngine bidModifierEngine;
+    @Autowired(required = false)
+    private BudgetPacingController budgetPacingController;
+
+    private final com.google.common.cache.Cache<String, java.util.concurrent.atomic.AtomicLong> intradaySpendMicrosMap =
+            com.google.common.cache.CacheBuilder.newBuilder()
+                    .maximumSize(50_000)
+                    .expireAfterWrite(java.time.Duration.ofHours(36))
+                    .build();
+    private final java.util.concurrent.ConcurrentMap<String, BigDecimal> dailyBudgetOverrides =
+            new java.util.concurrent.ConcurrentHashMap<>();
+    private volatile Double pacingElapsedFractionOverride;
+
+    public record PacingCheckResult(boolean throttled, double bidMultiplier) {}
 
     private final AtomicLong totalCalibrations = new AtomicLong(0);
     private final AtomicLong cdpBoostedBids = new AtomicLong(0);
     private final AtomicLong dspIndexRecalledBids = new AtomicLong(0);
+    private final AtomicLong pacingThrottledBids = new AtomicLong(0);
     private final DoubleAdder totalShadedSavings = new DoubleAdder();
 
     @Autowired
@@ -72,6 +86,86 @@ public class RtbSmartBiddingBridge {
 
     public void setBidModifierEngine(BidModifierEngine bidModifierEngine) {
         this.bidModifierEngine = bidModifierEngine;
+    }
+
+    public void setBudgetPacingController(BudgetPacingController budgetPacingController) {
+        this.budgetPacingController = budgetPacingController;
+    }
+
+    public void setPacingElapsedFractionOverride(Double elapsedDayFraction) {
+        this.pacingElapsedFractionOverride = elapsedDayFraction;
+    }
+
+    public void setCampaignDailyBudget(String campaignId, BigDecimal dailyBudget) {
+        if (campaignId != null && dailyBudget != null) {
+            dailyBudgetOverrides.put(campaignId, dailyBudget);
+        }
+    }
+
+    private static String spendKey(String campaignId) {
+        return campaignId + ":" + LocalDate.now(ZoneOffset.UTC);
+    }
+
+    public void recordCampaignSpend(String campaignId, double costUsd) {
+        if (campaignId != null && costUsd > 0.0) {
+            long deltaMicros = Math.round(costUsd * 1_000_000.0);
+            if (deltaMicros > 0) {
+                try {
+                    intradaySpendMicrosMap.get(spendKey(campaignId), () -> new java.util.concurrent.atomic.AtomicLong(0L))
+                            .addAndGet(deltaMicros);
+                } catch (java.util.concurrent.ExecutionException ignored) {
+                }
+            }
+        }
+    }
+
+    public void refundCampaignSpend(String campaignId, double costUsd) {
+        if (campaignId != null && costUsd > 0.0) {
+            long deltaMicros = Math.round(costUsd * 1_000_000.0);
+            java.util.concurrent.atomic.AtomicLong counter = intradaySpendMicrosMap.getIfPresent(spendKey(campaignId));
+            if (counter != null && deltaMicros > 0) {
+                counter.updateAndGet(cur -> Math.max(0L, cur - deltaMicros));
+            }
+        }
+    }
+
+    public BudgetPacingController.PacingDecision evaluateCampaignPacing(Campaign campaign, String campaignId) {
+        if (budgetPacingController == null) {
+            return null;
+        }
+        String effectiveId = campaignId != null ? campaignId : (campaign != null ? campaign.id() : "default");
+        BigDecimal dailyBudget = dailyBudgetOverrides.get(effectiveId);
+        if (dailyBudget == null && campaign != null) {
+            dailyBudget = campaign.dailyBudget();
+        }
+        if (dailyBudget == null || dailyBudget.signum() <= 0) {
+            return null;
+        }
+        java.util.concurrent.atomic.AtomicLong spentCounter = intradaySpendMicrosMap.getIfPresent(spendKey(effectiveId));
+        double spent = spentCounter != null ? (spentCounter.get() / 1_000_000.0) : 0.0;
+        double elapsed = pacingElapsedFractionOverride != null
+                ? pacingElapsedFractionOverride
+                : (LocalTime.now(ZoneOffset.UTC).toSecondOfDay() / 86400.0);
+        return budgetPacingController.evaluatePacing(effectiveId, dailyBudget, BigDecimal.valueOf(spent), elapsed, true);
+    }
+
+    public PacingCheckResult checkAndEvaluatePacing(Campaign campaign, String campaignId) {
+        BudgetPacingController.PacingDecision decision = evaluateCampaignPacing(campaign, campaignId);
+        if (decision == null) {
+            return new PacingCheckResult(false, 1.0);
+        }
+        if (decision.budgetExhausted()
+                || (decision.passProbability() < 1.0
+                && java.util.concurrent.ThreadLocalRandom.current().nextDouble() > decision.passProbability())) {
+            pacingThrottledBids.incrementAndGet();
+            return new PacingCheckResult(true, 0.0);
+        }
+        double mult = decision.bidPacingMultiplier() != null ? decision.bidPacingMultiplier().doubleValue() : 1.0;
+        return new PacingCheckResult(false, mult);
+    }
+
+    public boolean shouldThrottleByPacing(Campaign campaign, String campaignId) {
+        return checkAndEvaluatePacing(campaign, campaignId).throttled();
     }
 
     /**
@@ -183,6 +277,16 @@ public class RtbSmartBiddingBridge {
             String advertiser,
             double baseStrategyPrice
     ) {
+        return calibrateSmartBidPrice(request, slot, advertiser, baseStrategyPrice, null);
+    }
+
+    public double calibrateSmartBidPrice(
+            OpenRtb.BidRequest request,
+            AdSlot slot,
+            String advertiser,
+            double baseStrategyPrice,
+            Double pacingMultiplierOverride
+    ) {
         totalCalibrations.incrementAndGet();
         double floor = slot != null ? slot.floorPrice() : 0.10;
         double valuation = Math.max(floor, baseStrategyPrice);
@@ -260,6 +364,17 @@ public class RtbSmartBiddingBridge {
             }
         }
 
+        // 2.5 DSP PID 日内预算平滑乘数调节（若外部已执行单次 Pacing 评估则直接复用，避免重复步进 PID 状态）
+        if (pacingMultiplierOverride != null) {
+            valuation = Math.max(floor, valuation * pacingMultiplierOverride);
+        } else if (budgetPacingController != null) {
+            String effectiveCampId = matchedCampaign != null ? matchedCampaign.id() : ("campaign_" + advertiser);
+            BudgetPacingController.PacingDecision pacing = evaluateCampaignPacing(matchedCampaign, effectiveCampId);
+            if (pacing != null && !pacing.budgetExhausted() && pacing.bidPacingMultiplier() != null) {
+                valuation = Math.max(floor, valuation * pacing.bidPacingMultiplier().doubleValue());
+            }
+        }
+
         // 3. DSP 一价拍卖 Bid Shading 最优出价折算（保障绝不低于媒体底价 floor）
         if (bidShadingEngine != null && valuation > floor) {
             String segment = (slot != null ? slot.id() : "slot") + ":" + country + ":" + deviceLabel;
@@ -298,6 +413,7 @@ public class RtbSmartBiddingBridge {
         metrics.put("totalCalibrations", totalCalibrations.get());
         metrics.put("cdpBoostedBids", cdpBoostedBids.get());
         metrics.put("dspIndexRecalledBids", dspIndexRecalledBids.get());
+        metrics.put("pacingThrottledBids", pacingThrottledBids.get());
         metrics.put("totalShadedSavingsUsd", BigDecimal.valueOf(totalShadedSavings.sum())
                 .setScale(4, RoundingMode.HALF_UP));
         return metrics;

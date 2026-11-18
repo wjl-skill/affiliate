@@ -59,6 +59,7 @@ public class KafkaEventStreamBridge {
     @KafkaListener(
             topics = {
                     "affiliate.auction.win.v1",
+                    "affiliate.auction.loss.v1",
                     "affiliate.impression.recorded.v1",
                     "affiliate.click.recorded.v1",
                     "affiliate.conversion.approved.v1"

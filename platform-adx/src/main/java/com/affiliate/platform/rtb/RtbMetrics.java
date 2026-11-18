@@ -26,6 +26,7 @@ public class RtbMetrics {
 
     private final Counter freqCapBlocked;
     private final Counter budgetExhausted;
+    private final Counter pacingThrottled;
 
     public RtbMetrics() {
         this(new SimpleMeterRegistry());
@@ -62,6 +63,10 @@ public class RtbMetrics {
         this.budgetExhausted = Counter.builder("rtb.budget.exhausted.total")
                 .description("Total RTB candidate bids rejected due to campaign budget depletion")
                 .register(this.registry);
+
+        this.pacingThrottled = Counter.builder("rtb.pacing.throttled.total")
+                .description("Total RTB candidate bids throttled by intraday PID budget pacing")
+                .register(this.registry);
     }
 
     public void recordBidSubmitted(long latencyNanos) {
@@ -84,6 +89,10 @@ public class RtbMetrics {
 
     public void recordBudgetExhausted() {
         budgetExhausted.increment();
+    }
+
+    public void recordPacingThrottled() {
+        pacingThrottled.increment();
     }
 
     public MeterRegistry getRegistry() {

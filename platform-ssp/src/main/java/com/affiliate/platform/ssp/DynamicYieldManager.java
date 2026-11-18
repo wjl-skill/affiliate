@@ -202,6 +202,56 @@ public class DynamicYieldManager {
         marketStatsMap.clear();
     }
 
+    public YieldStatsSnapshot exportSnapshot() {
+        Map<String, YieldState> copy = new LinkedHashMap<>();
+        marketStatsMap.forEach((slotId, stats) -> {
+            synchronized (stats) {
+                copy.put(slotId, new YieldState(
+                        stats.totalAuctions.get(),
+                        stats.filledAuctions.get(),
+                        stats.totalBidders.get(),
+                        stats.totalRevenue,
+                        stats.ewmaFill,
+                        stats.ewmaPrice,
+                        stats.ewmaBidderCount
+                ));
+            }
+        });
+        return new YieldStatsSnapshot(copy, System.currentTimeMillis());
+    }
+
+    public void importSnapshot(YieldStatsSnapshot snapshot) {
+        if (snapshot == null || snapshot.stats() == null) {
+            return;
+        }
+        snapshot.stats().forEach((slotId, state) -> {
+            if (slotId != null && state != null) {
+                MarketYieldStats stats = marketStatsMap.computeIfAbsent(slotId, k -> new MarketYieldStats());
+                synchronized (stats) {
+                    stats.totalAuctions.set(state.totalAuctions());
+                    stats.filledAuctions.set(state.filledAuctions());
+                    stats.totalBidders.set(state.totalBidders());
+                    stats.totalRevenue = state.totalRevenue();
+                    stats.ewmaFill = state.ewmaFill();
+                    stats.ewmaPrice = state.ewmaPrice();
+                    stats.ewmaBidderCount = state.ewmaBidderCount();
+                }
+            }
+        });
+    }
+
+    public record YieldState(
+            long totalAuctions,
+            long filledAuctions,
+            long totalBidders,
+            double totalRevenue,
+            double ewmaFill,
+            double ewmaPrice,
+            double ewmaBidderCount
+    ) {}
+
+    public record YieldStatsSnapshot(Map<String, YieldState> stats, long exportedAtMillis) {}
+
     /**
      * 底价决策结果
      *
